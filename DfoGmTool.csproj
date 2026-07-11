@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+  <!-- 发布件不带调试符号 -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- PvfLib 是子目录里的独立工程, 不让本工程把它的源码再编译一遍 -->
+    <Compile Remove="PvfLib\**" />
+    <Content Remove="PvfLib\**" />
+    <None Remove="PvfLib\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- ServerCore\ 是服务端业务源码: 发物品/改等级等操作走服务端同一套业务代码, 代码随工具入库 -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <ProjectReference Include="PvfLib\PvfLib.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 自带 schema 拷贝: 服务端目录缺 Sqlite\item_schema.sql 时的回退(见 GmConfig.SchemaPath) -->
+    <Content Include="ServerCore\Sqlite\item_schema.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

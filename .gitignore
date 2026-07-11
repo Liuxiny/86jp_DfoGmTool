@@ -1,0 +1,22 @@
+# 构建产物 (含 dotnet publish 的 bin/publish)
+bin/
+obj/
+
+# IDE / 编辑器
+.vs/
+.idea/
+*.user
+*.suo
+*.swp
+
+# 运行时产生
+*.log
+Logs/
+Data/
+
+# 打包临时物
+*.zip
+*.7z
+
+# 本地维护脚本(发布流程, 不入库)
+push-release.ps1

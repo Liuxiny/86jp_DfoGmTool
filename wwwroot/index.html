@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DFO GM 控制台</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>DFO GM 控制台</h1>
+    <span id="status" class="status">连接中…</span>
+  </header>
+
+  <div class="notice">服务器运行中做的改动，在线角色需要<b>返回选角再进入</b>才会生效。</div>
+
+  <main>
+    <aside>
+      <div class="side-card">
+        <div class="panel-title">账号 <button id="btn-refresh-chars" class="mini">刷新</button></div>
+        <input id="account-search" type="text" placeholder="搜索账号名 / ID" autocomplete="off">
+        <select id="account-select"></select>
+        <div id="account-info" class="account-info"></div>
+        <button id="btn-account-panel" class="wide-btn">账号数据管理</button>
+      </div>
+      <div class="side-card">
+        <div class="panel-title">角色 <span id="char-count" class="hint"></span></div>
+        <ul id="char-list"></ul>
+      </div>
+    </aside>
+
+    <section id="account-panel" class="hidden">
+      <div id="account-panel-header"></div>
+
+      <nav class="tabs">
+        <button class="acc-tab tab active" data-acc-tab="currency">货币</button>
+        <button class="acc-tab tab" data-acc-tab="cube">晶块</button>
+        <button class="acc-tab tab" data-acc-tab="cargo">账号金库</button>
+      </nav>
+
+      <div id="acc-tab-currency" class="acc-tab-page">
+        <div class="card">
+          <div class="card-title">账号货币（输入目标值后覆写，直接生效）</div>
+          <div id="account-currencies"></div>
+        </div>
+      </div>
+
+      <div id="acc-tab-cube" class="acc-tab-page hidden">
+        <div class="card">
+          <div class="card-title">晶块（账号共享，角色背包 354-359 显示的就是这里的数值）</div>
+          <table id="cube-table">
+            <thead><tr><th>ID</th><th>名称</th><th>当前值</th><th>覆写为</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="acc-tab-cargo" class="acc-tab-page hidden">
+        <div class="card">
+          <div class="card-title">账号金库 <button id="btn-clear-cargo" class="mini danger">一键清空</button></div>
+          <table id="cargo-table">
+            <thead><tr><th>槽位</th><th>ID</th><th>名称</th><th>数量</th><th>耐久</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="detail" class="hidden">
+      <div id="char-header"></div>
+
+      <nav class="tabs">
+        <button class="tab active" data-tab="give">发放物品</button>
+        <button class="tab" data-tab="inventory">背包</button>
+        <button class="tab" data-tab="character">角色属性</button>
+        <button class="tab" data-tab="quests">任务</button>
+      </nav>
+
+      <div id="tab-give" class="tab-page">
+        <div class="row">
+          <input id="search-input" type="text" placeholder="物品名或 ID (回车搜索)">
+          <label>Lv <input id="give-minlv" type="number" min="0" placeholder="最低" style="width:70px">
+            - <input id="give-maxlv" type="number" min="0" placeholder="最高" style="width:70px"></label>
+          <select id="give-rarity">
+            <option value="-1">全部品质</option>
+            <option value="0">普通</option>
+            <option value="1">高级</option>
+            <option value="2">稀有</option>
+            <option value="sealed">稀有·魔法封印</option>
+            <option value="legacy">稀有·传承</option>
+            <option value="3">神器</option>
+            <option value="boss">神器·领主</option>
+            <option value="4">史诗</option>
+            <option value="5">勇者</option>
+            <option value="6">传说</option>
+          </select>
+          <button id="btn-search">搜索</button>
+          <span id="give-total" class="hint"></span>
+        </div>
+        <div class="inventory-layout">
+          <nav id="give-category-nav" class="category-nav"></nav>
+          <div class="inventory-table-wrap">
+            <table id="search-results">
+              <thead><tr><th>ID</th><th>名称</th><th>Lv</th><th>品质</th><th>类型</th><th>数量</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <div id="give-pager" class="row" style="margin-top:10px"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-inventory" class="tab-page hidden">
+        <div class="row">
+          <button id="btn-refresh-items" class="mini">刷新背包</button>
+          <button id="btn-clear-category" class="mini danger" disabled>清空分类(先选分类)</button>
+          <span class="hint">单件删除立即生效；清空需确认；货币行受保护，晶块/金库在"账号数据管理"</span>
+        </div>
+        <div class="inventory-layout">
+          <nav id="category-nav" class="category-nav"></nav>
+          <div class="inventory-table-wrap">
+            <table id="item-table"><thead></thead><tbody></tbody></table>
+            <div id="inv-pager" class="row" style="margin-top:10px"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-character" class="tab-page hidden">
+        <nav class="tabs">
+          <button class="char-tab tab active" data-char-tab="level">等级与经验</button>
+          <button class="char-tab tab" data-char-tab="sp">SP / TP</button>
+          <button class="char-tab tab" data-char-tab="stats">基础属性表</button>
+        </nav>
+
+        <div id="char-tab-level" class="char-tab-page">
+          <div class="card">
+            <div class="card-title">等级</div>
+            <div class="row">
+              <input id="level-input" type="number" min="1" max="86">
+              <button id="btn-set-level">设置等级</button>
+              <span id="level-now" class="hint"></span>
+            </div>
+            <div class="row"><span class="hint">经验按阈值表写入，战斗属性同事务重算并反映到下方基础属性表</span></div>
+          </div>
+          <div class="card">
+            <div class="card-title">转职 / 觉醒</div>
+            <div class="row">
+              <select id="grow-first"></select>
+              <select id="grow-second"></select>
+              <button id="btn-grow">覆写</button>
+              <span class="hint">改完按服务端同一套算法重算战斗属性；GM 完成转职/觉醒任务时也会自动应用</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">货币入口</div>
+            <div class="row"><span class="hint">金币/复活币/技能点在"背包 → 常用 → 货币"里直接覆写；点券/代币券在"账号数据管理"</span></div>
+          </div>
+        </div>
+
+        <div id="char-tab-sp" class="char-tab-page hidden">
+          <div class="card">
+            <div class="card-title">技能点状态</div>
+            <div id="sptp-view" class="row hint">加载中…</div>
+          </div>
+          <div class="card">
+            <div class="card-title">调整附加点（计入总点数，剩余点随之增减）</div>
+            <div class="row">
+              <label>SP <input id="sp-input" type="number" value="0"></label>
+              <label>TP <input id="tp-input" type="number" value="0"></label>
+              <button id="btn-sp">调整</button>
+              <span id="sp-now" class="hint"></span>
+            </div>
+          </div>
+        </div>
+
+        <div id="char-tab-stats" class="char-tab-page hidden">
+          <div class="card">
+            <div class="card-title">基础属性表 <span id="stats-meta" class="hint"></span></div>
+            <div class="row"><span class="hint">按 职业/等级/转职/觉醒 用服务端同一套算法计算（与面板同源，含契约补偿），随等级变化自动重算。淡显的异常抗性段本版本未配置恒为 0；力量/体力/智力/精神四维不在此属性块内。</span></div>
+            <table id="stats-table" class="stats-table">
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-quests" class="tab-page hidden">
+        <nav class="tabs">
+          <button class="quest-tab tab active" data-quest-tab="active">进行中</button>
+          <button class="quest-tab tab" data-quest-tab="main">主线</button>
+          <button class="quest-tab tab" data-quest-tab="achieve">成就</button>
+          <button class="quest-tab tab" data-quest-tab="cleared">已完成</button>
+          <button class="quest-tab tab" data-quest-tab="lib">任务库</button>
+        </nav>
+
+        <div id="quest-tab-active" class="quest-tab-page">
+          <div class="row">
+            <button id="btn-refresh-quests" class="mini">刷新</button>
+            <span class="hint">标记可交=清零触发计数走正常交付拿奖励；强制完成=直接写完成位图不发奖励</span>
+          </div>
+          <table id="quest-table">
+            <thead><tr><th>槽位</th><th>任务 ID</th><th>名称</th><th>触发计数</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div id="quest-tab-main" class="quest-tab-page hidden">
+          <div class="row">
+            <button id="btn-refresh-main" class="mini">刷新</button>
+            <span class="hint">剧情主线按区域分组(活动/决斗场/远古任务不在此列，去任务库查)；"连前置完成"会把该任务及全部前置链一并标记完成(不发奖励)</span>
+          </div>
+          <div class="inventory-layout">
+            <nav id="main-region-nav" class="category-nav"></nav>
+            <div class="inventory-table-wrap">
+              <table id="main-quest-table">
+                <thead><tr><th>状态</th><th>Lv</th><th>ID</th><th>名称</th><th>前置</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="quest-tab-achieve" class="quest-tab-page hidden">
+          <div class="row">
+            <button id="btn-refresh-achieve" class="mini">刷新</button>
+            <button id="btn-titlebook-all" class="mini danger">一键称号簿</button>
+          </div>
+          <div class="inventory-layout">
+            <nav id="achieve-region-nav" class="category-nav"></nav>
+            <div class="inventory-table-wrap">
+              <table id="achieve-quest-table">
+                <thead><tr><th>状态</th><th>Lv</th><th>ID</th><th>名称</th><th>前置</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="quest-tab-cleared" class="quest-tab-page hidden">
+          <div class="row">
+            <button id="btn-refresh-cleared" class="mini">刷新</button>
+            <span id="cleared-count" class="hint"></span>
+            <span class="hint">取消完成后任务可重新接取</span>
+          </div>
+          <table id="cleared-table">
+            <thead><tr><th>类型</th><th>区域</th><th>Lv</th><th>任务 ID</th><th>名称</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div id="quest-tab-lib" class="quest-tab-page hidden">
+          <div class="row">
+            <input id="quest-search-input" type="text" placeholder="搜索任务名或输入任务 ID (回车搜索)">
+            <select id="quest-grade-filter">
+              <option value="">全部类型</option>
+              <option value="epic">主线</option>
+              <option value="normal">普通</option>
+              <option value="daily">每日</option>
+              <option value="repeat">重复</option>
+              <option value="achievement">成就</option>
+            </select>
+            <button id="btn-quest-search">搜索</button>
+          </div>
+          <table id="quest-lib-table" class="hidden">
+            <thead><tr><th>类型</th><th>区域</th><th>Lv</th><th>任务 ID</th><th>名称</th><th>状态</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <!-- 顺序即依赖: core 提供通用助手, bindings 必须最后(全部事件绑定与启动调用) -->
+  <script src="js/core.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script src="js/give.js"></script>
+  <script src="js/inventory.js"></script>
+  <script src="js/character.js"></script>
+  <script src="js/quests.js"></script>
+  <script src="js/bindings.js"></script>
+</body>
+</html>

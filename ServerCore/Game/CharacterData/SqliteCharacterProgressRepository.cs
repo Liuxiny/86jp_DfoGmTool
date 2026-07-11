@@ -1,0 +1,560 @@
+// GM瘦身拷贝: 相对服务端原版删除了 SeedFromSnapshot(依赖未拷贝的 SelectCharacterInitializationSnapshot);
+// 保留成员与原版逐字一致
+using DfoGmTool.ServerCore.Game.SelectCharacter;
+using DfoGmTool.ServerCore.Infrastructure;
+using System;
+using System.Collections.Generic;
+using Microsoft.Data.Sqlite;
+using Skills = DfoGmTool.ServerCore.Game.Skills;
+
+namespace DfoGmTool.ServerCore.Game.CharacterData
+{
+    public sealed class SqliteCharacterProgressRepository
+    {
+        private readonly string _connectionString;
+
+        public SqliteCharacterProgressRepository(string databasePath, string schemaFilePath)
+        {
+            _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+        }
+
+        private SqliteCharacterProgressRepository(string connectionString)
+        {
+            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+        }
+
+        public static SqliteCharacterProgressRepository FromConnectionString(string connectionString)
+        {
+            return new SqliteCharacterProgressRepository(connectionString);
+        }
+
+        public SkillInfoSnapshot LoadSkills(int characterId)
+        {
+            var snapshot = new SkillInfoSnapshot();
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+
+                using (var cmd = new SqliteCommand(
+                    "SELECT page_index, page_header, slot, skill_id, level, extra_values FROM character_skills WHERE character_id = @cid ORDER BY page_index, slot", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        var pages = new Dictionary<int, SkillInfoPageSnapshot>();
+                        while (reader.Read())
+                        {
+                            var pageIdx = reader.GetInt32(0);
+                            if (!pages.TryGetValue(pageIdx, out var page))
+                            {
+                                page = new SkillInfoPageSnapshot { HeaderValue = (ushort)reader.GetInt32(1) };
+                                pages[pageIdx] = page;
+                            }
+                            int slot = reader.GetInt32(2);
+                            if (slot < 0) continue;
+                            var entry = new SkillInfoEntrySnapshot
+                            {
+                                Slot = (byte)slot,
+                                SkillId = (ushort)reader.GetInt32(3),
+                                Level = (byte)reader.GetInt32(4),
+                            };
+                            var extraBlob = reader.IsDBNull(5) ? null : (byte[])reader[5];
+                            if (extraBlob != null)
+                                foreach (var b in extraBlob)
+                                    entry.ExtraValues.Add(b);
+                            page.Entries.Add(entry);
+                        }
+                        for (int i = 0; i < 2; i++)
+                        {
+                            snapshot.Pages.Add(pages.ContainsKey(i) ? pages[i] : new SkillInfoPageSnapshot());
+                        }
+                    }
+                }
+
+                using (var cmd = new SqliteCommand(
+                    "SELECT tail0, tail1 FROM character_skill_tail WHERE character_id = @cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                        {
+                            snapshot.Tail0 = (ushort)reader.GetInt32(0);
+                            snapshot.Tail1 = (ushort)reader.GetInt32(1);
+                            snapshot.HasTailValues = true;
+                        }
+                    }
+                }
+            }
+            return snapshot;
+        }
+
+        public void SaveSkillProgress(int characterId, SkillInfoSnapshot snapshot, Skills.SkillPointState state)
+        {
+            if (snapshot == null || state == null) return;
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    SaveSkillsCore(conn, tx, characterId, snapshot);
+                    SaveSkillPointStateCore(conn, tx, characterId, state);
+                    tx.Commit();
+                }
+            }
+        }
+
+        public void SaveSkillProgress(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            SkillInfoSnapshot snapshot,
+            Skills.SkillPointState state)
+        {
+            if (snapshot == null || state == null) return;
+            if (conn == null) throw new ArgumentNullException(nameof(conn));
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+
+            SaveSkillsCore(conn, tx, characterId, snapshot);
+            SaveSkillPointStateCore(conn, tx, characterId, state);
+        }
+
+        private static void SaveSkillsCore(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            SkillInfoSnapshot snapshot)
+        {
+            using (var cmd = new SqliteCommand("DELETE FROM character_skills WHERE character_id = @cid", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+            using (var cmd = new SqliteCommand("DELETE FROM character_skill_tail WHERE character_id = @cid", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+
+            for (int pageIdx = 0; pageIdx < snapshot.Pages.Count; pageIdx++)
+            {
+                var page = snapshot.Pages[pageIdx];
+                if (page.Entries.Count == 0)
+                {
+                    using (var cmd = new SqliteCommand(
+                        "INSERT INTO character_skills (character_id, page_index, page_header, slot, skill_id, level) VALUES (@cid, @page, @header, -1, 0, 0)", conn, tx))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.Parameters.AddWithValue("@page", pageIdx);
+                        cmd.Parameters.AddWithValue("@header", (int)page.HeaderValue);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                foreach (var entry in page.Entries)
+                {
+                    using (var cmd = new SqliteCommand(
+                        "INSERT INTO character_skills (character_id, page_index, page_header, slot, skill_id, level, extra_values) VALUES (@cid, @page, @header, @slot, @sid, @lvl, @extra)", conn, tx))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.Parameters.AddWithValue("@page", pageIdx);
+                        cmd.Parameters.AddWithValue("@header", (int)page.HeaderValue);
+                        cmd.Parameters.AddWithValue("@slot", (int)entry.Slot);
+                        cmd.Parameters.AddWithValue("@sid", (int)entry.SkillId);
+                        cmd.Parameters.AddWithValue("@lvl", (int)entry.Level);
+                        cmd.Parameters.AddWithValue("@extra", entry.ExtraValues.Count > 0 ? (object)entry.ExtraValues.ToArray() : DBNull.Value);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+            }
+
+            using (var cmd = new SqliteCommand(
+                "INSERT INTO character_skill_tail (character_id, tail0, tail1) VALUES (@cid, @t0, @t1)", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@t0", (int)snapshot.Tail0);
+                cmd.Parameters.AddWithValue("@t1", (int)snapshot.Tail1);
+                cmd.ExecuteNonQuery();
+                snapshot.HasTailValues = true;
+            }
+        }
+
+        public Skills.SkillPointState LoadSkillPointState(int characterId)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(@"
+SELECT total_sp, remaining_sp, total_sfp, remaining_sfp, total_tp, remaining_tp, synced_level
+FROM character_skill_points
+WHERE character_id = @cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read())
+                            return null;
+
+                        return new Skills.SkillPointState
+                        {
+                            TotalSp = reader.GetInt32(0),
+                            RemainingSp = reader.GetInt32(1),
+                            TotalTp = reader.GetInt32(4),
+                            RemainingTp = reader.GetInt32(5),
+                            SyncedLevel = (byte)reader.GetInt32(6),
+                            HasPersistedState = true,
+                        };
+                    }
+                }
+            }
+        }
+
+        private static void SaveSkillPointStateCore(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            Skills.SkillPointState state)
+        {
+            using (var cmd = new SqliteCommand(@"
+INSERT INTO character_skill_points (
+    character_id, total_sp, remaining_sp, total_sfp, remaining_sfp,
+    total_tp, remaining_tp, synced_level, updated_at
+) VALUES (
+    @cid, @totalSp, @remainingSp, @totalSfp, @remainingSfp,
+    @totalTp, @remainingTp, @level, CURRENT_TIMESTAMP
+)
+ON CONFLICT(character_id) DO UPDATE SET
+    total_sp = excluded.total_sp,
+    remaining_sp = excluded.remaining_sp,
+    total_sfp = excluded.total_sfp,
+    remaining_sfp = excluded.remaining_sfp,
+    total_tp = excluded.total_tp,
+    remaining_tp = excluded.remaining_tp,
+    synced_level = excluded.synced_level,
+    updated_at = CURRENT_TIMESTAMP", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@totalSp", state.TotalSp);
+                cmd.Parameters.AddWithValue("@remainingSp", state.RemainingSp);
+                cmd.Parameters.AddWithValue("@totalSfp", 0);
+                cmd.Parameters.AddWithValue("@remainingSfp", 0);
+                cmd.Parameters.AddWithValue("@totalTp", state.TotalTp);
+                cmd.Parameters.AddWithValue("@remainingTp", state.RemainingTp);
+                cmd.Parameters.AddWithValue("@level", (int)state.SyncedLevel);
+                cmd.ExecuteNonQuery();
+                state.HasPersistedState = true;
+            }
+        }
+
+        public bool HasSkills(int characterId)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand("SELECT COUNT(*) FROM character_skills WHERE character_id = @cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+                }
+            }
+        }
+
+        public int ClearAllSkillCommands(int characterId)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "UPDATE character_skills SET extra_values = NULL WHERE character_id = @cid AND extra_values IS NOT NULL", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    return cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        public int UpdateSkillCommand(int characterId, ushort skillId, byte[] commandBytes)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "UPDATE character_skills SET extra_values = @extra WHERE character_id = @cid AND skill_id = @sid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@sid", (int)skillId);
+                    cmd.Parameters.AddWithValue("@extra", commandBytes != null && commandBytes.Length > 0
+                        ? (object)commandBytes
+                        : DBNull.Value);
+                    return cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        public void SwapSkillSlot(int characterId, int page, int slot1, int slot2)
+        {
+            if (slot1 == slot2) return;
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    MoveSkillSlot(conn, tx, characterId, page, slot1, -1);    
+                    MoveSkillSlot(conn, tx, characterId, page, slot2, slot1); 
+                    MoveSkillSlot(conn, tx, characterId, page, -1, slot2);    
+                    tx.Commit();
+                }
+            }
+        }
+
+        public bool MoveSkillToSlot(int characterId, int page, ushort skillId, int toSlot)
+        {
+            if (characterId <= 0)
+                return false;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    var changed = MoveSkillIdToSlot(conn, tx, characterId, page, skillId, toSlot) > 0;
+                    tx.Commit();
+                    return changed;
+                }
+            }
+        }
+
+        public List<SkillSlotRecord> LoadSkillSlots(int characterId, int page)
+        {
+            var rows = new List<SkillSlotRecord>();
+            if (characterId <= 0)
+                return rows;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "SELECT slot, skill_id FROM character_skills WHERE character_id=@cid AND page_index=@page ORDER BY slot", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@page", page);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            rows.Add(new SkillSlotRecord
+                            {
+                                Slot = reader.GetInt32(0),
+                                SkillId = (ushort)reader.GetInt32(1),
+                            });
+                        }
+                    }
+                }
+            }
+
+            return rows;
+        }
+
+        public int MoveSkillsToSlots(int characterId, int page, IReadOnlyList<SkillSlotMove> moves)
+        {
+            if (characterId <= 0 || moves == null || moves.Count == 0)
+                return 0;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    var changed = 0;
+                    foreach (var move in moves)
+                    {
+                        changed += MoveSkillIdToSlot(conn, tx, characterId, page, move.SkillId, move.ToSlot);
+                    }
+                    tx.Commit();
+                    return changed;
+                }
+            }
+        }
+
+        private static void MoveSkillSlot(SqliteConnection conn, SqliteTransaction tx, int cid, int page, int fromSlot, int toSlot)
+        {
+            using (var cmd = new SqliteCommand(
+                "UPDATE character_skills SET slot = @to WHERE character_id = @cid AND page_index = @page AND slot = @from", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@to", toSlot);
+                cmd.Parameters.AddWithValue("@cid", cid);
+                cmd.Parameters.AddWithValue("@page", page);
+                cmd.Parameters.AddWithValue("@from", fromSlot);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static int MoveSkillIdToSlot(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            int page,
+            ushort skillId,
+            int toSlot)
+        {
+            MoveSkillSlot(conn, tx, characterId, page, toSlot, -1);
+            using (var cmd = new SqliteCommand(
+                "UPDATE character_skills SET slot = @to WHERE character_id = @cid AND page_index = @page AND skill_id = @sid", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@to", toSlot);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@page", page);
+                cmd.Parameters.AddWithValue("@sid", (int)skillId);
+                return cmd.ExecuteNonQuery();
+            }
+        }
+
+        public CreatureItemListSnapshot LoadCreatures(int characterId)
+        {
+            var snapshot = new CreatureItemListSnapshot();
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "SELECT creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag FROM character_creatures WHERE character_id = @cid ORDER BY sort_order", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            snapshot.Entries.Add(new CreatureItemEntrySnapshot
+                            {
+                                CreatureKey = reader.GetInt32(0),
+                                Field04 = (byte)reader.GetInt32(1),
+                                ModeFlag = (byte)reader.GetInt32(2),
+                                ProgressValue32 = reader.GetInt32(3),
+                                Mode1Field0A = (byte)reader.GetInt32(4),
+                                Mode1Field0B = (byte)reader.GetInt32(5),
+                                FieldAfterValue32 = (byte)reader.GetInt32(6),
+                                CreatureTextBytes = reader.IsDBNull(7) ? new byte[0] : (byte[])reader[7],
+                                TailFlag = (byte)reader.GetInt32(8),
+                            });
+                        }
+                    }
+                }
+            }
+            return snapshot;
+        }
+
+        public void SaveCreatures(int characterId, CreatureItemListSnapshot snapshot)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    using (var cmd = new SqliteCommand("DELETE FROM character_creatures WHERE character_id = @cid", conn, tx))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    for (int i = 0; i < snapshot.Entries.Count; i++)
+                    {
+                        var entry = snapshot.Entries[i];
+                        using (var cmd = new SqliteCommand(
+                            "INSERT INTO character_creatures (character_id, sort_order, creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag) VALUES (@cid, @ord, @key, @f04, @mf, @pv, @m0a, @m0b, @fav, @txt, @tf)", conn, tx))
+                        {
+                            cmd.Parameters.AddWithValue("@cid", characterId);
+                            cmd.Parameters.AddWithValue("@ord", i);
+                            cmd.Parameters.AddWithValue("@key", entry.CreatureKey);
+                            cmd.Parameters.AddWithValue("@f04", (int)entry.Field04);
+                            cmd.Parameters.AddWithValue("@mf", (int)entry.ModeFlag);
+                            cmd.Parameters.AddWithValue("@pv", entry.ProgressValue32);
+                            cmd.Parameters.AddWithValue("@m0a", (int)entry.Mode1Field0A);
+                            cmd.Parameters.AddWithValue("@m0b", (int)entry.Mode1Field0B);
+                            cmd.Parameters.AddWithValue("@fav", (int)entry.FieldAfterValue32);
+                            cmd.Parameters.AddWithValue("@txt", entry.CreatureTextBytes != null && entry.CreatureTextBytes.Length > 0 ? (object)entry.CreatureTextBytes : DBNull.Value);
+                            cmd.Parameters.AddWithValue("@tf", (int)entry.TailFlag);
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+
+                    tx.Commit();
+                }
+            }
+        }
+
+        public bool HasCreatures(int characterId)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand("SELECT COUNT(*) FROM character_creatures WHERE character_id = @cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+                }
+            }
+        }
+
+        
+
+        // GM瘦身拷贝: 此处删除了 SeedFromSnapshot(依赖未拷贝的 SelectCharacterInitializationSnapshot)
+        private (byte Job, byte Level, int BonusSp, int BonusTp) LoadSkillOwnerState(int characterId)
+        {
+            try
+            {
+                using (var conn = new SqliteConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = new SqliteCommand(
+                        "SELECT job, level, bonus_sp, bonus_tp FROM characters WHERE character_id = @cid", conn))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                return (
+                                    (byte)reader.GetInt32(0),
+                                    (byte)Math.Max(1, reader.GetInt32(1)),
+                                    reader.GetInt32(2),
+                                    reader.GetInt32(3));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (SqliteException)
+            {
+            }
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "SELECT job, level FROM characters WHERE character_id = @cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                            return ((byte)reader.GetInt32(0), (byte)Math.Max(1, reader.GetInt32(1)), 0, 0);
+                    }
+                }
+            }
+
+            return (0, 1, 0, 0);
+        }
+    }
+
+    public sealed class SkillSlotRecord
+    {
+        public int Slot { get; set; }
+
+        public ushort SkillId { get; set; }
+    }
+
+    public sealed class SkillSlotMove
+    {
+        public ushort SkillId { get; set; }
+
+        public int ToSlot { get; set; }
+    }
+}
