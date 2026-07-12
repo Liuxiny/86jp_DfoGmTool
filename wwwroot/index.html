@@ -4,12 +4,37 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DFO GM 控制台</title>
+  <script src="js/theme.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <h1>DFO GM 控制台</h1>
-    <span id="status" class="status">连接中…</span>
+    <div class="header-actions">
+      <span id="status" class="status">连接中…</span>
+      <div id="theme-switcher" class="theme-switcher" role="group" aria-label="界面主题">
+        <button type="button" class="theme-option" data-theme-option="white"
+          aria-pressed="false" title="切换为白色主题">
+          <span class="theme-swatch theme-swatch-white" aria-hidden="true"></span>
+          <span>白色</span>
+        </button>
+        <button type="button" class="theme-option" data-theme-option="sky"
+          aria-pressed="false" title="切换为天蓝主题">
+          <span class="theme-swatch theme-swatch-sky" aria-hidden="true"></span>
+          <span>天蓝</span>
+        </button>
+        <button type="button" class="theme-option" data-theme-option="black"
+          aria-pressed="false" title="切换为纯黑主题">
+          <span class="theme-swatch theme-swatch-black" aria-hidden="true"></span>
+          <span>纯黑</span>
+        </button>
+        <button type="button" class="theme-option" data-theme-option="blue"
+          aria-pressed="false" title="切换为当前经典主题">
+          <span class="theme-swatch theme-swatch-blue" aria-hidden="true"></span>
+          <span>经典</span>
+        </button>
+      </div>
+    </div>
   </header>
 
   <div class="notice">服务器运行中做的改动，在线角色需要<b>返回选角再进入</b>才会生效。</div>
@@ -231,6 +256,8 @@
                 <thead><tr><th>状态</th><th>Lv</th><th>ID</th><th>名称</th><th>前置</th><th></th></tr></thead>
                 <tbody></tbody>
               </table>
+              <div id="achieve-quest-pager" class="row" style="margin-top:10px"
+                role="navigation" aria-label="成就任务分页" aria-live="polite"></div>
             </div>
           </div>
         </div>
@@ -245,6 +272,8 @@
             <thead><tr><th>类型</th><th>区域</th><th>Lv</th><th>任务 ID</th><th>名称</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
+          <div id="cleared-pager" class="row" style="margin-top:10px"
+            role="navigation" aria-label="已完成任务分页" aria-live="polite"></div>
         </div>
 
         <div id="quest-tab-lib" class="quest-tab-page hidden">
