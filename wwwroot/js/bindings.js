@@ -2,6 +2,8 @@
 // 任何一行抛异常会杀死其后所有绑定(历史上 btn-cera 悬空绑定事故),
 // 新增绑定一律放这里, 不要散落到各功能文件。
 
+if (window.DfoTheme) window.DfoTheme.bind();
+
 document.querySelectorAll('.tab[data-tab]').forEach((tab) => {
   tab.onclick = () => {
     document.querySelectorAll('.tab[data-tab]').forEach((t) => t.classList.remove('active'));
