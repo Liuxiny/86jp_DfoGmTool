@@ -1,5 +1,10 @@
 // ---- 任务 ----
 
+const QUEST_PAGE_SIZE = 20;
+let clearedQuests = [];
+let clearedPage = 0;
+let clearedCharacterId = null;
+
 async function loadQuests() {
   if (!currentChar) return;
   const epoch = selectEpoch;
@@ -43,18 +48,35 @@ function refreshQuestViews() {
 async function loadClearedQuests() {
   if (!currentChar) return;
   const epoch = selectEpoch;
+  const characterId = currentChar.characterId;
+  if (clearedCharacterId !== characterId) {
+    clearedCharacterId = characterId;
+    clearedPage = 0;
+  }
   let data;
   try {
-    data = await api(`/api/characters/${currentChar.characterId}/quests/cleared`);
+    data = await api(`/api/characters/${characterId}/quests/cleared`);
   } catch (e) {
     toast(e.message, true);
     return;
   }
   if (epoch !== selectEpoch) return;
   $('#cleared-count').textContent = `共 ${data.count} 个已完成任务`;
+  clearedQuests = data.quests;
+  renderClearedQuests();
+}
+
+function renderClearedQuests() {
   const tbody = $('#cleared-table tbody');
   tbody.innerHTML = '';
-  for (const quest of data.quests) {
+  const pageCount = Math.max(1, Math.ceil(clearedQuests.length / QUEST_PAGE_SIZE));
+  clearedPage = Math.min(Math.max(clearedPage, 0), pageCount - 1);
+  const pageItems = clearedQuests.slice(
+    clearedPage * QUEST_PAGE_SIZE,
+    (clearedPage + 1) * QUEST_PAGE_SIZE,
+  );
+
+  for (const quest of pageItems) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${escapeHtml(quest.gradeLabel || '?')}</td>
       <td>${escapeHtml(quest.regionLabel || '')}</td><td>${quest.minLevel || ''}</td>
@@ -63,8 +85,13 @@ async function loadClearedQuests() {
     tr.querySelector('button').onclick = () => questAction(quest.questId, 'unclear', '已取消完成标记');
     tbody.appendChild(tr);
   }
-  if (data.quests.length === 0)
+  if (clearedQuests.length === 0)
     tbody.innerHTML = '<tr><td colspan="6" class="hint">没有已完成任务</td></tr>';
+
+  renderTaskPager($('#cleared-pager'), clearedPage, pageCount, clearedQuests.length, (page) => {
+    clearedPage = page;
+    renderClearedQuests();
+  });
 }
 
 async function questAction(questId, action, message) {
@@ -81,15 +108,25 @@ async function questAction(questId, action, message) {
 
 const questViews = {
   main: { endpoint: 'main', navSel: '#main-region-nav', tableSel: '#main-quest-table', data: null, activeRegion: null },
-  achieve: { endpoint: 'achievement', navSel: '#achieve-region-nav', tableSel: '#achieve-quest-table', data: null, activeRegion: null },
+  achieve: {
+    endpoint: 'achievement', navSel: '#achieve-region-nav', tableSel: '#achieve-quest-table',
+    pagerSel: '#achieve-quest-pager', data: null, activeRegion: null, page: 0,
+    characterId: null,
+  },
 };
 
 async function loadQuestView(key) {
   if (!currentChar) return;
   const epoch = selectEpoch;
   const view = questViews[key];
+  const characterId = currentChar.characterId;
+  if (view.pagerSel && view.characterId !== characterId) {
+    view.characterId = characterId;
+    view.activeRegion = null;
+    view.page = 0;
+  }
   try {
-    const data = await api(`/api/characters/${currentChar.characterId}/quests/${view.endpoint}`);
+    const data = await api(`/api/characters/${characterId}/quests/${view.endpoint}`);
     if (epoch !== selectEpoch) return;
     view.data = data;
     renderRegionNav(key);
@@ -108,10 +145,14 @@ function renderRegionNav(key) {
   nav.innerHTML = '';
   if (!view.data) return;
 
-  if (view.activeRegion && !view.data.regions.some((r) => r.region === view.activeRegion))
+  if (view.activeRegion && !view.data.regions.some((r) => r.region === view.activeRegion)) {
     view.activeRegion = null;
-  if (!view.activeRegion && view.data.regions.length > 0)
+    if (view.pagerSel) view.page = 0;
+  }
+  if (!view.activeRegion && view.data.regions.length > 0) {
     view.activeRegion = view.data.regions[0].region;
+    if (view.pagerSel) view.page = 0;
+  }
 
   let lastGroup = null;
   for (const region of view.data.regions) {
@@ -129,7 +170,12 @@ function renderRegionNav(key) {
     el.innerHTML = `<span>${escapeHtml(region.regionLabel)}</span>
       <span class="cnt">${region.completed}/${region.total}</span>`;
     el.title = `Lv.${region.minLevel}+`;
-    el.onclick = () => { view.activeRegion = region.region; renderRegionNav(key); renderQuestTree(key); };
+    el.onclick = () => {
+      view.activeRegion = region.region;
+      if (view.pagerSel) view.page = 0;
+      renderRegionNav(key);
+      renderQuestTree(key);
+    };
     nav.appendChild(el);
   }
 }
@@ -171,17 +217,53 @@ function chainStats(root, children, visited) {
   return { total, done };
 }
 
+// 分页按任务数量装入完整任务链。链不跨页，单条超长链允许独占一页。
+function paginateQuestRoots(roots, children) {
+  const pages = [];
+  let page = [];
+  let taskCount = 0;
+
+  for (const root of roots) {
+    const chainSize = chainStats(root, children, new Set()).total;
+    if (page.length > 0 && taskCount + chainSize > QUEST_PAGE_SIZE) {
+      pages.push(page);
+      page = [];
+      taskCount = 0;
+    }
+    page.push(root);
+    taskCount += chainSize;
+    if (taskCount >= QUEST_PAGE_SIZE) {
+      pages.push(page);
+      page = [];
+      taskCount = 0;
+    }
+  }
+
+  if (page.length > 0) pages.push(page);
+  return pages.length > 0 ? pages : [[]];
+}
+
 function renderQuestTree(viewKey) {
   const view = questViews[viewKey];
   const tbody = $(view.tableSel + ' tbody');
+  const pager = view.pagerSel ? $(view.pagerSel) : null;
   tbody.innerHTML = '';
+  if (pager) pager.innerHTML = '';
   if (!view.data) return;
   const region = view.data.regions.find((r) => r.region === view.activeRegion);
   if (!region) return;
 
   const { roots, children } = buildQuestChains(region.quests);
+  let pageRoots = roots;
+  let pageCount = 1;
+  if (pager) {
+    const pages = paginateQuestRoots(roots, children);
+    pageCount = pages.length;
+    view.page = Math.min(Math.max(view.page, 0), pageCount - 1);
+    pageRoots = pages[view.page];
+  }
 
-  for (const root of roots) {
+  for (const root of pageRoots) {
     const key = viewKey + ':' + region.region + ':' + root.questId;
     const stats = chainStats(root, children, new Set());
     const hasChain = stats.total > 1;
@@ -191,6 +273,34 @@ function renderQuestTree(viewKey) {
     if (expanded)
       emitChildren(tbody, viewKey, root, children, 1, new Set([root.questId]));
   }
+
+  if (pager) {
+    renderTaskPager(pager, view.page, pageCount, region.quests.length, (page) => {
+      view.page = page;
+      renderQuestTree(viewKey);
+    });
+  }
+}
+
+function renderTaskPager(pager, page, pageCount, total, onPageChange) {
+  pager.innerHTML = '';
+  if (pageCount <= 1) return;
+  const prev = document.createElement('button');
+  prev.className = 'mini';
+  prev.textContent = '上一页';
+  prev.disabled = page === 0;
+  prev.onclick = () => onPageChange(page - 1);
+
+  const next = document.createElement('button');
+  next.className = 'mini';
+  next.textContent = '下一页';
+  next.disabled = page >= pageCount - 1;
+  next.onclick = () => onPageChange(page + 1);
+
+  const info = document.createElement('span');
+  info.className = 'hint';
+  info.textContent = `共 ${total} 个任务 · 第 ${page + 1} / ${pageCount} 页`;
+  pager.append(prev, info, next);
 }
 
 // 链子树按展示顺序展平(根在前 = 合法的完成顺序)
