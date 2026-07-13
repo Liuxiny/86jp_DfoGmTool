@@ -60,6 +60,7 @@
       <nav class="tabs">
         <button class="acc-tab tab active" data-acc-tab="currency">货币</button>
         <button class="acc-tab tab" data-acc-tab="cube">晶块</button>
+        <button class="acc-tab tab" data-acc-tab="progress">账号进度</button>
         <button class="acc-tab tab" data-acc-tab="cargo">账号金库</button>
       </nav>
 
@@ -77,6 +78,17 @@
             <thead><tr><th>ID</th><th>名称</th><th>当前值</th><th>覆写为</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+      </div>
+
+      <div id="acc-tab-progress" class="acc-tab-page hidden">
+        <div class="card">
+          <div class="card-title">荣誉等级</div>
+          <div id="account-honor-progress"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">能量胶囊经验</div>
+          <div id="account-growth-capsule-progress"></div>
         </div>
       </div>
 

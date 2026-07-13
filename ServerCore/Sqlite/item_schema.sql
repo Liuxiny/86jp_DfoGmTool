@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     cube_blue      INTEGER NOT NULL DEFAULT 0,
     cube_clear     INTEGER NOT NULL DEFAULT 0,
     cube_gold      INTEGER NOT NULL DEFAULT 0,
-    honor_exp      INTEGER NOT NULL DEFAULT 0
+    honor_exp      INTEGER NOT NULL DEFAULT 0,
+    growth_capsule_exp INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS characters (

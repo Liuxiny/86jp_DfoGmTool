@@ -133,6 +133,8 @@ function renderAccountPanel(accountId, detail) {
     box.appendChild(row);
   }
 
+  renderAccountProgress(accountId, detail.progress);
+
   const cubeBody = $('#cube-table tbody');
   cubeBody.innerHTML = '';
   for (const cube of detail.cubes) {
@@ -188,6 +190,77 @@ function renderAccountPanel(accountId, detail) {
       toast(e.message, true);
     }
   };
+}
+
+function renderAccountProgress(accountId, progress) {
+  const honorBox = $('#account-honor-progress');
+  const capsuleBox = $('#account-growth-capsule-progress');
+  if (!progress || !progress.honor || !progress.growthCapsule) {
+    honorBox.innerHTML = '<span class="hint">账号进度读取失败</span>';
+    capsuleBox.innerHTML = '';
+    return;
+  }
+
+  const honor = progress.honor;
+  const honorRow = document.createElement('div');
+  honorRow.className = 'row';
+  honorRow.innerHTML = `<span class="account-progress-value">当前 Lv.${honor.level} / ${honor.maxLevel}</span>
+    <span class="account-progress-detail">等级经验 ${Number(honor.currentLevelExp).toLocaleString()} / ${Number(honor.currentLevelExpCap).toLocaleString()}，总经验 ${Number(honor.totalExp).toLocaleString()} / ${Number(honor.maxTotalExp).toLocaleString()}</span>
+    <label>目标等级 <input type="number" min="1" max="${honor.maxLevel}" class="val-input" value="${honor.level}"></label>
+    <button class="mini" data-action="set">调整</button><button class="mini" data-action="max">一键满级</button>`;
+  const honorInput = honorRow.querySelector('input');
+  honorRow.querySelector('[data-action="set"]').onclick = async () => {
+    const level = Number(honorInput.value);
+    if (!Number.isSafeInteger(level) || level < 1 || level > honor.maxLevel)
+      return toast(`请输入 1 到 ${honor.maxLevel} 的整数`, true);
+    try {
+      const result = await post(`/api/accounts/${accountId}/honor-level`, { level });
+      renderAccountProgress(accountId, result.progress);
+      toast(`荣誉等级已调整为 Lv.${result.progress.honor.level}`);
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+  honorRow.querySelector('[data-action="max"]').onclick = async () => {
+    try {
+      const result = await post(`/api/accounts/${accountId}/honor-level/max`);
+      renderAccountProgress(accountId, result.progress);
+      toast('荣誉等级已满级');
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+  honorBox.replaceChildren(honorRow);
+
+  const capsule = progress.growthCapsule;
+  const capsuleRow = document.createElement('div');
+  capsuleRow.className = 'row';
+  capsuleRow.innerHTML = `<span class="account-progress-value">当前 ${Number(capsule.totalExp).toLocaleString()} / ${Number(capsule.requiredExp).toLocaleString()}</span>
+    <label>覆写为 <input type="number" min="0" max="${capsule.requiredExp}" class="val-input" value="${capsule.totalExp}"></label>
+    <button class="mini" data-action="set">覆写</button><button class="mini" data-action="max">一键满级</button>`;
+  const capsuleInput = capsuleRow.querySelector('input');
+  capsuleRow.querySelector('[data-action="set"]').onclick = async () => {
+    const exp = Number(capsuleInput.value);
+    if (!Number.isSafeInteger(exp) || exp < 0)
+      return toast('请输入非负整数', true);
+    try {
+      const result = await post(`/api/accounts/${accountId}/growth-capsule`, { exp });
+      renderAccountProgress(accountId, result.progress);
+      toast(`能量胶囊经验已覆写为 ${Number(result.progress.growthCapsule.totalExp).toLocaleString()}`);
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+  capsuleRow.querySelector('[data-action="max"]').onclick = async () => {
+    try {
+      const result = await post(`/api/accounts/${accountId}/growth-capsule/max`);
+      renderAccountProgress(accountId, result.progress);
+      toast('能量胶囊经验已满');
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+  capsuleBox.replaceChildren(capsuleRow);
 }
 
 async function loadCharacters(accountId) {

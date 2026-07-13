@@ -71,6 +71,14 @@ namespace DfoGmTool
                 Results.Json(gm.AdjustAccountCurrency(id, body.Type, body.Amount, body.Value)));
             app.MapPost("/api/accounts/{id:int}/cube", (int id, CubeRequest body) =>
                 Results.Json(gm.AdjustCubeFragment(id, body.ItemId, body.Amount, body.Value)));
+            app.MapPost("/api/accounts/{id:int}/honor-level", (int id, HonorLevelRequest body) =>
+                Results.Json(gm.SetAccountHonorLevel(id, body.Level)));
+            app.MapPost("/api/accounts/{id:int}/honor-level/max", (int id) =>
+                Results.Json(gm.MaxAccountHonorLevel(id)));
+            app.MapPost("/api/accounts/{id:int}/growth-capsule", (int id, GrowthCapsuleRequest body) =>
+                Results.Json(gm.SetGrowthCapsuleExp(id, body.Exp)));
+            app.MapPost("/api/accounts/{id:int}/growth-capsule/max", (int id) =>
+                Results.Json(gm.MaxGrowthCapsuleExp(id)));
             app.MapPost("/api/characters/{id:int}/wallet", (int id, WalletSetRequest body) =>
                 Results.Json(gm.SetWalletValue(id, body.Type, body.Value)));
             app.MapPost("/api/accounts/{id:int}/cargo/delete", (int id, SlotRequest body) =>
@@ -164,6 +172,16 @@ namespace DfoGmTool
         public int ItemId { get; set; }
         public int Amount { get; set; }
         public long? Value { get; set; }
+    }
+
+    public sealed class HonorLevelRequest
+    {
+        public int Level { get; set; }
+    }
+
+    public sealed class GrowthCapsuleRequest
+    {
+        public long Exp { get; set; }
     }
 
     public sealed class WalletSetRequest

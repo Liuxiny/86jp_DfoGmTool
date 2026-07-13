@@ -124,8 +124,43 @@ ORDER BY slot_index;";
                     }
                 }
 
-                return new { accountId, currencies, cubes, cargo };
+                if (!_accountProgress.TryLoad(accountId, out var progress))
+                    return Error("账号不存在: " + accountId);
+
+                return new { accountId, currencies, cubes, cargo, progress };
             }
+        }
+
+        public object SetAccountHonorLevel(int accountId, int level)
+        {
+            if (!_accountProgress.TrySetHonorLevel(accountId, level, out var progress, out var error))
+                return Error(error);
+
+            return new { success = true, accountId, progress };
+        }
+
+        public object MaxAccountHonorLevel(int accountId)
+        {
+            if (!_accountProgress.TryMaxHonorLevel(accountId, out var progress, out var error))
+                return Error(error);
+
+            return new { success = true, accountId, progress };
+        }
+
+        public object SetGrowthCapsuleExp(int accountId, long exp)
+        {
+            if (!_accountProgress.TrySetGrowthCapsuleExp(accountId, exp, out var progress, out var error))
+                return Error(error);
+
+            return new { success = true, accountId, progress };
+        }
+
+        public object MaxGrowthCapsuleExp(int accountId)
+        {
+            if (!_accountProgress.TryMaxGrowthCapsuleExp(accountId, out var progress, out var error))
+                return Error(error);
+
+            return new { success = true, accountId, progress };
         }
 
         public object AdjustAccountCurrency(int accountId, string type, int amount, long? setValue = null)
