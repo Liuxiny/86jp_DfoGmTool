@@ -30,6 +30,7 @@ namespace DfoGmTool.Services
         private readonly SqliteAssetService _assetService;
         private readonly SupplementalItemExpirationService _supplementalItemExpiration;
         private readonly Lazy<TitleBookMutationService> _titleBookMutation;
+        private readonly AccountProgressService _accountProgress;
 
         public GmService(GmConfig config, PvfIndexService pvfIndex)
         {
@@ -40,6 +41,7 @@ namespace DfoGmTool.Services
             _supplementalItemExpiration = new SupplementalItemExpirationService(config.ConnectionString);
             _titleBookMutation = new Lazy<TitleBookMutationService>(
                 () => new TitleBookMutationService(config.ConnectionString));
+            _accountProgress = new AccountProgressService(config.DatabasePath, config.SchemaPath, config.PvfPath);
         }
 
         // 最终职业名(觉醒>转职>基础), PVF 索引没就绪时回退基础职业表

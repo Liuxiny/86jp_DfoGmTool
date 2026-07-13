@@ -498,6 +498,18 @@ section {
   margin-bottom: 12px;
 }
 
+.account-progress-value {
+  min-width: 150px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-progress-detail {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
 .inventory-toolbar-actions {
   display: flex;
   align-items: center;
