@@ -12,6 +12,7 @@
     <h1>DFO GM 控制台</h1>
     <div class="header-actions">
       <span id="status" class="status">连接中…</span>
+      <button id="btn-runtime-source" class="mini" type="button">数据源</button>
       <div id="theme-switcher" class="theme-switcher" role="group" aria-label="界面主题">
         <button type="button" class="theme-option" data-theme-option="white"
           aria-pressed="false" title="切换为白色主题">
@@ -37,9 +38,28 @@
     </div>
   </header>
 
-  <div class="notice">服务器运行中做的改动，在线角色需要<b>返回选角再进入</b>才会生效。</div>
+  <div id="runtime-notice" class="notice hidden">服务器运行中做的改动，在线角色需要<b>返回选角再进入</b>才会生效。</div>
 
-  <main>
+  <section id="runtime-source-panel" class="runtime-source-panel" aria-labelledby="runtime-source-title">
+    <form id="runtime-source-form" class="runtime-source-dialog">
+      <div class="runtime-source-title-row">
+        <h2 id="runtime-source-title">数据源</h2>
+        <button id="btn-close-runtime-source" class="mini" type="button">关闭</button>
+      </div>
+      <label class="runtime-source-field">数据库
+        <input id="runtime-database-path" type="text" autocomplete="off" spellcheck="false" placeholder="inventory.db 完整路径">
+      </label>
+      <label class="runtime-source-field">PVF
+        <input id="runtime-pvf-path" type="text" autocomplete="off" spellcheck="false" placeholder="Script.pvf 完整路径">
+      </label>
+      <div class="runtime-source-actions">
+        <button id="btn-load-runtime-source" type="submit">加载</button>
+        <span id="runtime-source-state" class="hint" aria-live="polite"></span>
+      </div>
+    </form>
+  </section>
+
+  <main id="workspace" class="hidden">
     <aside>
       <div class="side-card">
         <div class="panel-title">账号 <button id="btn-refresh-chars" class="mini">刷新</button></div>
@@ -334,6 +354,7 @@
   <!-- 顺序即依赖: core 提供通用助手, bindings 必须最后(全部事件绑定与启动调用) -->
   <script src="js/core.js"></script>
   <script src="js/sidebar.js"></script>
+  <script src="js/environment.js"></script>
   <script src="js/give.js"></script>
   <script src="js/inventory.js"></script>
   <script src="js/character.js"></script>

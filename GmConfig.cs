@@ -1,34 +1,41 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool
 {
-    // 定位服务端的运行目录(bin/Debug), GM 工具直接操作那里的 inventory.db 和 Script.pvf。
+    // GM 工具可从服务端目录自动发现数据源，也可在运行后直接选择数据库和 PVF。
     public sealed class GmConfig
     {
         public string ServerBinDir { get; }
-        public string DatabasePath => Path.Combine(ServerBinDir, "Data", "inventory.db");
-        // schema 优先用服务端目录里的(与目标库同源); 缺失时回退到工具自带拷贝(ServerCore\Sqlite)
+        public string DatabasePath { get; }
+        public string PvfPath { get; }
+
+        // schema 优先用服务端目录里的；自选数据源则使用工具自带的当前 schema。
         public string SchemaPath
         {
             get
             {
-                var serverSchema = Path.Combine(ServerBinDir, "Sqlite", "item_schema.sql");
-                if (File.Exists(serverSchema))
-                    return serverSchema;
+                if (!string.IsNullOrWhiteSpace(ServerBinDir))
+                {
+                    var serverSchema = Path.Combine(ServerBinDir, "Sqlite", "item_schema.sql");
+                    if (File.Exists(serverSchema))
+                        return serverSchema;
+                }
                 return Path.Combine(AppContext.BaseDirectory, "ServerCore", "Sqlite", "item_schema.sql");
             }
         }
-        public string PvfPath => Path.Combine(ServerBinDir, "Data", "Pvf", "Script.pvf");
-        public string ConnectionString => "Data Source=" + DatabasePath;
+        public string ConnectionString => new SqliteConnectionStringBuilder { DataSource = DatabasePath }.ToString();
 
-        private GmConfig(string serverBinDir)
+        private GmConfig(string databasePath, string pvfPath, string serverBinDir)
         {
+            DatabasePath = databasePath;
+            PvfPath = pvfPath;
             ServerBinDir = serverBinDir;
         }
 
-        public static GmConfig Resolve(string[] args)
+        public static GmConfig TryResolve(string[] args)
         {
             var candidates = new List<string>();
 
@@ -50,18 +57,98 @@ namespace DfoGmTool
 
             foreach (var candidate in candidates)
             {
-                if (string.IsNullOrWhiteSpace(candidate))
-                    continue;
-
-                var full = Path.GetFullPath(candidate);
-                var config = new GmConfig(full);
-                if (File.Exists(config.DatabasePath) && File.Exists(config.PvfPath) && File.Exists(config.SchemaPath))
+                if (TryCreateFromServerBin(candidate, out var config, out _))
                     return config;
             }
 
-            throw new FileNotFoundException(
-                "找不到服务端运行目录(需要 Data/inventory.db + Data/Pvf/Script.pvf; schema 缺失时用工具自带拷贝)。" +
-                "请先构建并运行过一次服务端, 或用 --server-bin <路径> / 环境变量 DFO_GM_SERVER_BIN 指定。");
+            return null;
+        }
+
+        public static bool TryCreate(
+            string databasePath,
+            string pvfPath,
+            out GmConfig config,
+            out string error)
+        {
+            config = null;
+            error = null;
+
+            if (!TryGetExistingFilePath(databasePath, "数据库", out var fullDatabasePath, out error)
+                || !TryGetExistingFilePath(pvfPath, "PVF", out var fullPvfPath, out error))
+                return false;
+
+            var serverBinDir = InferServerBinDir(fullDatabasePath);
+            var candidate = new GmConfig(fullDatabasePath, fullPvfPath, serverBinDir);
+            if (!File.Exists(candidate.SchemaPath))
+            {
+                error = "找不到数据库 schema 文件: " + candidate.SchemaPath;
+                return false;
+            }
+
+            config = candidate;
+            return true;
+        }
+
+        private static bool TryCreateFromServerBin(string serverBinDir, out GmConfig config, out string error)
+        {
+            config = null;
+            error = null;
+            if (string.IsNullOrWhiteSpace(serverBinDir))
+                return false;
+
+            string fullServerBinDir;
+            try
+            {
+                fullServerBinDir = Path.GetFullPath(serverBinDir);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+
+            var databasePath = Path.Combine(fullServerBinDir, "Data", "inventory.db");
+            var pvfPath = Path.Combine(fullServerBinDir, "Data", "Pvf", "Script.pvf");
+            return TryCreate(databasePath, pvfPath, out config, out error);
+        }
+
+        private static bool TryGetExistingFilePath(string path, string label, out string fullPath, out string error)
+        {
+            fullPath = null;
+            error = null;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                error = label + "路径不能为空。";
+                return false;
+            }
+
+            try
+            {
+                fullPath = Path.GetFullPath(path.Trim());
+            }
+            catch (Exception ex)
+            {
+                error = label + "路径无效: " + ex.Message;
+                return false;
+            }
+
+            if (!File.Exists(fullPath))
+            {
+                error = label + "文件不存在: " + fullPath;
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string InferServerBinDir(string databasePath)
+        {
+            var databaseDirectory = Path.GetDirectoryName(databasePath);
+            if (string.IsNullOrWhiteSpace(databaseDirectory)
+                || !string.Equals(Path.GetFileName(databaseDirectory), "Data", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return Directory.GetParent(databaseDirectory)?.FullName;
         }
 
         private static IEnumerable<string> EnumerateSearchRoots()

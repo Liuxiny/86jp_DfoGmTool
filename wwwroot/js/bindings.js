@@ -3,6 +3,7 @@
 // 新增绑定一律放这里, 不要散落到各功能文件。
 
 if (window.DfoTheme) window.DfoTheme.bind();
+bindRuntimeEnvironment();
 
 document.querySelectorAll('.tab[data-tab]').forEach((tab) => {
   tab.onclick = () => {
@@ -73,6 +74,4 @@ $('#btn-refresh-cleared').onclick = loadClearedQuests;
 $('#btn-quest-search').onclick = searchQuestLib;
 $('#quest-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchQuestLib(); });
 
-loadGiveCategories();
-loadStatus();
-loadAccounts().catch((e) => toast(e.message, true));
+initializeRuntimeEnvironment().catch((e) => toast(e.message, true));

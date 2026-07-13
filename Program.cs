@@ -10,19 +10,16 @@ namespace DfoGmTool
     {
         public static void Main(string[] args)
         {
-            var config = GmConfig.Resolve(args);
-
-            // 服务端程序集内部按这两个环境变量定位 PVF 和数据库
-            Environment.SetEnvironmentVariable("PVF_ARCHIVE_PATH", config.PvfPath);
-            Environment.SetEnvironmentVariable("INVENTORY_DATABASE_PATH", config.DatabasePath);
-
-            var pvfIndex = new PvfIndexService(config.PvfPath);
-            pvfIndex.WarmInBackground();
-            var gm = new GmService(config, pvfIndex);
+            var runtime = new GmRuntimeEnvironment(GmConfig.TryResolve(args));
 
             var builder = WebApplication.CreateBuilder(args);
             builder.Logging.ClearProviders();
             var app = builder.Build();
+
+            IResult WithRuntime(Func<GmService, PvfIndexService, object> operation)
+            {
+                return Results.Json(runtime.Execute(operation));
+            }
 
             // 本地工具: 异常直接以 JSON 返回, 方便定位
             app.Use(async (context, next) =>
@@ -56,88 +53,83 @@ namespace DfoGmTool
                 },
             });
 
-            app.MapGet("/api/status", () => Results.Json(new
-            {
-                serverBin = config.ServerBinDir,
-                database = config.DatabasePath,
-                pvf = config.PvfPath,
-                indexReady = pvfIndex.IsReady,
-                indexError = pvfIndex.BuildError,
-            }));
+            app.MapGet("/api/status", () => Results.Json(runtime.GetStatus()));
+            app.MapPost("/api/environment", (RuntimeEnvironmentRequest body) =>
+                Results.Json(runtime.Configure(body.DatabasePath, body.PvfPath)));
 
-            app.MapGet("/api/accounts", () => Results.Json(gm.ListAccounts()));
-            app.MapGet("/api/accounts/{id:int}/detail", (int id) => Results.Json(gm.GetAccountDetail(id, pvfIndex)));
+            app.MapGet("/api/accounts", () => WithRuntime((gm, _) => gm.ListAccounts()));
+            app.MapGet("/api/accounts/{id:int}/detail", (int id) => WithRuntime((gm, pvfIndex) => gm.GetAccountDetail(id, pvfIndex)));
             app.MapPost("/api/accounts/{id:int}/currency", (int id, CurrencyRequest body) =>
-                Results.Json(gm.AdjustAccountCurrency(id, body.Type, body.Amount, body.Value)));
+                WithRuntime((gm, _) => gm.AdjustAccountCurrency(id, body.Type, body.Amount, body.Value)));
             app.MapPost("/api/accounts/{id:int}/cube", (int id, CubeRequest body) =>
-                Results.Json(gm.AdjustCubeFragment(id, body.ItemId, body.Amount, body.Value)));
+                WithRuntime((gm, _) => gm.AdjustCubeFragment(id, body.ItemId, body.Amount, body.Value)));
             app.MapPost("/api/accounts/{id:int}/honor-level", (int id, HonorLevelRequest body) =>
-                Results.Json(gm.SetAccountHonorLevel(id, body.Level)));
+                WithRuntime((gm, _) => gm.SetAccountHonorLevel(id, body.Level)));
             app.MapPost("/api/accounts/{id:int}/honor-level/max", (int id) =>
-                Results.Json(gm.MaxAccountHonorLevel(id)));
+                WithRuntime((gm, _) => gm.MaxAccountHonorLevel(id)));
             app.MapPost("/api/accounts/{id:int}/growth-capsule", (int id, GrowthCapsuleRequest body) =>
-                Results.Json(gm.SetGrowthCapsuleExp(id, body.Exp)));
+                WithRuntime((gm, _) => gm.SetGrowthCapsuleExp(id, body.Exp)));
             app.MapPost("/api/accounts/{id:int}/growth-capsule/max", (int id) =>
-                Results.Json(gm.MaxGrowthCapsuleExp(id)));
+                WithRuntime((gm, _) => gm.MaxGrowthCapsuleExp(id)));
             app.MapPost("/api/characters/{id:int}/wallet", (int id, WalletSetRequest body) =>
-                Results.Json(gm.SetWalletValue(id, body.Type, body.Value)));
+                WithRuntime((gm, _) => gm.SetWalletValue(id, body.Type, body.Value)));
             app.MapPost("/api/accounts/{id:int}/cargo/delete", (int id, SlotRequest body) =>
-                Results.Json(gm.DeleteAccountCargoAt(id, body.Slot)));
+                WithRuntime((gm, _) => gm.DeleteAccountCargoAt(id, body.Slot)));
             app.MapPost("/api/accounts/{id:int}/cargo/clear", (int id) =>
-                Results.Json(gm.ClearAccountCargo(id)));
-            app.MapGet("/api/characters", (int? accountId) => Results.Json(gm.ListCharacters(accountId ?? -1)));
-            app.MapGet("/api/characters/{id:int}", (int id) => Results.Json(gm.GetCharacter(id)));
-            app.MapGet("/api/characters/{id:int}/items", (int id) => Results.Json(gm.ListItems(id, pvfIndex)));
-            app.MapGet("/api/characters/{id:int}/quests", (int id) => Results.Json(gm.ListQuests(id, pvfIndex)));
-            app.MapGet("/api/characters/{id:int}/stats", (int id) => Results.Json(gm.GetCharacterStats(id)));
-            app.MapGet("/api/characters/{id:int}/sptp", (int id) => Results.Json(gm.GetSpTp(id)));
+                WithRuntime((gm, _) => gm.ClearAccountCargo(id)));
+            app.MapGet("/api/characters", (int? accountId) => WithRuntime((gm, _) => gm.ListCharacters(accountId ?? -1)));
+            app.MapGet("/api/characters/{id:int}", (int id) => WithRuntime((gm, _) => gm.GetCharacter(id)));
+            app.MapGet("/api/characters/{id:int}/items", (int id) => WithRuntime((gm, pvfIndex) => gm.ListItems(id, pvfIndex)));
+            app.MapGet("/api/characters/{id:int}/quests", (int id) => WithRuntime((gm, pvfIndex) => gm.ListQuests(id, pvfIndex)));
+            app.MapGet("/api/characters/{id:int}/stats", (int id) => WithRuntime((gm, _) => gm.GetCharacterStats(id)));
+            app.MapGet("/api/characters/{id:int}/sptp", (int id) => WithRuntime((gm, _) => gm.GetSpTp(id)));
 
             app.MapPost("/api/characters/{id:int}/items", (int id, ItemRequest body) =>
-                Results.Json(gm.GiveItem(id, body.TemplateId, body.Count, pvfIndex)));
+                WithRuntime((gm, pvfIndex) => gm.GiveItem(id, body.TemplateId, body.Count, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/items/remove", (int id, ItemRequest body) =>
-                Results.Json(gm.RemoveItem(id, body.TemplateId, body.Count)));
+                WithRuntime((gm, _) => gm.RemoveItem(id, body.TemplateId, body.Count)));
             app.MapPost("/api/characters/{id:int}/items/delete-at", (int id, DeleteAtRequest body) =>
-                Results.Json(gm.DeleteItemAt(id, body.ListType, body.Slot, body.Count)));
+                WithRuntime((gm, _) => gm.DeleteItemAt(id, body.ListType, body.Slot, body.Count)));
             app.MapPost("/api/characters/{id:int}/items/batch-delete", (int id, BatchDeleteRequest body) =>
-                Results.Json(gm.BatchDeleteItems(id, body.Items)));
+                WithRuntime((gm, _) => gm.BatchDeleteItems(id, body.Items)));
             app.MapPost("/api/characters/{id:int}/gold", (int id, AmountRequest body) =>
-                Results.Json(gm.AdjustGold(id, body.Amount)));
+                WithRuntime((gm, _) => gm.AdjustGold(id, body.Amount)));
             app.MapPost("/api/characters/{id:int}/cera", (int id, CeraRequest body) =>
-                Results.Json(gm.AdjustCera(id, body.Amount, body.Type)));
+                WithRuntime((gm, _) => gm.AdjustCera(id, body.Amount, body.Type)));
             app.MapPost("/api/characters/{id:int}/level", (int id, LevelRequest body) =>
-                Results.Json(gm.SetLevel(id, body.Level)));
+                WithRuntime((gm, _) => gm.SetLevel(id, body.Level)));
             app.MapPost("/api/characters/{id:int}/sp", (int id, SpRequest body) =>
-                Results.Json(gm.AdjustSpTp(id, body.Sp, body.Tp)));
-            app.MapGet("/api/characters/{id:int}/growoptions", (int id) => Results.Json(gm.GetGrowOptions(id)));
+                WithRuntime((gm, _) => gm.AdjustSpTp(id, body.Sp, body.Tp)));
+            app.MapGet("/api/characters/{id:int}/growoptions", (int id) => WithRuntime((gm, _) => gm.GetGrowOptions(id)));
             app.MapPost("/api/characters/{id:int}/growtype", (int id, GrowTypeRequest body) =>
-                Results.Json(gm.SetGrowType(id, body.First, body.Second)));
+                WithRuntime((gm, _) => gm.SetGrowType(id, body.First, body.Second)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/ready", (int id, int questId) =>
-                Results.Json(gm.MarkQuestReady(id, questId)));
+                WithRuntime((gm, _) => gm.MarkQuestReady(id, questId)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/complete", (int id, int questId) =>
-                Results.Json(gm.ForceCompleteQuest(id, questId)));
+                WithRuntime((gm, _) => gm.ForceCompleteQuest(id, questId)));
             app.MapGet("/api/characters/{id:int}/quests/cleared", (int id) =>
-                Results.Json(gm.ListClearedQuests(id, pvfIndex)));
+                WithRuntime((gm, pvfIndex) => gm.ListClearedQuests(id, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/unclear", (int id, int questId) =>
-                Results.Json(gm.UnclearQuest(id, questId)));
+                WithRuntime((gm, _) => gm.UnclearQuest(id, questId)));
             app.MapGet("/api/characters/{id:int}/quests/search", (int id, string q, int? limit) =>
-                Results.Json(gm.SearchQuests(id, q, limit ?? 30, pvfIndex)));
+                WithRuntime((gm, pvfIndex) => gm.SearchQuests(id, q, limit ?? 30, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/quests/main", (int id) =>
-                Results.Json(gm.MainQuestOverview(id, pvfIndex)));
+                WithRuntime((gm, pvfIndex) => gm.MainQuestOverview(id, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/quests/achievement", (int id) =>
-                Results.Json(gm.AchievementOverview(id, pvfIndex)));
+                WithRuntime((gm, pvfIndex) => gm.AchievementOverview(id, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/complete-chain", (int id, int questId) =>
-                Results.Json(gm.CompleteQuestChain(id, questId, pvfIndex)));
+                WithRuntime((gm, pvfIndex) => gm.CompleteQuestChain(id, questId, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/complete-batch", (int id, QuestBatchRequest body) =>
-                Results.Json(gm.CompleteQuestBatch(id, body.QuestIds)));
+                WithRuntime((gm, _) => gm.CompleteQuestBatch(id, body.QuestIds)));
 
             app.MapGet("/api/items/search", (string q, int? limit) =>
-                Results.Json(pvfIndex.Search(q, limit ?? 30)));
-            app.MapGet("/api/items/categories", () => Results.Json(pvfIndex.GetItemCategories()));
+                WithRuntime((_, pvfIndex) => pvfIndex.Search(q, limit ?? 30)));
+            app.MapGet("/api/items/categories", () => WithRuntime((_, pvfIndex) => pvfIndex.GetItemCategories()));
             app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset, string expiration = null) =>
-                Results.Json(pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration)));
+                WithRuntime((_, pvfIndex) => pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration)));
 
             Console.WriteLine("GM Tool: http://localhost:5050");
-            Console.WriteLine("服务端目录: " + config.ServerBinDir);
+            Console.WriteLine("未自动发现数据源时，请在页面选择数据库和 PVF。");
             Console.WriteLine("注意: 服务器运行中做的改动, 在线角色需要返回选角再进入才会生效。");
             app.Run("http://localhost:5050");
         }
@@ -165,6 +157,12 @@ namespace DfoGmTool
         public string Type { get; set; }
         public int Amount { get; set; }
         public long? Value { get; set; }
+    }
+
+    public sealed class RuntimeEnvironmentRequest
+    {
+        public string DatabasePath { get; set; }
+        public string PvfPath { get; set; }
     }
 
     public sealed class CubeRequest

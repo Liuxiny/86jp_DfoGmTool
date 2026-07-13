@@ -32,6 +32,12 @@ namespace DfoGmTool.Services
         private readonly Lazy<TitleBookMutationService> _titleBookMutation;
         private readonly AccountProgressService _accountProgress;
 
+        internal static void ResetPvfStaticData()
+        {
+            lock (_titleBookLock)
+                _titleBookSlots = null;
+        }
+
         public GmService(GmConfig config, PvfIndexService pvfIndex)
         {
             _config = config;

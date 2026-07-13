@@ -20,6 +20,12 @@ namespace DfoGmTool.ServerCore.Game.SelectCharacter
         private static readonly Dictionary<byte, SkillInfoSnapshot> _cache = new Dictionary<byte, SkillInfoSnapshot>();
         private static readonly object _lock = new object();
 
+        internal static void ResetForPvfChange()
+        {
+            lock (_lock)
+                _cache.Clear();
+        }
+
         public static SkillInfoSnapshot Build(byte job)
         {
             lock (_lock)

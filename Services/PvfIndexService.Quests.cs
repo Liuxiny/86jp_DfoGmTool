@@ -81,7 +81,7 @@ namespace DfoGmTool.Services
             RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
         // quest.lst 路径本身就是权威分区: n_quest/<区域>/<子区域>/<类型>_<等级>_xxx.qst
-        private static Dictionary<int, QuestMeta> BuildQuestMeta(PvfArchive archive)
+        private Dictionary<int, QuestMeta> BuildQuestMeta(PvfArchive archive)
         {
             var result = new Dictionary<int, QuestMeta>();
             var lstPath = FindLstPath(archive, "quest.lst");

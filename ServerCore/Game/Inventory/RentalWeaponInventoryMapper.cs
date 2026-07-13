@@ -13,8 +13,19 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             public int StarPrice { get; set; }
         }
 
-        private static readonly Lazy<Dictionary<int, RentalWeaponIdentity>> IdentityById =
-            new Lazy<Dictionary<int, RentalWeaponIdentity>>(BuildIdentityIndex);
+        private static readonly object CacheLock = new object();
+        private static Lazy<Dictionary<int, RentalWeaponIdentity>> IdentityById = CreateIdentityIndex();
+
+        internal static void ResetForPvfChange()
+        {
+            lock (CacheLock)
+                IdentityById = CreateIdentityIndex();
+        }
+
+        private static Lazy<Dictionary<int, RentalWeaponIdentity>> CreateIdentityIndex()
+        {
+            return new Lazy<Dictionary<int, RentalWeaponIdentity>>(BuildIdentityIndex);
+        }
 
         public static bool IsValidInventoryTemplate(int itemTemplateId)
         {

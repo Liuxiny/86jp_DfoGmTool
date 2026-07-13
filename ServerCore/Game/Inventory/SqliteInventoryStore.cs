@@ -24,6 +24,12 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         internal static readonly object StackableItemCacheLock = new object();
         internal static readonly Dictionary<int, GmPvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, GmPvfLib.StackableItemFile>();
 
+        internal static void ResetForPvfChange()
+        {
+            lock (StackableItemCacheLock)
+                StackableItemCache.Clear();
+        }
+
         private readonly string _connectionString;
         internal string ConnectionString => _connectionString;
         private readonly InventoryAuditLogger _auditLogger;

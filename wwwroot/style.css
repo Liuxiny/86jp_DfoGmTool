@@ -318,6 +318,62 @@ header h1::before {
   font-size: 12px;
 }
 
+.runtime-source-panel {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding: 72px 16px 16px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, .38);
+}
+
+.runtime-source-dialog {
+  width: min(620px, 100%);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+
+.runtime-source-title-row,
+.runtime-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.runtime-source-title-row {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.runtime-source-title-row h2 {
+  margin: 0;
+  color: var(--title);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.runtime-source-field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.runtime-source-field input[type=text] {
+  width: 100%;
+}
+
+.runtime-source-actions {
+  min-height: 32px;
+}
+
 main {
   display: flex;
   min-height: calc(100vh - 90px);
@@ -858,6 +914,15 @@ button,
   .theme-switcher {
     width: 100%;
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .runtime-source-panel {
+    padding-top: 64px;
+  }
+
+  .runtime-source-actions {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .tabs {

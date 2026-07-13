@@ -58,14 +58,15 @@ function giveCatEl(label, count, isActive, rawTitle, onClick) {
 // 展开状态跨重渲染保留; 默认全收起, 只显示组头
 const giveNavExpanded = new Set();
 
-async function loadGiveCategories() {
+async function loadGiveCategories(expectedRuntimeEpoch) {
   try {
     const data = await api('/api/items/categories');
+    if (expectedRuntimeEpoch != null && expectedRuntimeEpoch !== runtimeSourceEpoch) return;
     const nav = $('#give-category-nav');
     nav.innerHTML = '';
     if (!data.ready) {
       nav.innerHTML = '<div class="group-title">索引构建中…</div>';
-      setTimeout(loadGiveCategories, 2500);
+      setTimeout(() => loadGiveCategories(expectedRuntimeEpoch), 2500);
       return;
     }
 

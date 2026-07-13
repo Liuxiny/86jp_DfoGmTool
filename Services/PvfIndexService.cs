@@ -32,8 +32,8 @@ namespace DfoGmTool.Services
         private volatile Dictionary<int, JobNameInfo> _jobNames;
         private volatile List<ItemEntry> _searchList;
         private volatile string _buildError;
-        // 构建期间解析失败(被跳过)的条目数, 就绪日志里报出来, 不许静默蒸发
-        private static int _parseFailures;
+        // 构建期间解析失败(被跳过)的条目数。数据源可热切换，计数必须归属当前索引实例。
+        private int _parseFailures;
 
         public PvfIndexService(string pvfPath)
         {

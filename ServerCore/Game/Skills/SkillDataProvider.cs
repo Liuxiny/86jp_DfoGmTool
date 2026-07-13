@@ -64,6 +64,15 @@ namespace DfoGmTool.ServerCore.Game.Skills
         
         private static readonly Dictionary<int, SkillStaticData> _cache = new Dictionary<int, SkillStaticData>();
 
+        internal static void ResetForPvfChange()
+        {
+            lock (_lock)
+            {
+                _jobSkillPaths = null;
+                _cache.Clear();
+            }
+        }
+
         
         public static SkillStaticData GetSkill(int job, int skillIndex)
         {
