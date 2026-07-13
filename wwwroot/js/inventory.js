@@ -182,9 +182,13 @@ async function clearCurrentCategory() {
 function renderItemTable() {
   updateClearButton();
   const template = templateFor(activeCategory);
-  const filtered = activeCategory === '全部'
+  const categoryItems = activeCategory === '全部'
     ? inventoryItems
     : inventoryItems.filter((item) => item.category === activeCategory);
+  const expirationFilter = $('#inventory-expiration').value;
+  const filtered = template.custom === 'wallet'
+    ? categoryItems
+    : categoryItems.filter((item) => inventoryExpirationMatchesFilter(item, expirationFilter));
 
   const thead = $('#item-table thead');
   thead.innerHTML = '<tr>' + template.cols.map((col) => `<th>${col}</th>`).join('') + '</tr>';
@@ -228,7 +232,7 @@ function renderItemTable() {
   }
 
   if (filtered.length === 0)
-    tbody.innerHTML = `<tr><td colspan="${template.cols.length}" class="hint">该分类下没有物品</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${template.cols.length}" class="hint">当前筛选下没有物品</td></tr>`;
 
   if (filtered.length > INV_PAGE_SIZE) {
     const prev = document.createElement('button');

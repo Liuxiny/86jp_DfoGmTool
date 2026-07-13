@@ -23,11 +23,12 @@ namespace DfoGmTool.Services
 
             // 快照加载内部自己开连接, 不能包在 scope 事务里(同库两连接会锁死)
             var snapshot = _store.LoadCharacterItemListSnapshot(characterId, accountId);
+            var rentalExpireTimes = _supplementalItemExpiration.LoadRentalExpireTimes(characterId);
 
             var items = new List<object>();
-            AppendCommonItems(items, "主背包", InventoryListType.Main, snapshot.MainItems, pvfIndex);
-            AppendCommonItems(items, "个人仓库", InventoryListType.PersonalCargo, snapshot.PersonalCargoItems, pvfIndex);
-            AppendCommonItems(items, "账号金库", InventoryListType.AccountCargo, snapshot.AccountCargoItems, pvfIndex);
+            AppendCommonItems(items, "主背包", InventoryListType.Main, snapshot.MainItems, pvfIndex, rentalExpireTimes);
+            AppendCommonItems(items, "个人仓库", InventoryListType.PersonalCargo, snapshot.PersonalCargoItems, pvfIndex, rentalExpireTimes);
+            AppendCommonItems(items, "账号金库", InventoryListType.AccountCargo, snapshot.AccountCargoItems, pvfIndex, rentalExpireTimes);
 
             foreach (var item in snapshot.EquipmentItems)
             {
@@ -44,6 +45,7 @@ namespace DfoGmTool.Services
                     count = 1,
                     durability = 0,
                     expireTime = item.ExpireTime,
+                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.AvatarItemId, item.ExpireTime),
                     templateExpiration = CreateTemplateExpiration(pvfIndex, item.AvatarItemId),
                     deletable = true,
                 });
@@ -64,6 +66,7 @@ namespace DfoGmTool.Services
                     count = 1,
                     durability = 0,
                     expireTime = item.ExpireTime,
+                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.AvatarItemId, item.ExpireTime),
                     templateExpiration = CreateTemplateExpiration(pvfIndex, item.AvatarItemId),
                     deletable = true,
                 });
@@ -85,6 +88,7 @@ namespace DfoGmTool.Services
                     durability = 0,
                     serial = item.CreatureSerialOrHandle,
                     expireTime = item.ExpireTime,
+                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.CreatureItemId, item.ExpireTime),
                     templateExpiration = CreateTemplateExpiration(pvfIndex, item.CreatureItemId),
                     deletable = true,
                 });
@@ -94,7 +98,7 @@ namespace DfoGmTool.Services
         }
 
         private static void AppendCommonItems(List<object> items, string container, InventoryListType listType,
-            List<CommonInventoryItem> source, PvfIndexService pvfIndex)
+            List<CommonInventoryItem> source, PvfIndexService pvfIndex, IReadOnlyDictionary<int, int> rentalExpireTimes)
         {
             var isMainList = listType == InventoryListType.Main;
             foreach (var item in source)
@@ -115,6 +119,7 @@ namespace DfoGmTool.Services
                     instanceValue = item.CountOrInstanceValue,
                     durability = (int)item.Durability,
                     expireTime = item.ExpireTime,
+                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.ItemTemplateId, item.ExpireTime),
                     templateExpiration = CreateTemplateExpiration(pvfIndex, item.ItemTemplateId),
                     seal = (int)item.SealFlag,
                     deletable = IsDeletable(listType, item.SlotIndex),
@@ -131,8 +136,29 @@ namespace DfoGmTool.Services
                 known = expiration.IsKnown,
                 absoluteExpireTime = expiration.AbsoluteExpirationUnixTime,
                 usablePeriodDays = expiration.UsablePeriodDays,
+                dailyDeleteItem = expiration.DailyDeleteItem,
                 invalid = expiration.HasInvalidDefinition,
             };
+        }
+
+        private static object CreateSupplementalExpiration(
+            IReadOnlyDictionary<int, int> rentalExpireTimes,
+            int itemTemplateId,
+            int instanceExpireTime)
+        {
+            if (instanceExpireTime <= 0
+                && rentalExpireTimes != null
+                && rentalExpireTimes.TryGetValue(itemTemplateId, out var expireTime)
+                && expireTime > 0)
+            {
+                return new
+                {
+                    expireTime,
+                    source = "rental",
+                };
+            }
+
+            return null;
         }
 
         private static bool IsDeletable(InventoryListType listType, int slot)

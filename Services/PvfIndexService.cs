@@ -92,6 +92,7 @@ namespace DfoGmTool.Services
                         true,
                         entry.AbsoluteExpirationUnixTime,
                         entry.UsablePeriodDays,
+                        entry.DailyDeleteItem,
                         entry.HasInvalidExpirationDefinition);
                 }
             }

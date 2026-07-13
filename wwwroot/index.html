@@ -119,6 +119,15 @@
             <option value="5">勇者</option>
             <option value="6">传说</option>
           </select>
+          <select id="give-expiration" aria-label="期限筛选">
+            <option value="all">全部期限</option>
+            <option value="limited">限时</option>
+            <option value="none">无期限</option>
+            <option value="relative">获得后 N 天</option>
+            <option value="absolute">固定日期</option>
+            <option value="daily">每日清除</option>
+            <option value="expired">固定期限已过期</option>
+          </select>
           <button id="btn-search">搜索</button>
           <span id="give-total" class="hint"></span>
         </div>
@@ -136,9 +145,20 @@
 
       <div id="tab-inventory" class="tab-page hidden">
         <div class="row">
-          <button id="btn-refresh-items" class="mini">刷新背包</button>
-          <button id="btn-clear-category" class="mini danger" disabled>清空分类(先选分类)</button>
+          <label>期限 <select id="inventory-expiration">
+            <option value="all">全部期限</option>
+            <option value="active">有效期限</option>
+            <option value="daily">每日清除</option>
+            <option value="soon">7 天内到期</option>
+            <option value="expired">已过期</option>
+            <option value="missing">期限缺失</option>
+            <option value="none">无期限</option>
+          </select></label>
           <span class="hint">单件删除立即生效；清空需确认；货币行受保护，晶块/金库在"账号数据管理"</span>
+          <div class="inventory-toolbar-actions">
+            <button id="btn-refresh-items" class="mini">刷新背包</button>
+            <button id="btn-clear-category" class="mini danger" disabled>清空分类(先选分类)</button>
+          </div>
         </div>
         <div class="inventory-layout">
           <nav id="category-nav" class="category-nav"></nav>

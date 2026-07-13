@@ -498,6 +498,13 @@ section {
   margin-bottom: 12px;
 }
 
+.inventory-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 #search-input {
   max-width: 420px;
   flex: 1;
@@ -673,9 +680,11 @@ td input.val-input {
 .expiry-unknown { color: var(--text-faint); }
 .expiry-relative,
 .expiry-absolute,
-.expiry-active { color: var(--text); }
+.expiry-active,
+.expiry-daily { color: var(--text); }
 .expiry-relative .expiry-primary,
-.expiry-absolute .expiry-primary { color: var(--accent); }
+.expiry-absolute .expiry-primary,
+.expiry-daily .expiry-primary { color: var(--accent); }
 .expiry-warning { color: var(--notice-text); }
 .expiry-expired { color: var(--danger); }
 

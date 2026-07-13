@@ -23,6 +23,7 @@ $('#account-search').addEventListener('input', () => {
 $('#btn-search').onclick = () => searchItems(0);
 $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchItems(0); });
 $('#give-rarity').onchange = () => searchItems(0);
+$('#give-expiration').onchange = () => searchItems(0);
 // 等级区间与品质下拉行为一致: 改完即生效, 回车也生效
 for (const sel of ['#give-minlv', '#give-maxlv']) {
   $(sel).addEventListener('change', () => searchItems(0));
@@ -30,6 +31,7 @@ for (const sel of ['#give-minlv', '#give-maxlv']) {
 }
 $('#btn-refresh-items').onclick = loadItems;
 $('#btn-clear-category').onclick = clearCurrentCategory;
+$('#inventory-expiration').onchange = () => { invPage = 0; renderItemTable(); };
 $('#btn-account-panel').onclick = showAccountPanel;
 $('#btn-set-level').onclick = setLevel;
 $('#btn-sp').onclick = adjustSp;

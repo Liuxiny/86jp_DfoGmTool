@@ -125,8 +125,8 @@ namespace DfoGmTool
             app.MapGet("/api/items/search", (string q, int? limit) =>
                 Results.Json(pvfIndex.Search(q, limit ?? 30)));
             app.MapGet("/api/items/categories", () => Results.Json(pvfIndex.GetItemCategories()));
-            app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset) =>
-                Results.Json(pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0)));
+            app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset, string expiration = null) =>
+                Results.Json(pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration)));
 
             Console.WriteLine("GM Tool: http://localhost:5050");
             Console.WriteLine("服务端目录: " + config.ServerBinDir);
