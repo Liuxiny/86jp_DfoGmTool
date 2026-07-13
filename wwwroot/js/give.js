@@ -135,9 +135,10 @@ async function searchItems(page) {
   const minLv = parseInt($('#give-minlv').value, 10) || 0;
   const maxLv = parseInt($('#give-maxlv').value, 10) || 0;
   const raritySel = $('#give-rarity').value;
+  const expiration = $('#give-expiration').value;
   const special = SPECIAL_LABELS[raritySel] ? raritySel : '';
   const rarity = special ? -1 : parseInt(raritySel, 10);
-  if (!q && !giveCategory && minLv === 0 && maxLv === 0 && rarity < 0 && !special) {
+  if (!q && !giveCategory && minLv === 0 && maxLv === 0 && rarity < 0 && !special && expiration === 'all') {
     $('#search-results tbody').innerHTML =
       '<tr><td colspan="8" class="hint">选择左侧分类或输入关键词开始浏览</td></tr>';
     $('#give-total').textContent = '';
@@ -146,7 +147,8 @@ async function searchItems(page) {
   }
   try {
     let url = `/api/items/browse?limit=${GIVE_PAGE_SIZE}&offset=${givePage * GIVE_PAGE_SIZE}` +
-      `&q=${encodeURIComponent(q)}&minLevel=${minLv}&maxLevel=${maxLv}&rarity=${rarity}`;
+      `&q=${encodeURIComponent(q)}&minLevel=${minLv}&maxLevel=${maxLv}&rarity=${rarity}` +
+      `&expiration=${encodeURIComponent(expiration)}`;
     if (special) url += `&special=${special}`;
     if (giveCategory) {
       url += `&kind=${encodeURIComponent(giveCategory.kind)}`;

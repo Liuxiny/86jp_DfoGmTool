@@ -24,6 +24,7 @@ namespace DfoGmTool.Services
             public int MinLevel;
             public int AbsoluteExpirationUnixTime;
             public int UsablePeriodDays;
+            public bool DailyDeleteItem;
             public bool HasInvalidExpirationDefinition;
         }
 
@@ -33,11 +34,13 @@ namespace DfoGmTool.Services
                 bool isKnown,
                 int absoluteExpirationUnixTime,
                 int usablePeriodDays,
+                bool dailyDeleteItem,
                 bool hasInvalidDefinition)
             {
                 IsKnown = isKnown;
                 AbsoluteExpirationUnixTime = absoluteExpirationUnixTime;
                 UsablePeriodDays = usablePeriodDays;
+                DailyDeleteItem = dailyDeleteItem;
                 HasInvalidDefinition = hasInvalidDefinition;
             }
 
@@ -46,6 +49,8 @@ namespace DfoGmTool.Services
             public int AbsoluteExpirationUnixTime { get; }
 
             public int UsablePeriodDays { get; }
+
+            public bool DailyDeleteItem { get; }
 
             public bool HasInvalidDefinition { get; }
         }
@@ -153,7 +158,7 @@ namespace DfoGmTool.Services
             return new { ready = true, equipment, stackable };
         }
 
-        public object SearchItems(string query, string kind, string tag, string segment, string special, int minLevel, int maxLevel, int rarity, int limit, int offset)
+        public object SearchItems(string query, string kind, string tag, string segment, string special, int minLevel, int maxLevel, int rarity, int limit, int offset, string expiration)
         {
             var list = _searchList;
             if (list == null)
@@ -171,6 +176,9 @@ namespace DfoGmTool.Services
             if (numericId <= 0)
                 numericId = -1;
 
+            expiration = (expiration ?? string.Empty).Trim().ToLowerInvariant();
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
             var filtered = new List<ItemEntry>();
             foreach (var entry in list)
             {
@@ -187,6 +195,8 @@ namespace DfoGmTool.Services
                 if (rarity >= 0 && entry.Rarity != rarity)
                     continue;
                 if (special != null && entry.Special != special)
+                    continue;
+                if (!MatchesExpirationFilter(entry, expiration, now))
                     continue;
                 if (query.Length > 0
                     && entry.Id != numericId
@@ -211,12 +221,41 @@ namespace DfoGmTool.Services
                         known = true,
                         absoluteExpireTime = e.AbsoluteExpirationUnixTime,
                         usablePeriodDays = e.UsablePeriodDays,
+                        dailyDeleteItem = e.DailyDeleteItem,
                         invalid = e.HasInvalidExpirationDefinition,
                     },
                 })
                 .ToArray();
 
             return new { success = true, total = filtered.Count, offset, count = page.Length, results = page };
+        }
+
+        private static bool MatchesExpirationFilter(ItemEntry entry, string filter, long now)
+        {
+            var hasAbsoluteExpiration = entry.AbsoluteExpirationUnixTime > 0;
+            var hasRelativeExpiration = entry.UsablePeriodDays > 0;
+            var hasDailyDeletion = entry.DailyDeleteItem;
+
+            switch (filter)
+            {
+                case "limited":
+                    return hasAbsoluteExpiration || hasRelativeExpiration || hasDailyDeletion;
+                case "none":
+                    return !entry.HasInvalidExpirationDefinition
+                        && !hasAbsoluteExpiration
+                        && !hasRelativeExpiration
+                        && !hasDailyDeletion;
+                case "relative":
+                    return hasRelativeExpiration;
+                case "absolute":
+                    return hasAbsoluteExpiration;
+                case "daily":
+                    return hasDailyDeletion;
+                case "expired":
+                    return hasAbsoluteExpiration && entry.AbsoluteExpirationUnixTime <= now;
+                default:
+                    return true;
+            }
         }
 
         public object Search(string query, int limit)
@@ -263,25 +302,26 @@ namespace DfoGmTool.Services
         {
             var rawExpiration = equipment.GetStringValue("expiration date");
             if (string.IsNullOrWhiteSpace(rawExpiration) || rawExpiration.Trim() == "0")
-                return new ItemExpirationDefinition(true, 0, 0, false);
+                return new ItemExpirationDefinition(true, 0, 0, false, false);
 
             return ItemGrantExpirationResolver.TryParsePvfExpirationUnixTime(
                 rawExpiration,
                 -1,
                 out var absoluteExpiration)
-                ? new ItemExpirationDefinition(true, absoluteExpiration, 0, false)
-                : new ItemExpirationDefinition(true, 0, 0, true);
+                ? new ItemExpirationDefinition(true, absoluteExpiration, 0, false, false)
+                : new ItemExpirationDefinition(true, 0, 0, false, true);
         }
 
         private static ItemExpirationDefinition ResolveStackableExpiration(StackableItemFile stackable)
         {
             if (!StackableExpirationPolicyResolver.TryResolve(stackable, out var policy))
-                return new ItemExpirationDefinition(true, 0, 0, true);
+                return new ItemExpirationDefinition(true, 0, 0, false, true);
 
             return new ItemExpirationDefinition(
                 true,
                 policy.AbsoluteExpirationUnixTime,
                 policy.UsablePeriodDays,
+                policy.DailyDeleteItem,
                 false);
         }
 
@@ -333,6 +373,7 @@ namespace DfoGmTool.Services
                             MinLevel = model.MinimumLevel,
                             AbsoluteExpirationUnixTime = expiration.AbsoluteExpirationUnixTime,
                             UsablePeriodDays = expiration.UsablePeriodDays,
+                            DailyDeleteItem = expiration.DailyDeleteItem,
                             HasInvalidExpirationDefinition = expiration.HasInvalidDefinition,
                         };
                     }
@@ -353,6 +394,7 @@ namespace DfoGmTool.Services
                             MinLevel = model.MinimumLevel,
                             AbsoluteExpirationUnixTime = expiration.AbsoluteExpirationUnixTime,
                             UsablePeriodDays = expiration.UsablePeriodDays,
+                            DailyDeleteItem = expiration.DailyDeleteItem,
                             HasInvalidExpirationDefinition = expiration.HasInvalidDefinition,
                         };
                     }

@@ -5,15 +5,18 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 {
     internal readonly struct StackableExpirationPolicy
     {
-        internal StackableExpirationPolicy(int absoluteExpirationUnixTime, int usablePeriodDays)
+        internal StackableExpirationPolicy(int absoluteExpirationUnixTime, int usablePeriodDays, bool dailyDeleteItem)
         {
             AbsoluteExpirationUnixTime = absoluteExpirationUnixTime;
             UsablePeriodDays = usablePeriodDays;
+            DailyDeleteItem = dailyDeleteItem;
         }
 
         internal int AbsoluteExpirationUnixTime { get; }
 
         internal int UsablePeriodDays { get; }
+
+        internal bool DailyDeleteItem { get; }
 
         internal bool RequiresInstanceExpiration => UsablePeriodDays > 0;
     }
@@ -57,7 +60,22 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 && (!int.TryParse(usablePeriodValue, out usablePeriodDays) || usablePeriodDays < 0))
                 return false;
 
-            policy = new StackableExpirationPolicy(absoluteExpiration, usablePeriodDays);
+            if (!TryReadOptionalSingleValue(
+                    stackable,
+                    "daily delete item",
+                    out var hasDailyDeleteItem,
+                    out var dailyDeleteItemValue))
+                return false;
+
+            var dailyDeleteItem = false;
+            if (hasDailyDeleteItem)
+            {
+                if (!int.TryParse(dailyDeleteItemValue, out var dailyDeleteValue) || dailyDeleteValue < 0)
+                    return false;
+                dailyDeleteItem = dailyDeleteValue > 0;
+            }
+
+            policy = new StackableExpirationPolicy(absoluteExpiration, usablePeriodDays, dailyDeleteItem);
             return true;
         }
 

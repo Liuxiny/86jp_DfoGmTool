@@ -34,6 +34,8 @@ function escapeHtml(value) {
 }
 
 const SERVER_TIME_ZONE = 'Asia/Shanghai';
+const SERVER_UTC_OFFSET_SECONDS = 8 * 60 * 60;
+const DAILY_DELETE_HOUR = 6;
 const SERVER_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
   timeZone: SERVER_TIME_ZONE,
   year: 'numeric',
@@ -74,12 +76,21 @@ function formatRemainingTime(seconds) {
   return minutes > 0 ? `剩余 ${minutes} 分钟` : '不足 1 分钟';
 }
 
+function nextDailyDeleteTime(now = Math.floor(Date.now() / 1000)) {
+  const serverDayStart = Math.floor((now + SERVER_UTC_OFFSET_SECONDS) / 86400) * 86400 - SERVER_UTC_OFFSET_SECONDS;
+  const todayDeleteTime = serverDayStart + DAILY_DELETE_HOUR * 60 * 60;
+  return now < todayDeleteTime ? todayDeleteTime : todayDeleteTime + 86400;
+}
+
 function templateExpirationState(item) {
   const expiration = item && item.templateExpiration;
   if (!expiration || expiration.known !== true)
     return { kind: 'unknown', primary: '期限未知', detail: 'PVF 索引尚未提供期限定义' };
   if (expiration.invalid === true)
     return { kind: 'warning', primary: '期限定义异常', detail: 'PVF 期限字段无法解析' };
+
+  if (expiration.dailyDeleteItem === true)
+    return { kind: 'daily', primary: '每日 06:00 清除', detail: 'PVF 每日删除' };
 
   const usablePeriodDays = positiveDays(expiration.usablePeriodDays);
   if (usablePeriodDays > 0)
@@ -107,37 +118,95 @@ function templateExpirationLabel(item) {
   return renderExpiration(templateExpirationState(item));
 }
 
-function inventoryExpirationLabel(item) {
-  const expireTime = positiveEpochSeconds(item && item.expireTime);
-  const templateState = templateExpirationState(item);
+function absoluteInventoryExpirationState(expireTime, source, now) {
+  const formatted = formatServerTime(expireTime);
+  if (expireTime <= now) {
+    return {
+      kind: 'expired',
+      expiresAt: expireTime,
+      primary: '已过期',
+      detail: `${source}，截止 ${formatted}`,
+    };
+  }
+
+  return {
+    kind: 'active',
+    expiresAt: expireTime,
+    primary: `有效至 ${formatted}`,
+    detail: `${source}，${formatRemainingTime(expireTime - now)}`,
+  };
+}
+
+function supplementalExpirationSource(item) {
+  const source = item && item.supplementalExpiration && item.supplementalExpiration.source;
+  return source === 'rental' ? '租赁期限' : '附加期限';
+}
+
+function inventoryExpirationState(item) {
   const now = Math.floor(Date.now() / 1000);
+  const templateState = templateExpirationState(item);
+  const expireTime = positiveEpochSeconds(item && item.expireTime);
 
   if (expireTime > 0) {
-    const formatted = formatServerTime(expireTime);
-    if (expireTime <= now)
-      return renderExpiration({ kind: 'expired', primary: '已过期', detail: `实例截止 ${formatted}` });
-
     const source = templateState.kind === 'relative'
       ? templateState.primary
       : templateState.kind === 'absolute' ? '固定期限' : '实例期限';
-    return renderExpiration({
-      kind: 'active',
-      primary: `有效至 ${formatted}`,
-      detail: `${source}，${formatRemainingTime(expireTime - now)}`,
-    });
+    return absoluteInventoryExpirationState(expireTime, source, now);
+  }
+
+  const supplementalExpireTime = positiveEpochSeconds(item && item.supplementalExpiration && item.supplementalExpiration.expireTime);
+  if (supplementalExpireTime > 0)
+    return absoluteInventoryExpirationState(supplementalExpireTime, supplementalExpirationSource(item), now);
+
+  if (templateState.kind === 'daily') {
+    const expiresAt = nextDailyDeleteTime(now);
+    return {
+      kind: 'daily',
+      expiresAt,
+      primary: templateState.primary,
+      detail: `下次 ${formatServerTime(expiresAt)}，${formatRemainingTime(expiresAt - now)}`,
+    };
   }
 
   if (templateState.kind === 'none' || templateState.kind === 'unknown' || templateState.kind === 'warning')
-    return renderExpiration(templateState);
+    return templateState;
 
   if (templateState.kind === 'expired')
-    return renderExpiration(templateState);
+    return templateState;
 
-  return renderExpiration({
+  return {
     kind: 'warning',
+    filter: 'missing',
     primary: '期限缺失',
     detail: templateState.primary,
-  });
+  };
+}
+
+function inventoryExpirationLabel(item) {
+  return renderExpiration(inventoryExpirationState(item));
+}
+
+function inventoryExpirationMatchesFilter(item, filter) {
+  if (!filter || filter === 'all') return true;
+
+  const state = inventoryExpirationState(item);
+  switch (filter) {
+    case 'active':
+      return state.kind === 'active' || state.kind === 'daily';
+    case 'daily':
+      return state.kind === 'daily';
+    case 'soon':
+      return state.kind === 'daily'
+        || (state.kind === 'active' && state.expiresAt - Math.floor(Date.now() / 1000) <= 7 * 86400);
+    case 'expired':
+      return state.kind === 'expired';
+    case 'missing':
+      return state.filter === 'missing';
+    case 'none':
+      return state.kind === 'none';
+    default:
+      return true;
+  }
 }
 
 // 破坏性操作所在的表格: 切角色瞬间立即清空, 消灭"旧角色的行还可点"的窗口
