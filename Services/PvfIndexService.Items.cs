@@ -325,7 +325,7 @@ namespace DfoGmTool.Services
                 false);
         }
 
-        private static void BuildKind(PvfArchive archive, string lstPath, string kind,
+        private void BuildKind(PvfArchive archive, string lstPath, string kind,
             Dictionary<int, string> names, List<ItemEntry> searchList)
         {
             if (lstPath == null)

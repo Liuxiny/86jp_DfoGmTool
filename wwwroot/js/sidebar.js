@@ -2,8 +2,23 @@
 
 let accounts = [];
 
-async function loadAccounts() {
+function resetAccountWorkspace() {
+  accounts = [];
+  currentChar = null;
+  selectEpoch++;
+  $('#account-search').value = '';
+  $('#account-select').innerHTML = '';
+  $('#account-info').innerHTML = '';
+  $('#char-list').innerHTML = '';
+  $('#char-count').textContent = '';
+  $('#detail').classList.add('hidden');
+  $('#account-panel').classList.add('hidden');
+}
+
+async function loadAccounts(expectedRuntimeEpoch) {
+  const epoch = Number.isInteger(expectedRuntimeEpoch) ? expectedRuntimeEpoch : null;
   const data = await api('/api/accounts');
+  if (epoch != null && epoch !== runtimeSourceEpoch) return;
   accounts = data.accounts;
   renderAccountOptions();
   onAccountChanged();
@@ -263,11 +278,13 @@ function renderAccountProgress(accountId, progress) {
   capsuleBox.replaceChildren(capsuleRow);
 }
 
-async function loadCharacters(accountId) {
+async function loadCharacters(accountId, expectedRuntimeEpoch = runtimeSourceEpoch) {
+  const epoch = Number.isInteger(expectedRuntimeEpoch) ? expectedRuntimeEpoch : runtimeSourceEpoch;
   try {
     if (accountId == null)
       accountId = parseInt($('#account-select').value, 10);
     const data = await api('/api/characters?accountId=' + accountId);
+    if (epoch !== runtimeSourceEpoch) return;
     const list = $('#char-list');
     list.innerHTML = '';
     $('#char-count').textContent = data.characters.length + ' 个';

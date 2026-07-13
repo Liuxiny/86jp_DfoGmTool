@@ -88,7 +88,7 @@ namespace DfoGmTool.Services
         }
 
         // map.lst → 各 .map 的 [dungeon index]: 地图ID → 所属副本ID
-        private static Dictionary<int, int> BuildMapDungeonMap(PvfArchive archive)
+        private Dictionary<int, int> BuildMapDungeonMap(PvfArchive archive)
         {
             var result = new Dictionary<int, int>();
             var lstPath = FindLstPath(archive, "map.lst");

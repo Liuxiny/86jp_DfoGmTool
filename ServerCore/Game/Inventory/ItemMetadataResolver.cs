@@ -102,15 +102,41 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
     public static class ItemMetadataResolver 
     {
-        internal static readonly Lazy<LstFile> EquipmentList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
-        private static readonly Lazy<LstFile> StackableList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst")));
-        private static readonly Lazy<ItemSellRates> SellRates = new Lazy<ItemSellRates>(() => ItemSellRates.Parse(PvfArchiveAccessor.ReadText("equipment/pricetable.tbl")));
+        private static readonly object CacheLock = new object();
+        internal static Lazy<LstFile> EquipmentList = CreateEquipmentList();
+        private static Lazy<LstFile> StackableList = CreateStackableList();
+        private static Lazy<ItemSellRates> SellRates = CreateSellRates();
         private static readonly Regex AvatarSocketRegex = new Regex(@"\[\s*([ABCDSM])\s+socket\s*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private const string AvatarTypeSelectTag = "[avatar type select]";
         private const string AvatarTypeSelectEndTag = "[/avatar type select]";
         private const string EmblemSocketDefaultTag = "[emblem socket default]";
         private const string EmblemSocketDefaultEndTag = "[/emblem socket default]";
         private const string AvatarEmblemSocketNumTag = "[avatar emblem socket num]";
+
+        internal static void ResetForPvfChange()
+        {
+            lock (CacheLock)
+            {
+                EquipmentList = CreateEquipmentList();
+                StackableList = CreateStackableList();
+                SellRates = CreateSellRates();
+            }
+        }
+
+        private static Lazy<LstFile> CreateEquipmentList()
+        {
+            return new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
+        }
+
+        private static Lazy<LstFile> CreateStackableList()
+        {
+            return new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst")));
+        }
+
+        private static Lazy<ItemSellRates> CreateSellRates()
+        {
+            return new Lazy<ItemSellRates>(() => ItemSellRates.Parse(PvfArchiveAccessor.ReadText("equipment/pricetable.tbl")));
+        }
 
         public static ItemMetadata Resolve(int itemTemplateId)
         {

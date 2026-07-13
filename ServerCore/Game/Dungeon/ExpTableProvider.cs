@@ -15,6 +15,17 @@ namespace DfoGmTool.ServerCore.Game.Dungeon
         private static int[] _monsterGold;
         private static int[] _monsterGoldVariance;
 
+        internal static void ResetForPvfChange()
+        {
+            lock (_lock)
+            {
+                _levelThresholds = null;
+                _monsterBaseExp = null;
+                _monsterGold = null;
+                _monsterGoldVariance = null;
+            }
+        }
+
         // 按经验阈值表结算连续升级, 返回结算后的等级。
         // 四条经验入口(打怪/通关结算/教程/交任务)共用, 升级规则只在这里改。
         public static byte ApplyLevelUps(int level, uint totalExp)

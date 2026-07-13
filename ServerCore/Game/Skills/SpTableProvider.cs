@@ -9,6 +9,12 @@ namespace DfoGmTool.ServerCore.Game.Skills
         private static readonly object _lock = new object();
         private static Dictionary<int, int> _spPerLevel;
 
+        internal static void ResetForPvfChange()
+        {
+            lock (_lock)
+                _spPerLevel = null;
+        }
+
         public static int GetSpAtLevel(int level)
         {
             EnsureLoaded();

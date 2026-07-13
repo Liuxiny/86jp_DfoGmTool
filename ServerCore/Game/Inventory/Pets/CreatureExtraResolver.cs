@@ -24,9 +24,22 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     {
         private static readonly ConcurrentDictionary<int, bool> CreatureExtraCache = new ConcurrentDictionary<int, bool>();
         private static readonly ConcurrentDictionary<int, bool> PetInventoryEquipmentCache = new ConcurrentDictionary<int, bool>();
+        private static readonly object CacheLock = new object();
 
-        private static readonly Lazy<LstFile> EquipmentList = new Lazy<LstFile>(
-            () => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
+        private static Lazy<LstFile> EquipmentList = CreateEquipmentList();
+
+        internal static void ResetForPvfChange()
+        {
+            CreatureExtraCache.Clear();
+            PetInventoryEquipmentCache.Clear();
+            lock (CacheLock)
+                EquipmentList = CreateEquipmentList();
+        }
+
+        private static Lazy<LstFile> CreateEquipmentList()
+        {
+            return new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
+        }
 
         
         

@@ -46,6 +46,12 @@ namespace DfoGmTool.ServerCore.Game.Characters
         private static readonly Dictionary<byte, JobStatTables> _cache = new Dictionary<byte, JobStatTables>();
         private static readonly object _lock = new object();
 
+        internal static void ResetForPvfChange()
+        {
+            lock (_lock)
+                _cache.Clear();
+        }
+
         private static JobStatTables BuildFallback()
         {
             return new JobStatTables

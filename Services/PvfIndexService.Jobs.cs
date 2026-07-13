@@ -70,7 +70,7 @@ namespace DfoGmTool.Services
         // character/character.lst → 每职业 .chr:
         // [growtype name] 首个反引号=基础名, 其后=各转职名;
         // [growtype N] 段内 [awakening name] = 该转职的觉醒名
-        private static Dictionary<int, JobNameInfo> BuildJobNames(PvfArchive archive)
+        private Dictionary<int, JobNameInfo> BuildJobNames(PvfArchive archive)
         {
             var result = new Dictionary<int, JobNameInfo>();
             string lst;

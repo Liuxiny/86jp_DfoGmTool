@@ -215,23 +215,22 @@ const INTERACTIVE_TBODY_SELECTORS = [
   '#achieve-quest-table tbody', '#cleared-table tbody',
 ];
 
-async function loadStatus() {
-  try {
-    const status = await api('/api/status');
-    const el = $('#status');
-    if (status.indexError) {
-      el.textContent = '物品索引构建失败: ' + status.indexError;
-      el.className = 'status err';
-    } else if (!status.indexReady) {
-      el.textContent = 'DB 已连接 · 物品索引构建中…';
-      el.className = 'status';
-      setTimeout(loadStatus, 2000);
-    } else {
-      el.textContent = 'DB 已连接 · 物品索引就绪';
-      el.className = 'status ok';
-    }
-  } catch (e) {
-    $('#status').textContent = '后端无响应';
-    $('#status').className = 'status err';
+function renderRuntimeStatus(status) {
+  const el = $('#status');
+  if (!status || !status.configured) {
+    el.textContent = status && status.error ? '数据源不可用' : '等待选择数据源';
+    el.className = 'status' + (status && status.error ? ' err' : '');
+    return;
+  }
+
+  if (status.error) {
+    el.textContent = 'PVF 加载失败';
+    el.className = 'status err';
+  } else if (!status.ready) {
+    el.textContent = 'PVF 加载中…';
+    el.className = 'status';
+  } else {
+    el.textContent = '数据源已就绪';
+    el.className = 'status ok';
   }
 }
