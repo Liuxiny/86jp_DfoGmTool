@@ -7,6 +7,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         DbScope OpenScope(int characterId, int accountId);
 
         bool TryAddItem(DbScope scope, int itemTemplateId, int count, out short assignedSlot);
+        ItemGrantResult TryGrantCharacterItem(DbScope scope, int itemTemplateId, int count);
         bool TryRemoveItem(DbScope scope, int itemTemplateId, int count, out short slot, out int remaining);
         int CountItem(DbScope scope, int itemTemplateId);
 

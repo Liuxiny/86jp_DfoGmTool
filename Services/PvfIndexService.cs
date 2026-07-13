@@ -23,6 +23,7 @@ namespace DfoGmTool.Services
         private volatile Dictionary<int, string> _itemNames;
         private volatile Dictionary<int, string> _itemKinds;
         private volatile Dictionary<int, int> _itemRarities;
+        private volatile Dictionary<int, ItemExpirationDefinition> _itemExpirations;
         private volatile Dictionary<int, QuestMeta> _questMeta;
         private volatile Dictionary<string, string> _regionNames;
         private volatile Dictionary<int, string> _dungeonRegion;
@@ -80,18 +81,25 @@ namespace DfoGmTool.Services
             searchList.Sort((a, b) => a.Id.CompareTo(b.Id));
             var itemKinds = new Dictionary<int, string>(searchList.Count);
             var itemRarities = new Dictionary<int, int>(searchList.Count);
+            var itemExpirations = new Dictionary<int, ItemExpirationDefinition>(searchList.Count);
             foreach (var entry in searchList)
             {
                 if (!itemKinds.ContainsKey(entry.Id))
                 {
                     itemKinds[entry.Id] = entry.Kind;
                     itemRarities[entry.Id] = entry.Rarity;
+                    itemExpirations[entry.Id] = new ItemExpirationDefinition(
+                        true,
+                        entry.AbsoluteExpirationUnixTime,
+                        entry.UsablePeriodDays,
+                        entry.HasInvalidExpirationDefinition);
                 }
             }
 
             _searchList = searchList;
             _itemKinds = itemKinds;
             _itemRarities = itemRarities;
+            _itemExpirations = itemExpirations;
             _itemNames = itemNames;
             var failures = _parseFailures;
             Console.WriteLine($"[PvfIndex] 索引就绪: 物品 {itemNames.Count}, 任务 {(_questMeta != null ? _questMeta.Count : 0)}"

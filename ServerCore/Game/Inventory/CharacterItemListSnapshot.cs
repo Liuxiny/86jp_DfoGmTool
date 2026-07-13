@@ -53,6 +53,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         public int AvatarItemId { get; set; }
 
+        public int ExpireTime { get; set; }
+
         public byte[] Reserved0 { get; set; } = new byte[5];
 
         public byte OptionValue { get; set; }
@@ -77,6 +79,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public int CreatureItemId { get; set; }
 
         public int CreatureSerialOrHandle { get; set; }
+
+        public int ExpireTime { get; set; }
 
         public byte[] TailData0A { get; set; } = new byte[74];
     }

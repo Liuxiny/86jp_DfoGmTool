@@ -656,6 +656,29 @@ td input.val-input {
 .stats-table td.dim { color: var(--text-dim); }
 
 /* 物品品质色: 名称颜色依客户端说明(勇者=红色/神器=粉色, dstr 35104/35105) */
+.expiry {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 152px;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.expiry-primary { white-space: nowrap; }
+.expiry-detail {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.expiry-none,
+.expiry-unknown { color: var(--text-faint); }
+.expiry-relative,
+.expiry-absolute,
+.expiry-active { color: var(--text); }
+.expiry-relative .expiry-primary,
+.expiry-absolute .expiry-primary { color: var(--accent); }
+.expiry-warning { color: var(--notice-text); }
+.expiry-expired { color: var(--danger); }
+
 .rarity-0 { color: var(--rarity-0); }
 .rarity-1 { color: var(--rarity-1); }
 .rarity-2 { color: var(--rarity-2); }
@@ -780,6 +803,23 @@ button,
     gap: 8px 12px;
   }
 
+  main {
+    display: block;
+    min-height: 0;
+  }
+
+  aside {
+    width: 100%;
+    padding: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  section {
+    width: 100%;
+    padding: 14px 12px;
+  }
+
   .header-actions {
     width: 100%;
     flex-wrap: wrap;
@@ -797,6 +837,34 @@ button,
   .theme-switcher {
     width: 100%;
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .tabs {
+    overflow-x: auto;
+  }
+
+  .tab {
+    flex: 0 0 auto;
+    padding: 8px 12px;
+  }
+
+  #char-header .wallet {
+    display: block;
+    margin: 4px 0 0;
+  }
+
+  .inventory-layout {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .category-nav,
+  .inventory-table-wrap {
+    width: 100%;
+  }
+
+  .inventory-table-wrap > table {
+    min-width: 760px;
   }
 }
 

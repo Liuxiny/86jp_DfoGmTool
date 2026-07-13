@@ -29,6 +29,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         private readonly InventoryAuditLogger _auditLogger;
         internal readonly InventoryDbPrimitives _db;
         internal readonly InventoryEquipmentStore _equipStore;
+        internal CharacterItemGrantService CharacterItemGrants { get; }
         private readonly IRentalTimeProvider _rentalTimeProvider;
 
         public SqliteInventoryStore(string databasePath, string schemaFilePath, IRentalTimeProvider rentalTimeProvider = null)
@@ -45,6 +46,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             _auditLogger = new InventoryAuditLogger();
             _db = new InventoryDbPrimitives();
             _equipStore = new InventoryEquipmentStore(_db, _auditLogger);
+            CharacterItemGrants = new CharacterItemGrantService(_db, _auditLogger);
         }
 
         public CharacterItemListSnapshot LoadCharacterItemListSnapshot(int characterId, int accountId)
