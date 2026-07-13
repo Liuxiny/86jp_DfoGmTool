@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using DfoGmTool.ServerCore.Game.Inventory;
 using GmPvfLib;
 
 namespace DfoGmTool.Services
@@ -21,6 +22,32 @@ namespace DfoGmTool.Services
             public string Special;   // 品质细分: legacy(传承)/boss(领主神器)/sealed(魔法封印), 无则 null
             public int Rarity;
             public int MinLevel;
+            public int AbsoluteExpirationUnixTime;
+            public int UsablePeriodDays;
+            public bool HasInvalidExpirationDefinition;
+        }
+
+        public readonly struct ItemExpirationDefinition
+        {
+            internal ItemExpirationDefinition(
+                bool isKnown,
+                int absoluteExpirationUnixTime,
+                int usablePeriodDays,
+                bool hasInvalidDefinition)
+            {
+                IsKnown = isKnown;
+                AbsoluteExpirationUnixTime = absoluteExpirationUnixTime;
+                UsablePeriodDays = usablePeriodDays;
+                HasInvalidDefinition = hasInvalidDefinition;
+            }
+
+            public bool IsKnown { get; }
+
+            public int AbsoluteExpirationUnixTime { get; }
+
+            public int UsablePeriodDays { get; }
+
+            public bool HasInvalidDefinition { get; }
         }
 
         private static readonly Regex ItemCategoryPattern = new Regex(
@@ -91,6 +118,17 @@ namespace DfoGmTool.Services
                 return -1;
             int rarity;
             return rarities.TryGetValue(itemId, out rarity) ? rarity : -1;
+        }
+
+        public ItemExpirationDefinition ResolveItemExpiration(int itemId)
+        {
+            var expirations = _itemExpirations;
+            if (expirations == null)
+                return default;
+
+            return expirations.TryGetValue(itemId, out var expiration)
+                ? expiration
+                : default;
         }
 
         // 发放界面的分类清单: 装备按部位标签, 堆叠物按背包入格分类(与背包页同款)
@@ -168,6 +206,13 @@ namespace DfoGmTool.Services
                     special = e.Special,
                     rarity = e.Rarity,
                     minLevel = e.MinLevel,
+                    templateExpiration = new
+                    {
+                        known = true,
+                        absoluteExpireTime = e.AbsoluteExpirationUnixTime,
+                        usablePeriodDays = e.UsablePeriodDays,
+                        invalid = e.HasInvalidExpirationDefinition,
+                    },
                 })
                 .ToArray();
 
@@ -214,6 +259,32 @@ namespace DfoGmTool.Services
             return match.Success ? match.Groups[1].Value.Trim() : null;
         }
 
+        private static ItemExpirationDefinition ResolveEquipmentExpiration(EquipmentFile equipment)
+        {
+            var rawExpiration = equipment.GetStringValue("expiration date");
+            if (string.IsNullOrWhiteSpace(rawExpiration) || rawExpiration.Trim() == "0")
+                return new ItemExpirationDefinition(true, 0, 0, false);
+
+            return ItemGrantExpirationResolver.TryParsePvfExpirationUnixTime(
+                rawExpiration,
+                -1,
+                out var absoluteExpiration)
+                ? new ItemExpirationDefinition(true, absoluteExpiration, 0, false)
+                : new ItemExpirationDefinition(true, 0, 0, true);
+        }
+
+        private static ItemExpirationDefinition ResolveStackableExpiration(StackableItemFile stackable)
+        {
+            if (!StackableExpirationPolicyResolver.TryResolve(stackable, out var policy))
+                return new ItemExpirationDefinition(true, 0, 0, true);
+
+            return new ItemExpirationDefinition(
+                true,
+                policy.AbsoluteExpirationUnixTime,
+                policy.UsablePeriodDays,
+                false);
+        }
+
         private static void BuildKind(PvfArchive archive, string lstPath, string kind,
             Dictionary<int, string> names, List<ItemEntry> searchList)
         {
@@ -250,6 +321,7 @@ namespace DfoGmTool.Services
                         var model = EquipmentFile.Parse(text);
                         if (string.IsNullOrEmpty(model.Name))
                             return;
+                        var expiration = ResolveEquipmentExpiration(model);
                         results[i] = new ItemEntry
                         {
                             Id = entries[i].Key,
@@ -259,6 +331,9 @@ namespace DfoGmTool.Services
                             Special = EquipSpecial(text),
                             Rarity = model.Rarity,
                             MinLevel = model.MinimumLevel,
+                            AbsoluteExpirationUnixTime = expiration.AbsoluteExpirationUnixTime,
+                            UsablePeriodDays = expiration.UsablePeriodDays,
+                            HasInvalidExpirationDefinition = expiration.HasInvalidDefinition,
                         };
                     }
                     else
@@ -266,6 +341,7 @@ namespace DfoGmTool.Services
                         var model = StackableItemFile.Parse(text);
                         if (string.IsNullOrEmpty(model.Name))
                             return;
+                        var expiration = ResolveStackableExpiration(model);
                         results[i] = new ItemEntry
                         {
                             Id = entries[i].Key,
@@ -275,6 +351,9 @@ namespace DfoGmTool.Services
                             Segment = StackSegment(model.StackableType),
                             Rarity = model.Rarity,
                             MinLevel = model.MinimumLevel,
+                            AbsoluteExpirationUnixTime = expiration.AbsoluteExpirationUnixTime,
+                            UsablePeriodDays = expiration.UsablePeriodDays,
+                            HasInvalidExpirationDefinition = expiration.HasInvalidDefinition,
                         };
                     }
                 }

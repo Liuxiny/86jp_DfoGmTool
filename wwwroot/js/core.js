@@ -33,6 +33,113 @@ function escapeHtml(value) {
     (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
+const SERVER_TIME_ZONE = 'Asia/Shanghai';
+const SERVER_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: SERVER_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+function positiveEpochSeconds(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+}
+
+function positiveDays(value) {
+  const days = Number(value);
+  return Number.isFinite(days) && days > 0 ? Math.floor(days) : 0;
+}
+
+function formatServerTime(seconds) {
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const parts = {};
+  for (const part of SERVER_DATE_FORMATTER.formatToParts(date))
+    if (part.type !== 'literal') parts[part.type] = part.value;
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
+function formatRemainingTime(seconds) {
+  const remaining = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(remaining / 86400);
+  const hours = Math.floor((remaining % 86400) / 3600);
+  const minutes = Math.floor((remaining % 3600) / 60);
+  if (days > 0) return `剩余 ${days} 天${hours > 0 ? ` ${hours} 小时` : ''}`;
+  if (hours > 0) return `剩余 ${hours} 小时${minutes > 0 ? ` ${minutes} 分钟` : ''}`;
+  return minutes > 0 ? `剩余 ${minutes} 分钟` : '不足 1 分钟';
+}
+
+function templateExpirationState(item) {
+  const expiration = item && item.templateExpiration;
+  if (!expiration || expiration.known !== true)
+    return { kind: 'unknown', primary: '期限未知', detail: 'PVF 索引尚未提供期限定义' };
+  if (expiration.invalid === true)
+    return { kind: 'warning', primary: '期限定义异常', detail: 'PVF 期限字段无法解析' };
+
+  const usablePeriodDays = positiveDays(expiration.usablePeriodDays);
+  if (usablePeriodDays > 0)
+    return { kind: 'relative', primary: `获得后 ${usablePeriodDays} 天`, detail: '相对期限' };
+
+  const absoluteExpireTime = positiveEpochSeconds(expiration.absoluteExpireTime);
+  if (absoluteExpireTime > 0) {
+    const formatted = formatServerTime(absoluteExpireTime);
+    return absoluteExpireTime <= Math.floor(Date.now() / 1000)
+      ? { kind: 'expired', primary: '已过期', detail: `固定截止 ${formatted}` }
+      : { kind: 'absolute', primary: `固定截止 ${formatted}`, detail: '绝对期限' };
+  }
+
+  return { kind: 'none', primary: '无期限', detail: 'PVF 未定义期限' };
+}
+
+function renderExpiration(state) {
+  const detail = state.detail ? `<span class="expiry-detail">${escapeHtml(state.detail)}</span>` : '';
+  const title = state.detail ? `${state.primary}，${state.detail}` : state.primary;
+  return `<span class="expiry expiry-${state.kind}" title="${escapeHtml(title)}">` +
+    `<span class="expiry-primary">${escapeHtml(state.primary)}</span>${detail}</span>`;
+}
+
+function templateExpirationLabel(item) {
+  return renderExpiration(templateExpirationState(item));
+}
+
+function inventoryExpirationLabel(item) {
+  const expireTime = positiveEpochSeconds(item && item.expireTime);
+  const templateState = templateExpirationState(item);
+  const now = Math.floor(Date.now() / 1000);
+
+  if (expireTime > 0) {
+    const formatted = formatServerTime(expireTime);
+    if (expireTime <= now)
+      return renderExpiration({ kind: 'expired', primary: '已过期', detail: `实例截止 ${formatted}` });
+
+    const source = templateState.kind === 'relative'
+      ? templateState.primary
+      : templateState.kind === 'absolute' ? '固定期限' : '实例期限';
+    return renderExpiration({
+      kind: 'active',
+      primary: `有效至 ${formatted}`,
+      detail: `${source}，${formatRemainingTime(expireTime - now)}`,
+    });
+  }
+
+  if (templateState.kind === 'none' || templateState.kind === 'unknown' || templateState.kind === 'warning')
+    return renderExpiration(templateState);
+
+  if (templateState.kind === 'expired')
+    return renderExpiration(templateState);
+
+  return renderExpiration({
+    kind: 'warning',
+    primary: '期限缺失',
+    detail: templateState.primary,
+  });
+}
+
 // 破坏性操作所在的表格: 切角色瞬间立即清空, 消灭"旧角色的行还可点"的窗口
 const INTERACTIVE_TBODY_SELECTORS = [
   '#item-table tbody', '#quest-table tbody', '#main-quest-table tbody',

@@ -1,5 +1,6 @@
 // GM瘦身拷贝: 相对服务端原版删除了 WriteOpenSelectablePackageAuditLog(依赖未拷贝的 PackageRewardEntry);
 // 保留成员与原版逐字一致
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.ServerCore.Game.Inventory
@@ -52,6 +53,36 @@ VALUES (
                 command.Parameters.AddWithValue("@itemTemplateId", source.ItemTemplateId);
                 command.Parameters.AddWithValue("@deltaStackCount", -deleteCount);
                 command.Parameters.AddWithValue("@payloadJson", "{\"deleteCount\":" + deleteCount + "}");
+                command.ExecuteNonQuery();
+            }
+        }
+
+        internal void WriteGmGrantAuditLog(SqliteConnection connection, SqliteTransaction transaction, int characterId, ItemGrantResult grant)
+        {
+            if (grant == null || !grant.Success)
+                return;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO item_audit_log (
+    owner_scope, owner_id, character_id, action_name, list_type, slot_index,
+    item_template_id, delta_stack_count, payload_json)
+VALUES (
+    'character', @ownerId, @characterId, 'gm_grant', @listType, @slotIndex,
+    @itemTemplateId, @deltaStackCount, @payloadJson);";
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@listType", (int)grant.ListType);
+                command.Parameters.AddWithValue("@slotIndex", grant.AssignedSlot);
+                command.Parameters.AddWithValue("@itemTemplateId", grant.ItemTemplateId);
+                command.Parameters.AddWithValue("@deltaStackCount", grant.GrantedCount);
+                command.Parameters.AddWithValue("@payloadJson",
+                    "{\"source\":\"gm_tool\",\"requestedCount\":" + grant.RequestedCount.ToString(CultureInfo.InvariantCulture)
+                    + ",\"grantedCount\":" + grant.GrantedCount.ToString(CultureInfo.InvariantCulture)
+                    + ",\"expireTime\":" + grant.ExpireTime.ToString(CultureInfo.InvariantCulture)
+                    + ",\"slots\":[" + string.Join(",", grant.AffectedSlots) + "]}");
                 command.ExecuteNonQuery();
             }
         }

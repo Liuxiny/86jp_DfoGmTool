@@ -7,6 +7,7 @@ using DfoGmTool.ServerCore.Game.Currency;
 using DfoGmTool.ServerCore.Game.Dungeon;
 using DfoGmTool.ServerCore.Game.Inventory;
 using DfoGmTool.ServerCore.Game.Quests;
+using DfoGmTool.ServerCore.Game.ReviveCoin;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.Services
@@ -42,6 +43,8 @@ namespace DfoGmTool.Services
                     rarity = pvfIndex.ResolveItemRarity(item.AvatarItemId),
                     count = 1,
                     durability = 0,
+                    expireTime = item.ExpireTime,
+                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.AvatarItemId),
                     deletable = true,
                 });
             }
@@ -60,6 +63,8 @@ namespace DfoGmTool.Services
                     rarity = pvfIndex.ResolveItemRarity(item.AvatarItemId),
                     count = 1,
                     durability = 0,
+                    expireTime = item.ExpireTime,
+                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.AvatarItemId),
                     deletable = true,
                 });
             }
@@ -79,6 +84,8 @@ namespace DfoGmTool.Services
                     count = 1,
                     durability = 0,
                     serial = item.CreatureSerialOrHandle,
+                    expireTime = item.ExpireTime,
+                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.CreatureItemId),
                     deletable = true,
                 });
             }
@@ -108,6 +115,7 @@ namespace DfoGmTool.Services
                     instanceValue = item.CountOrInstanceValue,
                     durability = (int)item.Durability,
                     expireTime = item.ExpireTime,
+                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.ItemTemplateId),
                     seal = (int)item.SealFlag,
                     deletable = IsDeletable(listType, item.SlotIndex),
                 });
@@ -115,6 +123,18 @@ namespace DfoGmTool.Services
         }
 
         // 货币行(主背包 slot 0-2)删行会打坏钱包; 晶块(354-359)和账号金库是账号共享, 在账号面板管理
+        private static object CreateTemplateExpiration(PvfIndexService pvfIndex, int itemTemplateId)
+        {
+            var expiration = pvfIndex.ResolveItemExpiration(itemTemplateId);
+            return new
+            {
+                known = expiration.IsKnown,
+                absoluteExpireTime = expiration.AbsoluteExpirationUnixTime,
+                usablePeriodDays = expiration.UsablePeriodDays,
+                invalid = expiration.HasInvalidDefinition,
+            };
+        }
+
         private static bool IsDeletable(InventoryListType listType, int slot)
         {
             if (listType == InventoryListType.AccountCargo)
@@ -210,7 +230,7 @@ namespace DfoGmTool.Services
             if (itemTemplateId <= 0)
                 return Error("itemTemplateId 无效");
             if (count <= 0)
-                count = 1;
+                return Error("数量必须大于 0");
 
             int accountId;
             if (!TryGetAccountId(characterId, out accountId))
@@ -223,12 +243,33 @@ namespace DfoGmTool.Services
 
             using (var scope = _assetService.OpenScope(characterId, accountId))
             {
-                short slot;
-                if (!_assetService.TryAddItem(scope, itemTemplateId, count, out slot))
-                    return Error("发放失败(背包可能已满)");
+                // 账号/钱包类特殊资产沿用既有入口，不进入角色实例期限发放。
+                if (CurrencyService.IsCubeFragment(itemTemplateId)
+                    || ReviveCoinService.IsReviveCoinReward(itemTemplateId))
+                {
+                    if (!_assetService.TryAddItem(scope, itemTemplateId, count, out var legacySlot))
+                        return Error("发放失败(背包可能已满)");
+
+                    scope.Commit();
+                    return new { success = true, characterId, itemTemplateId, name, count, slot = (int)legacySlot };
+                }
+
+                var grant = _assetService.TryGrantCharacterItem(scope, itemTemplateId, count);
+                if (!grant.Success)
+                    return Error(grant.Error ?? "发放失败(背包可能已满)");
 
                 scope.Commit();
-                return new { success = true, characterId, itemTemplateId, name, count, slot = (int)slot };
+                return new
+                {
+                    success = true,
+                    characterId,
+                    itemTemplateId,
+                    name,
+                    count = grant.GrantedCount,
+                    slot = (int)grant.AssignedSlot,
+                    expireTime = grant.ExpireTime,
+                    slots = grant.AffectedSlots,
+                };
             }
         }
 

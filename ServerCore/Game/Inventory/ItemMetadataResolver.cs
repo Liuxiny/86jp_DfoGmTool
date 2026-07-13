@@ -13,6 +13,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         public string StackableType { get; set; }
 
+        internal StackableItemFile StackableFile { get; set; }
+
         public string PvfFilePath { get; set; }
 
         public int BuyGold { get; set; }
@@ -173,6 +175,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 {
                     ItemKind = "stackable",
                     StackableType = stackable.StackableType,
+                    StackableFile = stackable,
                     PvfFilePath = stackableEntry.FilePath,
                     BuyGold = buyGold,
                     SellGold = sellGold,

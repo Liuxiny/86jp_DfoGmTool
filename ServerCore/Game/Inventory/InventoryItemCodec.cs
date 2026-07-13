@@ -38,6 +38,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 SlotIndex = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture),
                 AvatarItemId = reader.GetInt32(2),
+                ExpireTime = reader.GetInt32(9),
                 OptionValue = Convert.ToByte(reader.GetInt32(8), CultureInfo.InvariantCulture),
                 UnknownFixed30 = reader.GetInt32(10),
                 UnknownFixed4 = Convert.ToUInt16(ReadIntValue(extraJson, "unknownFixed4"), CultureInfo.InvariantCulture),
@@ -90,6 +91,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 SlotIndex = BitConverter.ToInt16(buf, 0),
                 AvatarItemId = BitConverter.ToInt32(buf, 2),
+                ExpireTime = common.ExpireTime,
                 Reserved0 = CharacterItemListSnapshot.Slice(buf, 6, 5),
                 OptionValue = optionValue,
                 Reserved1 = CharacterItemListSnapshot.Slice(buf, 12, 71),
@@ -107,6 +109,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 SlotIndex = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture),
                 CreatureItemId = reader.GetInt32(2),
                 CreatureSerialOrHandle = reader.GetInt32(11),
+                ExpireTime = reader.GetInt32(9),
                 TailData0A = ReadHexValue(extraJson, "tailData0A", 74),
             };
         }

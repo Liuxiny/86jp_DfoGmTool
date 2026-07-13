@@ -13,6 +13,27 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public const uint TopQualitySeed = 999999998u;
     }
 
+    public sealed class ItemGrantResult
+    {
+        public bool Success { get; internal set; }
+
+        public string Error { get; internal set; }
+
+        public int ItemTemplateId { get; internal set; }
+
+        public int RequestedCount { get; internal set; }
+
+        public int GrantedCount { get; internal set; }
+
+        public InventoryListType ListType { get; internal set; }
+
+        public short AssignedSlot { get; internal set; } = -1;
+
+        public int ExpireTime { get; internal set; }
+
+        public List<short> AffectedSlots { get; } = new List<short>();
+    }
+
     public sealed class InventoryMutationResult
     {
         public InventoryListType ListType { get; set; }

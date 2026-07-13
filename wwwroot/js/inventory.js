@@ -17,31 +17,31 @@ const rarityName = (i) => i.rarity >= 0 && i.rarity <= 6
 // 每类的表格模板: 列头 + 行渲染
 const CATEGORY_TEMPLATES = {
   equip: {
-    cols: ['槽位', 'ID', '名称', '耐久', '品质', '到期', ''],
+    cols: ['槽位', 'ID', '名称', '耐久', '品质', '期限', ''],
     row: (i) => [i.slot, i.templateId, rarityName(i), i.durability,
-      qualityLabel(i.instanceValue), expireLabel(i.expireTime), null],
+      qualityLabel(i.instanceValue), inventoryExpirationLabel(i), null],
   },
   stack: {
-    cols: ['槽位', 'ID', '名称', '数量', ''],
-    row: (i) => [i.slot, i.templateId, rarityName(i), (i.count ?? 0).toLocaleString(), null],
+    cols: ['槽位', 'ID', '名称', '数量', '期限', ''],
+    row: (i) => [i.slot, i.templateId, rarityName(i), (i.count ?? 0).toLocaleString(), inventoryExpirationLabel(i), null],
   },
   avatar: {
-    cols: ['槽位', 'ID', '名称', ''],
-    row: (i) => [i.slot, i.templateId, rarityName(i), null],
+    cols: ['槽位', 'ID', '名称', '期限', ''],
+    row: (i) => [i.slot, i.templateId, rarityName(i), inventoryExpirationLabel(i), null],
   },
   pet: {
-    cols: ['槽位', 'ID', '名称', '序列号', ''],
-    row: (i) => [i.slot, i.templateId, rarityName(i), i.serial ?? '', null],
+    cols: ['槽位', 'ID', '名称', '序列号', '期限', ''],
+    row: (i) => [i.slot, i.templateId, rarityName(i), i.serial ?? '', inventoryExpirationLabel(i), null],
   },
   currency: {
     cols: ['槽位', '名称', '当前值', '覆写为', ''],
     custom: 'wallet',
   },
   mixed: {
-    cols: ['分类', '槽位', 'ID', '名称', '数量', '耐久', ''],
+    cols: ['分类', '槽位', 'ID', '名称', '数量', '耐久', '期限', ''],
     row: (i) => [esc(i.category), i.slot, i.templateId, rarityName(i),
       i.kind === 'equipment' ? '-' : (i.count ?? 0).toLocaleString(),
-      i.kind === 'equipment' ? i.durability : '-', null],
+      i.kind === 'equipment' ? i.durability : '-', inventoryExpirationLabel(i), null],
   },
 };
 
@@ -59,10 +59,6 @@ function templateFor(category) {
 function qualityLabel(seed) {
   if (seed === 999999998) return '最上级';
   return seed != null ? String(seed) : '';
-}
-
-function expireLabel(expire) {
-  return expire && expire > 0 ? String(expire) : '-';
 }
 
 const esc = (v) => escapeHtml(v || '');

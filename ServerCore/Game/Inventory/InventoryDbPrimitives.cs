@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.ServerCore.Game.Inventory
@@ -132,6 +131,32 @@ LIMIT 1;";
                 }
             }
             return null;
+        }
+
+        internal List<int> LoadCharacterItemTemplateIds(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryListType listType)
+        {
+            var itemTemplateIds = new List<int>();
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT item_template_id
+FROM character_items
+WHERE character_id = @characterId AND list_type = @listType;";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@listType", (int)listType);
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                        itemTemplateIds.Add(reader.GetInt32(0));
+                }
+            }
+
+            return itemTemplateIds;
         }
 
         internal SqliteInventoryStore.ItemRecord FindItemByTemplateIdInRange(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId, int slotStart, int slotEnd)
@@ -765,10 +790,6 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
             return true;
         }
-
-        // GM瘦身拷贝: 此处删除了 FindFirstPackageItem, TryAddBoosterRewardItem, TryAddBoosterRewardItems,
-        // FillBoosterRewardExistingStacks, ResolveBoosterRewardExpireTime, AddDaysFromNow,
-        // TryParsePvfExpirationUnixTime (礼盒奖励通路, 依赖未拷贝的 BoosterRewardResult/InventoryPackageStore)
 
         internal static GmPvfLib.StackableItemFile LoadStackableItem(int itemTemplateId)
         {

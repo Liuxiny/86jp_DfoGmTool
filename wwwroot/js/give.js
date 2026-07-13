@@ -139,7 +139,7 @@ async function searchItems(page) {
   const rarity = special ? -1 : parseInt(raritySel, 10);
   if (!q && !giveCategory && minLv === 0 && maxLv === 0 && rarity < 0 && !special) {
     $('#search-results tbody').innerHTML =
-      '<tr><td colspan="7" class="hint">选择左侧分类或输入关键词开始浏览</td></tr>';
+      '<tr><td colspan="8" class="hint">选择左侧分类或输入关键词开始浏览</td></tr>';
     $('#give-total').textContent = '';
     $('#give-pager').innerHTML = '';
     return;
@@ -170,13 +170,14 @@ async function searchItems(page) {
         <td>${r.minLevel || ''}</td>
         <td>${r.special ? (SPECIAL_LABELS[r.special] || escapeHtml(r.special)) : (RARITY_LABELS[r.rarity] || r.rarity)}</td>
         <td title="${escapeHtml(r.tag || '')}">${escapeHtml(tagLabel(r.tag))}</td>
+        <td>${templateExpirationLabel(r)}</td>
         <td><input type="number" value="1" min="1"></td><td><button class="mini">发放</button></td>`;
       tr.querySelector('button').onclick = () =>
         giveItem(r.itemId, parseInt(tr.querySelector('input').value, 10) || 1);
       tbody.appendChild(tr);
     }
     if (data.results.length === 0)
-      tbody.innerHTML = '<tr><td colspan="7" class="hint">没有匹配的物品</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="hint">没有匹配的物品</td></tr>';
 
     const pager = $('#give-pager');
     pager.innerHTML = '';
