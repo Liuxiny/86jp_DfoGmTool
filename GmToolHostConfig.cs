@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 
 namespace DfoGmTool
@@ -209,7 +210,7 @@ namespace DfoGmTool
 
         private static bool TryNormalizeValue(string value, out string normalized)
         {
-            normalized = value?.Trim() ?? string.Empty;
+            normalized = TrimValueBoundaryCharacters(value);
             if (normalized.Length == 0)
                 return true;
 
@@ -222,8 +223,31 @@ namespace DfoGmTool
             if (normalized.Length < 2 || first != last)
                 return false;
 
-            normalized = normalized.Substring(1, normalized.Length - 2).Trim();
+            normalized = TrimValueBoundaryCharacters(normalized.Substring(1, normalized.Length - 2));
             return true;
+        }
+
+        private static string TrimValueBoundaryCharacters(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            var start = 0;
+            var end = value.Length;
+            while (start < end && IsIgnoredBoundaryCharacter(value[start]))
+                start++;
+            while (end > start && IsIgnoredBoundaryCharacter(value[end - 1]))
+                end--;
+
+            return start == 0 && end == value.Length
+                ? value
+                : value.Substring(start, end - start);
+        }
+
+        private static bool IsIgnoredBoundaryCharacter(char value)
+        {
+            return char.IsWhiteSpace(value)
+                || char.GetUnicodeCategory(value) == UnicodeCategory.Format;
         }
 
         private static void ThrowIfInvalid(List<string> errors)
