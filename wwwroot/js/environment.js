@@ -3,6 +3,28 @@ let runtimeStatus = null;
 let runtimeSourceEpoch = 0;
 let runtimePollTimer = 0;
 let runtimeConfiguring = false;
+const RUNTIME_SOURCE_STORAGE_KEY = 'dfo-gm-runtime-source';
+
+function readStoredRuntimeSource() {
+  try {
+    const value = JSON.parse(localStorage.getItem(RUNTIME_SOURCE_STORAGE_KEY));
+    if (!value || typeof value.databasePath !== 'string' || typeof value.pvfPath !== 'string') return null;
+
+    const databasePath = value.databasePath.trim();
+    const pvfPath = value.pvfPath.trim();
+    return databasePath && pvfPath ? { databasePath, pvfPath } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveRuntimeSource(databasePath, pvfPath) {
+  try {
+    localStorage.setItem(RUNTIME_SOURCE_STORAGE_KEY, JSON.stringify({ databasePath, pvfPath }));
+  } catch (_) {
+    // Source selection still works when browser storage is unavailable.
+  }
+}
 
 function clearRuntimePoll() {
   if (runtimePollTimer) {
@@ -91,12 +113,14 @@ async function refreshRuntimeEnvironment() {
   try {
     const status = await api('/api/status');
     applyRuntimeStatus(status);
+    return status;
   } catch (e) {
     runtimeReady = false;
     resetRuntimeWorkspace();
     renderRuntimeStatus(null);
     setRuntimeSourceState('后端无响应', true);
     showRuntimeSourcePanel(false);
+    return null;
   }
 }
 
@@ -116,6 +140,7 @@ async function configureRuntimeEnvironment() {
   $('#btn-close-runtime-source').classList.add('hidden');
   try {
     const result = await post('/api/environment', { databasePath, pvfPath });
+    saveRuntimeSource(result.status.database || databasePath, result.status.pvf || pvfPath);
     runtimeReady = false;
     runtimeSourceEpoch++;
     resetRuntimeWorkspace();
@@ -140,6 +165,14 @@ function bindRuntimeEnvironment() {
   };
 }
 
-function initializeRuntimeEnvironment() {
-  return refreshRuntimeEnvironment();
+async function initializeRuntimeEnvironment() {
+  const status = await refreshRuntimeEnvironment();
+  if (!status || status.configured) return;
+
+  const source = readStoredRuntimeSource();
+  if (!source) return;
+
+  $('#runtime-database-path').value = source.databasePath;
+  $('#runtime-pvf-path').value = source.pvfPath;
+  return configureRuntimeEnvironment();
 }
