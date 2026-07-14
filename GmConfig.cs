@@ -73,9 +73,18 @@ namespace DfoGmTool
             config = null;
             error = null;
 
-            if (!TryGetExistingFilePath(databasePath, "数据库", out var fullDatabasePath, out error)
-                || !TryGetExistingFilePath(pvfPath, "PVF", out var fullPvfPath, out error))
+            var errors = new List<string>();
+            var hasDatabase = TryGetExistingFilePath(databasePath, "数据库", out var fullDatabasePath, out var databaseError);
+            if (!hasDatabase)
+                errors.Add(databaseError);
+            var hasPvf = TryGetExistingFilePath(pvfPath, "PVF", out var fullPvfPath, out var pvfError);
+            if (!hasPvf)
+                errors.Add(pvfError);
+            if (errors.Count > 0)
+            {
+                error = string.Join(Environment.NewLine, errors);
                 return false;
+            }
 
             var serverBinDir = InferServerBinDir(fullDatabasePath);
             var candidate = new GmConfig(fullDatabasePath, fullPvfPath, serverBinDir);
@@ -112,7 +121,7 @@ namespace DfoGmTool
             return TryCreate(databasePath, pvfPath, out config, out error);
         }
 
-        private static bool TryGetExistingFilePath(string path, string label, out string fullPath, out string error)
+        internal static bool TryGetExistingFilePath(string path, string label, out string fullPath, out string error)
         {
             fullPath = null;
             error = null;

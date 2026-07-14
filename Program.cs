@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using DfoGmTool.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -10,7 +11,28 @@ namespace DfoGmTool
     {
         public static void Main(string[] args)
         {
-            var runtime = new GmRuntimeEnvironment(GmConfig.TryResolve(args));
+            GmToolHostConfig hostConfig;
+            GmConfig initialConfig;
+            try
+            {
+                hostConfig = GmToolHostConfig.LoadOrCreate();
+                initialConfig = hostConfig.ResolveInitialSource(args);
+            }
+            catch (Exception ex)
+            {
+                ReportStartupFailure(ex.Message);
+                return;
+            }
+
+            var runtime = new GmRuntimeEnvironment(initialConfig);
+            var initialStatus = runtime.GetStatus();
+            if (hostConfig.AllowRemoteAccess && !initialStatus.Configured)
+            {
+                ReportStartupFailure(initialStatus.Error ?? "无法加载远程模式的数据源。");
+                return;
+            }
+
+            var accessControl = new GmAccessControl(hostConfig);
 
             var builder = WebApplication.CreateBuilder(args);
             builder.Logging.ClearProviders();
@@ -19,6 +41,28 @@ namespace DfoGmTool
             IResult WithRuntime(Func<GmService, PvfIndexService, object> operation)
             {
                 return Results.Json(runtime.Execute(operation));
+            }
+
+            IResult RuntimeStatus(HttpContext context)
+            {
+                var authenticated = accessControl.IsAuthenticated(context);
+                var status = runtime.GetStatus(!hostConfig.AllowRemoteAccess);
+                return Results.Json(new
+                {
+                    configured = status.Configured,
+                    ready = status.Ready,
+                    loading = status.Loading,
+                    database = status.Database,
+                    pvf = status.Pvf,
+                    serverBin = status.ServerBin,
+                    indexReady = status.IndexReady,
+                    indexError = status.IndexError,
+                    error = status.Error,
+                    hasError = status.HasError,
+                    authenticationRequired = accessControl.RequiresAuthentication,
+                    authenticated,
+                    canChangeSource = !hostConfig.AllowRemoteAccess && authenticated,
+                });
             }
 
             // 本地工具: 异常直接以 JSON 返回, 方便定位
@@ -53,9 +97,43 @@ namespace DfoGmTool
                 },
             });
 
-            app.MapGet("/api/status", () => Results.Json(runtime.GetStatus()));
+            app.Use(async (context, next) =>
+            {
+                var path = context.Request.Path.Value;
+                var isPublicEndpoint = string.Equals(path, "/api/status", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(path, "/api/auth/login", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(path, "/api/auth/logout", StringComparison.OrdinalIgnoreCase);
+                if (accessControl.RequiresAuthentication
+                    && path != null
+                    && path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase)
+                    && !isPublicEndpoint
+                    && !accessControl.IsAuthenticated(context))
+                {
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    await context.Response.WriteAsJsonAsync(new
+                    {
+                        success = false,
+                        error = "请先登录。",
+                        loginRequired = true,
+                    });
+                    return;
+                }
+
+                await next(context);
+            });
+
+            app.MapGet("/api/status", RuntimeStatus);
+            app.MapPost("/api/auth/login", (LoginRequest body, HttpContext context) =>
+                Results.Json(accessControl.Login(context, body?.Password)));
+            app.MapPost("/api/auth/logout", (HttpContext context) =>
+            {
+                accessControl.Logout(context);
+                return Results.Json(new { success = true });
+            });
             app.MapPost("/api/environment", (RuntimeEnvironmentRequest body) =>
-                Results.Json(runtime.Configure(body.DatabasePath, body.PvfPath)));
+                Results.Json(hostConfig.AllowRemoteAccess
+                    ? new { success = false, error = "远程访问模式下请在 config.ini 修改数据库和 PVF 路径。" }
+                    : runtime.Configure(body.DatabasePath, body.PvfPath)));
 
             app.MapGet("/api/accounts", () => WithRuntime((gm, _) => gm.ListAccounts()));
             app.MapGet("/api/accounts/{id:int}/detail", (int id) => WithRuntime((gm, pvfIndex) => gm.GetAccountDetail(id, pvfIndex)));
@@ -128,11 +206,59 @@ namespace DfoGmTool
             app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset, string expiration = null) =>
                 WithRuntime((_, pvfIndex) => pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration)));
 
-            Console.WriteLine("GM Tool: http://localhost:5050");
-            Console.WriteLine("未自动发现数据源时，请在页面选择数据库和 PVF。");
-            Console.WriteLine("注意: 服务器运行中做的改动, 在线角色需要返回选角再进入才会生效。");
-            app.Run("http://localhost:5050");
+            Console.WriteLine("GM Tool 监听: " + hostConfig.ListenUrl);
+            Console.WriteLine("配置文件: " + hostConfig.ConfigPath);
+            if (hostConfig.AllowRemoteAccess)
+                Console.WriteLine("远程模式已启用：请通过服务器 IP 和端口访问，数据库与 PVF 路径由 config.ini 锁定。");
+            else
+                Console.WriteLine("本地模式：未自动发现数据源时，请在页面选择数据库和 PVF。");
+            Console.WriteLine("注意: 服务器运行中的改动, 在线角色需要返回选角再进入才会生效。");
+            try
+            {
+                app.Run(hostConfig.ListenUrl);
+            }
+            catch (Exception ex)
+            {
+                ReportStartupFailure("无法监听 " + hostConfig.ListenUrl + ":\r\n" + ex.GetBaseException().Message);
+            }
         }
+
+        private static void ReportStartupFailure(string error)
+        {
+            Console.Error.WriteLine("GM Tool 启动失败。");
+            Console.Error.WriteLine();
+            Console.Error.WriteLine(error);
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("请检查同目录 config.ini 及上述错误后重新启动。");
+            WaitForKeyWhenLaunchedDirectly();
+            Environment.ExitCode = 1;
+        }
+
+        private static void WaitForKeyWhenLaunchedDirectly()
+        {
+            if (!OperatingSystem.IsWindows()
+                || Console.IsInputRedirected
+                || Console.IsOutputRedirected)
+                return;
+
+            try
+            {
+                var processIds = new uint[2];
+                if (GetConsoleProcessList(processIds, (uint)processIds.Length) != 1)
+                    return;
+
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("按任意键关闭此窗口...");
+                Console.ReadKey(intercept: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // A detached process may not have an interactive console to wait on.
+            }
+        }
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
     }
 
     public sealed class ItemRequest
@@ -163,6 +289,11 @@ namespace DfoGmTool
     {
         public string DatabasePath { get; set; }
         public string PvfPath { get; set; }
+    }
+
+    public sealed class LoginRequest
+    {
+        public string Password { get; set; }
     }
 
     public sealed class CubeRequest
