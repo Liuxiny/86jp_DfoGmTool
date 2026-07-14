@@ -3,7 +3,12 @@ let runtimeStatus = null;
 let runtimeSourceEpoch = 0;
 let runtimePollTimer = 0;
 let runtimeConfiguring = false;
+let runtimeLoggingIn = false;
 const RUNTIME_SOURCE_STORAGE_KEY = 'dfo-gm-runtime-source';
+
+function canChangeRuntimeSource() {
+  return Boolean(runtimeStatus && runtimeStatus.canChangeSource);
+}
 
 function readStoredRuntimeSource() {
   try {
@@ -39,6 +44,17 @@ function setRuntimeSourceState(text, isError) {
   state.className = isError ? 'hint err' : 'hint';
 }
 
+function setLoginState(text, isError) {
+  const state = $('#login-state');
+  state.textContent = text || '';
+  state.className = isError ? 'hint err' : 'hint';
+}
+
+function updateRuntimeActionButtons(status) {
+  $('#btn-runtime-source').classList.toggle('hidden', !(status && status.canChangeSource));
+  $('#btn-logout').classList.toggle('hidden', !(status && status.authenticationRequired && status.authenticated));
+}
+
 function updateRuntimeSourceInputs(status, force) {
   if (!status) return;
   const database = $('#runtime-database-path');
@@ -47,7 +63,18 @@ function updateRuntimeSourceInputs(status, force) {
   if (force || !pvf.value) pvf.value = status.pvf || '';
 }
 
+function showLoginPanel() {
+  hideRuntimeSourcePanel();
+  $('#login-panel').classList.remove('hidden');
+  setTimeout(() => $('#login-password').focus(), 0);
+}
+
+function hideLoginPanel() {
+  $('#login-panel').classList.add('hidden');
+}
+
 function showRuntimeSourcePanel(forceValues) {
+  if (!canChangeRuntimeSource()) return;
   updateRuntimeSourceInputs(runtimeStatus, forceValues);
   $('#runtime-source-panel').classList.remove('hidden');
   $('#btn-close-runtime-source').classList.toggle('hidden', !runtimeReady || runtimeConfiguring);
@@ -68,6 +95,13 @@ function resetRuntimeWorkspace() {
   $('#runtime-notice').classList.add('hidden');
 }
 
+function stopRuntimeWorkspace() {
+  if (!runtimeReady) return;
+  runtimeReady = false;
+  runtimeSourceEpoch++;
+  resetRuntimeWorkspace();
+}
+
 function startRuntimeWorkspace() {
   const epoch = runtimeSourceEpoch;
   $('#workspace').classList.remove('hidden');
@@ -79,8 +113,20 @@ function startRuntimeWorkspace() {
 
 function applyRuntimeStatus(status) {
   runtimeStatus = status;
+  const authenticationRequired = Boolean(status && status.authenticationRequired);
+  const authenticated = !authenticationRequired || Boolean(status && status.authenticated);
   renderRuntimeStatus(status);
+  updateRuntimeActionButtons(status);
 
+  if (authenticationRequired && !authenticated) {
+    clearRuntimePoll();
+    stopRuntimeWorkspace();
+    hideRuntimeSourcePanel();
+    showLoginPanel();
+    return;
+  }
+
+  hideLoginPanel();
   if (status && status.ready) {
     clearRuntimePoll();
     if (!runtimeReady) {
@@ -90,23 +136,38 @@ function applyRuntimeStatus(status) {
     return;
   }
 
-  if (runtimeReady) {
-    runtimeReady = false;
-    runtimeSourceEpoch++;
-    resetRuntimeWorkspace();
-  }
-
+  stopRuntimeWorkspace();
   if (status && status.error)
     setRuntimeSourceState(status.error, true);
+  else if (status && status.hasError)
+    setRuntimeSourceState('数据源加载失败', true);
   else if (status && status.loading)
     setRuntimeSourceState('PVF 索引构建中…', false);
   else
     setRuntimeSourceState('', false);
 
-  showRuntimeSourcePanel(!status || !status.configured);
+  if (canChangeRuntimeSource())
+    showRuntimeSourcePanel(!status || !status.configured);
+  else
+    hideRuntimeSourcePanel();
+
   clearRuntimePoll();
   if (status && status.loading)
     runtimePollTimer = setTimeout(refreshRuntimeEnvironment, 1000);
+}
+
+function handleAuthenticationRequired() {
+  if (!(runtimeStatus && runtimeStatus.authenticationRequired)) return;
+
+  applyRuntimeStatus({
+    configured: Boolean(runtimeStatus && runtimeStatus.configured),
+    ready: false,
+    loading: false,
+    indexReady: false,
+    authenticationRequired: true,
+    authenticated: false,
+    canChangeSource: false,
+  });
 }
 
 async function refreshRuntimeEnvironment() {
@@ -115,17 +176,19 @@ async function refreshRuntimeEnvironment() {
     applyRuntimeStatus(status);
     return status;
   } catch (e) {
-    runtimeReady = false;
-    resetRuntimeWorkspace();
+    clearRuntimePoll();
+    stopRuntimeWorkspace();
+    runtimeStatus = null;
     renderRuntimeStatus(null);
-    setRuntimeSourceState('后端无响应', true);
-    showRuntimeSourcePanel(false);
+    updateRuntimeActionButtons(null);
+    hideRuntimeSourcePanel();
+    hideLoginPanel();
     return null;
   }
 }
 
 async function configureRuntimeEnvironment() {
-  if (runtimeConfiguring) return;
+  if (runtimeConfiguring || !canChangeRuntimeSource()) return;
 
   const databasePath = $('#runtime-database-path').value.trim();
   const pvfPath = $('#runtime-pvf-path').value.trim();
@@ -144,7 +207,12 @@ async function configureRuntimeEnvironment() {
     runtimeReady = false;
     runtimeSourceEpoch++;
     resetRuntimeWorkspace();
-    applyRuntimeStatus(result.status);
+    applyRuntimeStatus({
+      ...result.status,
+      authenticationRequired: false,
+      authenticated: true,
+      canChangeSource: true,
+    });
   } catch (e) {
     setRuntimeSourceState(e.message, true);
   } finally {
@@ -154,8 +222,48 @@ async function configureRuntimeEnvironment() {
   }
 }
 
+async function loginRuntime() {
+  if (runtimeLoggingIn) return;
+
+  const password = $('#login-password').value;
+  if (!password) {
+    setLoginState('请输入密码', true);
+    return;
+  }
+
+  runtimeLoggingIn = true;
+  $('#btn-login').disabled = true;
+  setLoginState('正在登录…', false);
+  try {
+    await post('/api/auth/login', { password });
+    $('#login-password').value = '';
+    setLoginState('', false);
+    const status = await refreshRuntimeEnvironment();
+    if (!status) {
+      setLoginState('后端无响应', true);
+      showLoginPanel();
+    }
+  } catch (e) {
+    setLoginState(e.message, true);
+  } finally {
+    runtimeLoggingIn = false;
+    $('#btn-login').disabled = false;
+  }
+}
+
+async function logoutRuntime() {
+  try {
+    await post('/api/auth/logout');
+    handleAuthenticationRequired();
+    await refreshRuntimeEnvironment();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 function bindRuntimeEnvironment() {
   $('#btn-runtime-source').onclick = () => showRuntimeSourcePanel(true);
+  $('#btn-logout').onclick = logoutRuntime;
   $('#btn-close-runtime-source').onclick = () => {
     if (runtimeReady && !runtimeConfiguring) hideRuntimeSourcePanel();
   };
@@ -163,11 +271,15 @@ function bindRuntimeEnvironment() {
     event.preventDefault();
     configureRuntimeEnvironment();
   };
+  $('#login-form').onsubmit = (event) => {
+    event.preventDefault();
+    loginRuntime();
+  };
 }
 
 async function initializeRuntimeEnvironment() {
   const status = await refreshRuntimeEnvironment();
-  if (!status || status.configured) return;
+  if (!status || status.authenticationRequired || status.configured || !status.canChangeSource) return;
 
   const source = readStoredRuntimeSource();
   if (!source) return;

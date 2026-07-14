@@ -12,7 +12,8 @@
     <h1>DFO GM 控制台</h1>
     <div class="header-actions">
       <span id="status" class="status">连接中…</span>
-      <button id="btn-runtime-source" class="mini" type="button">数据源</button>
+      <button id="btn-runtime-source" class="mini hidden" type="button">数据源</button>
+      <button id="btn-logout" class="mini hidden" type="button">退出</button>
       <div id="theme-switcher" class="theme-switcher" role="group" aria-label="界面主题">
         <button type="button" class="theme-option" data-theme-option="white"
           aria-pressed="false" title="切换为白色主题">
@@ -40,7 +41,20 @@
 
   <div id="runtime-notice" class="notice hidden">服务器运行中做的改动，在线角色需要<b>返回选角再进入</b>才会生效。</div>
 
-  <section id="runtime-source-panel" class="runtime-source-panel" aria-labelledby="runtime-source-title">
+  <section id="login-panel" class="login-panel hidden" role="dialog" aria-modal="true" aria-labelledby="login-title">
+    <form id="login-form" class="login-dialog">
+      <h2 id="login-title">登录</h2>
+      <label class="login-field">访问密码
+        <input id="login-password" type="password" autocomplete="current-password" required>
+      </label>
+      <div class="login-actions">
+        <button id="btn-login" type="submit">登录</button>
+        <span id="login-state" class="hint" aria-live="polite"></span>
+      </div>
+    </form>
+  </section>
+
+  <section id="runtime-source-panel" class="runtime-source-panel hidden" aria-labelledby="runtime-source-title">
     <form id="runtime-source-form" class="runtime-source-dialog">
       <div class="runtime-source-title-row">
         <h2 id="runtime-source-title">数据源</h2>

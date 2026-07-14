@@ -16,7 +16,11 @@ function toast(message, isError) {
 async function api(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
-  if (data && data.success === false) throw new Error(data.error || '操作失败');
+  if (data && data.success === false) {
+    if (data.loginRequired === true && typeof handleAuthenticationRequired === 'function')
+      handleAuthenticationRequired();
+    throw new Error(data.error || '操作失败');
+  }
   return data;
 }
 
@@ -217,13 +221,19 @@ const INTERACTIVE_TBODY_SELECTORS = [
 
 function renderRuntimeStatus(status) {
   const el = $('#status');
+  if (status && status.authenticationRequired && !status.authenticated) {
+    el.textContent = '请先登录';
+    el.className = 'status';
+    return;
+  }
+
   if (!status || !status.configured) {
     el.textContent = status && status.error ? '数据源不可用' : '等待选择数据源';
     el.className = 'status' + (status && status.error ? ' err' : '');
     return;
   }
 
-  if (status.error) {
+  if (status.error || status.hasError) {
     el.textContent = 'PVF 加载失败';
     el.className = 'status err';
   } else if (!status.ready) {

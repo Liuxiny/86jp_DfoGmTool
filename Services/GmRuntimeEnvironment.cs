@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using DfoGmTool.ServerCore.GameWorld;
 using GmPvfLib;
@@ -19,12 +20,12 @@ namespace DfoGmTool.Services
                 Configure(initialConfig);
         }
 
-        public object GetStatus()
+        public RuntimeEnvironmentStatus GetStatus(bool includeSourceDetails = true)
         {
             _gate.EnterReadLock();
             try
             {
-                return BuildStatus();
+                return BuildStatus(includeSourceDetails);
             }
             finally
             {
@@ -70,8 +71,7 @@ namespace DfoGmTool.Services
             {
                 try
                 {
-                    VerifyDatabase(config);
-                    VerifyPvf(config);
+                    VerifyDataSource(config);
 
                     // Construct the new services before replacing the live source.
                     var pvfIndex = new PvfIndexService(config.PvfPath);
@@ -102,6 +102,27 @@ namespace DfoGmTool.Services
             }
         }
 
+        private static void VerifyDataSource(GmConfig config)
+        {
+            var errors = new List<string>();
+            AddVerificationError(errors, "数据库", () => VerifyDatabase(config));
+            AddVerificationError(errors, "PVF", () => VerifyPvf(config));
+            if (errors.Count > 0)
+                throw new InvalidOperationException(string.Join(Environment.NewLine, errors));
+        }
+
+        private static void AddVerificationError(List<string> errors, string label, Action verify)
+        {
+            try
+            {
+                verify();
+            }
+            catch (Exception ex)
+            {
+                errors.Add(label + "校验失败: " + ex.GetBaseException().Message);
+            }
+        }
+
         private static void VerifyDatabase(GmConfig config)
         {
             using (var connection = new SqliteConnection(config.ConnectionString))
@@ -124,23 +145,24 @@ namespace DfoGmTool.Services
             }
         }
 
-        private object BuildStatus()
+        private RuntimeEnvironmentStatus BuildStatus(bool includeSourceDetails = true)
         {
             var config = _active?.Config;
             var index = _active?.PvfIndex;
             var indexError = index?.BuildError;
             var ready = index != null && index.IsReady && string.IsNullOrWhiteSpace(indexError);
-            return new
+            return new RuntimeEnvironmentStatus
             {
-                configured = config != null,
-                ready,
-                loading = config != null && !ready && string.IsNullOrWhiteSpace(indexError),
-                database = config?.DatabasePath,
-                pvf = config?.PvfPath,
-                serverBin = config?.ServerBinDir,
-                indexReady = index?.IsReady ?? false,
-                indexError,
-                error = config == null ? _startupError : indexError,
+                Configured = config != null,
+                Ready = ready,
+                Loading = config != null && !ready && string.IsNullOrWhiteSpace(indexError),
+                Database = includeSourceDetails ? config?.DatabasePath : null,
+                Pvf = includeSourceDetails ? config?.PvfPath : null,
+                ServerBin = includeSourceDetails ? config?.ServerBinDir : null,
+                IndexReady = index?.IsReady ?? false,
+                IndexError = includeSourceDetails ? indexError : null,
+                Error = includeSourceDetails ? (config == null ? _startupError : indexError) : null,
+                HasError = !string.IsNullOrWhiteSpace(config == null ? _startupError : indexError),
             };
         }
 
@@ -162,5 +184,19 @@ namespace DfoGmTool.Services
             public GmService Gm { get; }
             public PvfIndexService PvfIndex { get; }
         }
+    }
+
+    public sealed class RuntimeEnvironmentStatus
+    {
+        public bool Configured { get; set; }
+        public bool Ready { get; set; }
+        public bool Loading { get; set; }
+        public string Database { get; set; }
+        public string Pvf { get; set; }
+        public string ServerBin { get; set; }
+        public bool IndexReady { get; set; }
+        public string IndexError { get; set; }
+        public string Error { get; set; }
+        public bool HasError { get; set; }
     }
 }

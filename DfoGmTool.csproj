@@ -27,5 +27,12 @@
     <Content Include="ServerCore\Sqlite\item_schema.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <EmbeddedResource Include="config.ini" LogicalName="DfoGmTool.config.ini" />
   </ItemGroup>
+  <Target Name="CopyDefaultConfigToBuildOutput" AfterTargets="Build" Condition="!Exists('$(OutDir)config.ini')">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\config.ini" DestinationFiles="$(OutDir)config.ini" />
+  </Target>
+  <Target Name="CopyDefaultConfigToPublishOutput" AfterTargets="Publish" Condition="!Exists('$(PublishDir)config.ini')">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\config.ini" DestinationFiles="$(PublishDir)config.ini" />
+  </Target>
 </Project>
