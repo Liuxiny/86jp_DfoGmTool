@@ -21,6 +21,8 @@ namespace DfoGmTool.ServerCore.Game.SelectCharacter
         public byte[] CreatureTextBytes { get; set; } = new byte[0];
 
         public byte TailFlag { get; set; }
+
+        public string ExtraJson { get; set; } = "{}";
     }
 
     public sealed class CreatureItemListSnapshot

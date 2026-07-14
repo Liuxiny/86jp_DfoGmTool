@@ -48,6 +48,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         public ushort Durability { get; set; }
 
+        public byte ExtData0 { get; set; }
+
         public int UpdatedGold { get; set; }
 
         public int UpdatedSp { get; set; }

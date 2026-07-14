@@ -224,6 +224,7 @@ CREATE TABLE IF NOT EXISTS character_creatures (
     field_after_value INTEGER NOT NULL DEFAULT 0,
     creature_text BLOB,
     tail_flag INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (character_id, sort_order),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
@@ -242,7 +243,9 @@ CREATE TABLE IF NOT EXISTS character_init_flags (
     character_id INTEGER PRIMARY KEY,
     pc_room_state INTEGER NOT NULL DEFAULT 0,                       -- seed=2
     expert_job_blob BLOB,                                           -- QuestService writes on job change
-    champion_break_blob BLOB,                                       -- seed has data
+    champion_break_key_id INTEGER NOT NULL DEFAULT 0,               -- NOTI 0x025B: i32 key + u8 mode + i32 value
+    champion_break_mode INTEGER NOT NULL DEFAULT 0,
+    champion_break_value INTEGER NOT NULL DEFAULT 0,
     character_option_blob BLOB,                                     -- CMD 0x01C0 SAVE_CHARACTER_OPTION
     charac_invisible_falgs_payload_len INTEGER NOT NULL DEFAULT 0,  -- QuestService writes; seed=21000
     racing_dungeon_current_enter_count INTEGER NOT NULL DEFAULT 0,  -- seed=5
@@ -252,7 +255,6 @@ CREATE TABLE IF NOT EXISTS character_init_flags (
     ack_fatigue_grownup_buff INTEGER NOT NULL DEFAULT 0,            -- seed=513
     ack_trade_punish_flag INTEGER NOT NULL DEFAULT 0,               -- seed=30
     ack_extra_field_86jp INTEGER NOT NULL DEFAULT 0,                -- seed=9247
-    ack_reserved_8b BLOB,                                           -- seed has data
     ack_tutorial_skipable INTEGER NOT NULL DEFAULT 0,               -- DungeonTutorialHandler writes
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
@@ -307,15 +309,6 @@ CREATE TABLE IF NOT EXISTS character_dungeon_permissions (
 CREATE INDEX IF NOT EXISTS idx_dungeon_permissions_dungeon
     ON character_dungeon_permissions(character_id, dungeon_id);
 
-CREATE TABLE IF NOT EXISTS character_event_info (
-    character_id INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL,
-    repeat_event_index INTEGER NOT NULL,
-    event_data BLOB,
-    PRIMARY KEY (character_id, sort_order),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS character_hotkey_slots (
     character_id INTEGER NOT NULL,
     slot_index INTEGER NOT NULL,
@@ -334,8 +327,8 @@ CREATE TABLE IF NOT EXISTS character_invisible_falgs (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
--- IDA 正名: character_racing_dungeon_* 实际协议 NOTI 0x0286 DAILY_CHALLENGE(每日挑战)
-CREATE TABLE IF NOT EXISTS character_racing_dungeon_groups (
+-- NOTI 0x0286 DAILY_CHALLENGE(每日挑战), 旧名 character_racing_dungeon_* (早期误判)
+CREATE TABLE IF NOT EXISTS character_daily_challenge_groups (
     character_id INTEGER NOT NULL,
     group_index INTEGER NOT NULL,
     group_id INTEGER NOT NULL,
@@ -343,7 +336,7 @@ CREATE TABLE IF NOT EXISTS character_racing_dungeon_groups (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS character_racing_dungeon_entries (
+CREATE TABLE IF NOT EXISTS character_daily_challenge_entries (
     character_id INTEGER NOT NULL,
     group_index INTEGER NOT NULL,
     entry_index INTEGER NOT NULL,
@@ -354,7 +347,7 @@ CREATE TABLE IF NOT EXISTS character_racing_dungeon_entries (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS character_racing_dungeon_tail_ids (
+CREATE TABLE IF NOT EXISTS character_daily_challenge_tail_ids (
     character_id INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,
     id_value INTEGER NOT NULL,
@@ -362,15 +355,16 @@ CREATE TABLE IF NOT EXISTS character_racing_dungeon_tail_ids (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+-- 成就唯一存储: 选角快照与运行时进度共用本表(旧 character_achievement blob 已并入)
 CREATE TABLE IF NOT EXISTS character_achievement_complete (
     character_id INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
     achievement_id INTEGER NOT NULL,
     p1 INTEGER NOT NULL DEFAULT 0,
     p2 INTEGER NOT NULL DEFAULT 0,
     p3 INTEGER NOT NULL DEFAULT 0,
     p4 INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (character_id, sort_order),
+    PRIMARY KEY (character_id, achievement_id),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -382,15 +376,6 @@ CREATE TABLE IF NOT EXISTS character_titlebook (
     pvp BLOB,
     despair BLOB,
     event BLOB,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS character_achievement (
-    character_id INTEGER NOT NULL PRIMARY KEY,
-    format_version INTEGER NOT NULL DEFAULT 1,
-    achievement BLOB,
-    last_update_time INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
@@ -407,8 +392,8 @@ CREATE TABLE IF NOT EXISTS character_achievement_chunks (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
--- IDA 正名: 实际协议 NOTI 0x02D5 DAILYSCHEDULE_CONTENTS_STATE(每日副本计费状态)
-CREATE TABLE IF NOT EXISTS character_unknown725 (
+-- NOTI 0x02D5 DAILYSCHEDULE_CONTENTS_STATE(每日副本计费状态), 旧名 character_unknown725
+CREATE TABLE IF NOT EXISTS character_daily_schedule_states (
     character_id INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,
     param_a INTEGER NOT NULL,
@@ -419,8 +404,8 @@ CREATE TABLE IF NOT EXISTS character_unknown725 (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
--- IDA 正名: 实际协议 NOTI 0x02DA BUY_RESTRICT_ITEM_LIST(限购物品列表)
-CREATE TABLE IF NOT EXISTS character_unknown730 (
+-- NOTI 0x02DA BUY_RESTRICT_ITEM_LIST(限购物品列表), 旧名 character_unknown730
+CREATE TABLE IF NOT EXISTS character_buy_restrict_items (
     character_id INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,
     entry_id INTEGER NOT NULL,
@@ -433,7 +418,6 @@ CREATE TABLE IF NOT EXISTS character_unknown730 (
 CREATE TABLE IF NOT EXISTS get_userinfo_template (
     id INTEGER PRIMARY KEY DEFAULT 1,
     seed_character_id INTEGER NOT NULL DEFAULT 1000,
-    response_blob BLOB,
     pkt0_routing_byte7 INTEGER NOT NULL DEFAULT 0,
     gate_or_count1 INTEGER NOT NULL DEFAULT 32,
     gate_or_count2 INTEGER NOT NULL DEFAULT 32,
@@ -450,49 +434,30 @@ CREATE TABLE IF NOT EXISTS get_userinfo_template (
     pkt2_reserved INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS account_character_entries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_index INTEGER NOT NULL,
-    slot_index INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    name_bytes BLOB,
-    body_after_name BLOB NOT NULL,
-    UNIQUE(entry_index)
-);
-
-CREATE TABLE IF NOT EXISTS getuserinfo_extra_packets (
-    seq INTEGER PRIMARY KEY,
-    command INTEGER NOT NULL,
-    noti_type INTEGER NOT NULL,
-    body BLOB NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS packet_sequence (
-    character_id INTEGER NOT NULL,
-    seq_index INTEGER NOT NULL,
-    command INTEGER NOT NULL,
-    noti_type INTEGER NOT NULL,
-    kind INTEGER NOT NULL DEFAULT 0,
-    item_list_type INTEGER NOT NULL DEFAULT -1,
-    occurrence_index INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (character_id, seq_index),
+-- 宠物欢迎语缓存(NOTI 0x0077 body; 可随时从 PVF 造物脚本重建, 缓存避免选角时读 PVF)
+CREATE TABLE IF NOT EXISTS character_pet_welcome_cache (
+    character_id INTEGER PRIMARY KEY,
+    item_template_id INTEGER NOT NULL DEFAULT 0,
+    body BLOB,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS global_server_event_phase (
-    id INTEGER PRIMARY KEY,
-    event_phase_bitmap BLOB NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- 进游戏 init 流的每包独立存储
--- 新角色按需 INSERT 默认值
-CREATE TABLE IF NOT EXISTS character_init_bodies (
+-- 租赁物品(NOTI 0x0357 面板的服务端存储; 选角时会按背包/装备重建)
+CREATE TABLE IF NOT EXISTS character_rental_items (
     character_id INTEGER NOT NULL,
-    noti_type INTEGER NOT NULL,
-    occurrence_index INTEGER NOT NULL DEFAULT 0,
-    body BLOB NOT NULL,
-    PRIMARY KEY (character_id, noti_type, occurrence_index),
+    shop_entry_id INTEGER NOT NULL,
+    inventory_template_id INTEGER NOT NULL DEFAULT 0,
+    expire_time INTEGER NOT NULL,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_character_rental_items_char
+    ON character_rental_items(character_id);
+
+-- 晶体契约选择(NOTI 0x0300 的 cube_type/cube_grade 两字节)
+CREATE TABLE IF NOT EXISTS character_crystal_contract (
+    character_id INTEGER PRIMARY KEY,
+    cube_type INTEGER NOT NULL DEFAULT 0,
+    cube_grade INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -621,24 +586,6 @@ CREATE TABLE IF NOT EXISTS character_dimension_flags (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS character_pvp_results (
-    character_id INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL,
-    value_u32 INTEGER NOT NULL DEFAULT 0,
-    value_u16a INTEGER NOT NULL DEFAULT 0,
-    value_u16b INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (character_id, sort_order),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS character_abuse_values (
-    character_id INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL,
-    abuse_value INTEGER NOT NULL,
-    PRIMARY KEY (character_id, sort_order),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS character_sort_item_locks (
     character_id INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,
@@ -701,7 +648,7 @@ CREATE TABLE IF NOT EXISTS account_settings (
     quickchat_bank1 BLOB,
     hotkey_key_type INTEGER NOT NULL DEFAULT 0,
     hotkey_slots BLOB,
-    FOREIGN KEY (account_id) REFERENCES accounts(account_id)
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 );
 
 INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash) VALUES

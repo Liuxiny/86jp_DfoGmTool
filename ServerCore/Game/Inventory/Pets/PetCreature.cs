@@ -1,8 +1,8 @@
 // GM瘦身拷贝: 相对服务端原版仅保留 快照读路径所需成员(RepairPetCreatureItemListSlotConflict,
 // LoadPetCreatureVisibleEquipSlotRecord, FindEmptyVisiblePetCreatureSlotExceptEquipSlot,
 // IsPersistentPetCreatureSerial, LoadPetCreatureEquippedEntry, LoadPetEquippedEntry,
-// PetCreatureEquippedEntry 结构体, 相关常量); 删除了宠物穿脱/神器/序列号分配/遗留仓储修复/
-// 运行时状态等全部其余成员; 保留成员与原版逐字一致
+// PetCreatureEquippedEntry 结构体, EnsureCreatureListEntry, CreatureDefaults 结构体, 相关常量);
+// 删除了宠物穿脱/神器/序列号分配/遗留仓储修复/运行时状态等全部其余成员; 保留成员与原版逐字一致
 using DfoGmTool.ServerCore.Game.Characters;
 using DfoGmTool.ServerCore.Game.SelectCharacter;
 using DfoGmTool.ServerCore.GameWorld;
@@ -187,6 +187,70 @@ LIMIT 1;";
             public int ExpireTime { get; }
 
             public int CreatureExtra { get; }
+        }
+
+        private static void EnsureCreatureListEntry(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int petHandle,
+            CreatureDefaults defaults)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+SELECT COUNT(1)
+FROM character_creatures
+WHERE character_id = @cid AND creature_key = @key;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@key", petHandle);
+                if (Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) > 0)
+                    return;
+            }
+
+            int sortOrder;
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+SELECT COALESCE(MAX(sort_order), -1) + 1
+FROM character_creatures
+WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                sortOrder = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+            }
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+INSERT INTO character_creatures(
+    character_id, sort_order, creature_key, field04, mode_flag, progress_value,
+    mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag)
+VALUES(
+    @cid, @ord, @key, 100, 0, 0,
+    0, 0, @level, @text, 0);";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@ord", sortOrder);
+                cmd.Parameters.AddWithValue("@key", petHandle);
+                cmd.Parameters.AddWithValue("@level", defaults.Level);
+                cmd.Parameters.AddWithValue("@text", DBNull.Value);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private readonly struct CreatureDefaults
+        {
+            public CreatureDefaults(int level, byte[] nameBytes)
+            {
+                Level = Math.Max(1, Math.Min(255, level));
+                NameBytes = nameBytes ?? Array.Empty<byte>();
+            }
+
+            public int Level { get; }
+
+            public byte[] NameBytes { get; }
         }
     }
 }

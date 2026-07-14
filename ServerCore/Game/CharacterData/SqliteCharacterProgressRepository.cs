@@ -9,6 +9,35 @@ using Skills = DfoGmTool.ServerCore.Game.Skills;
 
 namespace DfoGmTool.ServerCore.Game.CharacterData
 {
+    internal sealed class CharacterProgressSnapshot
+    {
+        internal CharacterProgressSnapshot(
+            int accountId,
+            byte job,
+            byte level,
+            uint exp,
+            int bonusSp,
+            int bonusTp,
+            bool isHardcore)
+        {
+            AccountId = accountId;
+            Job = job;
+            Level = level;
+            Exp = exp;
+            BonusSp = bonusSp;
+            BonusTp = bonusTp;
+            IsHardcore = isHardcore;
+        }
+
+        internal int AccountId { get; }
+        internal byte Job { get; }
+        internal byte Level { get; }
+        internal uint Exp { get; }
+        internal int BonusSp { get; }
+        internal int BonusTp { get; }
+        internal bool IsHardcore { get; }
+    }
+
     public sealed class SqliteCharacterProgressRepository
     {
         private readonly string _connectionString;
@@ -28,61 +57,104 @@ namespace DfoGmTool.ServerCore.Game.CharacterData
             return new SqliteCharacterProgressRepository(connectionString);
         }
 
+        internal CharacterProgressSnapshot LoadProgressSnapshot(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            if (connection == null) throw new ArgumentNullException(nameof(connection));
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT c.account_id, c.job, c.level, c.exp, c.bonus_sp, c.bonus_tp,
+       COALESCE(f.is_hardcore_mode, 0)
+FROM characters c
+LEFT JOIN character_subtype0_fields f ON f.character_id=c.character_id
+WHERE c.character_id=@cid AND c.delete_flag=0;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return new CharacterProgressSnapshot(
+                        reader.GetInt32(0),
+                        (byte)Math.Max(0, Math.Min(byte.MaxValue, reader.GetInt32(1))),
+                        (byte)Math.Max(0, Math.Min(byte.MaxValue, reader.GetInt32(2))),
+                        (uint)Math.Max(0L, Math.Min(uint.MaxValue, reader.GetInt64(3))),
+                        reader.GetInt32(4),
+                        reader.GetInt32(5),
+                        reader.GetInt32(6) != 0);
+                }
+            }
+        }
+
         public SkillInfoSnapshot LoadSkills(int characterId)
         {
-            var snapshot = new SkillInfoSnapshot();
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
+                return LoadSkills(conn, null, characterId);
+            }
+        }
 
-                using (var cmd = new SqliteCommand(
-                    "SELECT page_index, page_header, slot, skill_id, level, extra_values FROM character_skills WHERE character_id = @cid ORDER BY page_index, slot", conn))
+        internal SkillInfoSnapshot LoadSkills(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId)
+        {
+            if (conn == null) throw new ArgumentNullException(nameof(conn));
+
+            var snapshot = new SkillInfoSnapshot();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT page_index, page_header, slot, skill_id, level, extra_values FROM character_skills WHERE character_id = @cid ORDER BY page_index, slot";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = cmd.ExecuteReader())
                 {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
+                    var pages = new Dictionary<int, SkillInfoPageSnapshot>();
+                    while (reader.Read())
                     {
-                        var pages = new Dictionary<int, SkillInfoPageSnapshot>();
-                        while (reader.Read())
+                        var pageIdx = reader.GetInt32(0);
+                        if (!pages.TryGetValue(pageIdx, out var page))
                         {
-                            var pageIdx = reader.GetInt32(0);
-                            if (!pages.TryGetValue(pageIdx, out var page))
-                            {
-                                page = new SkillInfoPageSnapshot { HeaderValue = (ushort)reader.GetInt32(1) };
-                                pages[pageIdx] = page;
-                            }
-                            int slot = reader.GetInt32(2);
-                            if (slot < 0) continue;
-                            var entry = new SkillInfoEntrySnapshot
-                            {
-                                Slot = (byte)slot,
-                                SkillId = (ushort)reader.GetInt32(3),
-                                Level = (byte)reader.GetInt32(4),
-                            };
-                            var extraBlob = reader.IsDBNull(5) ? null : (byte[])reader[5];
-                            if (extraBlob != null)
-                                foreach (var b in extraBlob)
-                                    entry.ExtraValues.Add(b);
-                            page.Entries.Add(entry);
+                            page = new SkillInfoPageSnapshot { HeaderValue = (ushort)reader.GetInt32(1) };
+                            pages[pageIdx] = page;
                         }
-                        for (int i = 0; i < 2; i++)
+                        int slot = reader.GetInt32(2);
+                        if (slot < 0) continue;
+                        var entry = new SkillInfoEntrySnapshot
                         {
-                            snapshot.Pages.Add(pages.ContainsKey(i) ? pages[i] : new SkillInfoPageSnapshot());
-                        }
+                            Slot = (byte)slot,
+                            SkillId = (ushort)reader.GetInt32(3),
+                            Level = (byte)reader.GetInt32(4),
+                        };
+                        var extraBlob = reader.IsDBNull(5) ? null : (byte[])reader[5];
+                        if (extraBlob != null)
+                            foreach (var b in extraBlob)
+                                entry.ExtraValues.Add(b);
+                        page.Entries.Add(entry);
                     }
+                    for (int i = 0; i < 2; i++)
+                        snapshot.Pages.Add(pages.ContainsKey(i) ? pages[i] : new SkillInfoPageSnapshot());
                 }
+            }
 
-                using (var cmd = new SqliteCommand(
-                    "SELECT tail0, tail1 FROM character_skill_tail WHERE character_id = @cid", conn))
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT tail0, tail1 FROM character_skill_tail WHERE character_id = @cid";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = cmd.ExecuteReader())
                 {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
+                    if (reader.Read())
                     {
-                        if (reader.Read())
-                        {
-                            snapshot.Tail0 = (ushort)reader.GetInt32(0);
-                            snapshot.Tail1 = (ushort)reader.GetInt32(1);
-                            snapshot.HasTailValues = true;
-                        }
+                        snapshot.Tail0 = (ushort)reader.GetInt32(0);
+                        snapshot.Tail1 = (ushort)reader.GetInt32(1);
+                        snapshot.HasTailValues = true;
                     }
                 }
             }
@@ -183,27 +255,39 @@ namespace DfoGmTool.ServerCore.Game.CharacterData
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
-                using (var cmd = new SqliteCommand(@"
+                return LoadSkillPointState(conn, null, characterId);
+            }
+        }
+
+        internal Skills.SkillPointState LoadSkillPointState(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId)
+        {
+            if (conn == null) throw new ArgumentNullException(nameof(conn));
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
 SELECT total_sp, remaining_sp, total_sfp, remaining_sfp, total_tp, remaining_tp, synced_level
 FROM character_skill_points
-WHERE character_id = @cid", conn))
+WHERE character_id = @cid";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = cmd.ExecuteReader())
                 {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        if (!reader.Read())
-                            return null;
+                    if (!reader.Read())
+                        return null;
 
-                        return new Skills.SkillPointState
-                        {
-                            TotalSp = reader.GetInt32(0),
-                            RemainingSp = reader.GetInt32(1),
-                            TotalTp = reader.GetInt32(4),
-                            RemainingTp = reader.GetInt32(5),
-                            SyncedLevel = (byte)reader.GetInt32(6),
-                            HasPersistedState = true,
-                        };
-                    }
+                    return new Skills.SkillPointState
+                    {
+                        TotalSp = reader.GetInt32(0),
+                        RemainingSp = reader.GetInt32(1),
+                        TotalTp = reader.GetInt32(4),
+                        RemainingTp = reader.GetInt32(5),
+                        SyncedLevel = (byte)reader.GetInt32(6),
+                        HasPersistedState = true,
+                    };
                 }
             }
         }
@@ -415,7 +499,7 @@ ON CONFLICT(character_id) DO UPDATE SET
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
-                    "SELECT creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag FROM character_creatures WHERE character_id = @cid ORDER BY sort_order", conn))
+                    "SELECT creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag, extra_json FROM character_creatures WHERE character_id = @cid ORDER BY sort_order", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -433,6 +517,7 @@ ON CONFLICT(character_id) DO UPDATE SET
                                 FieldAfterValue32 = (byte)reader.GetInt32(6),
                                 CreatureTextBytes = reader.IsDBNull(7) ? new byte[0] : (byte[])reader[7],
                                 TailFlag = (byte)reader.GetInt32(8),
+                                ExtraJson = reader.IsDBNull(9) ? "{}" : reader.GetString(9),
                             });
                         }
                     }
@@ -458,7 +543,7 @@ ON CONFLICT(character_id) DO UPDATE SET
                     {
                         var entry = snapshot.Entries[i];
                         using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_creatures (character_id, sort_order, creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag) VALUES (@cid, @ord, @key, @f04, @mf, @pv, @m0a, @m0b, @fav, @txt, @tf)", conn, tx))
+                            "INSERT INTO character_creatures (character_id, sort_order, creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag, extra_json) VALUES (@cid, @ord, @key, @f04, @mf, @pv, @m0a, @m0b, @fav, @txt, @tf, @extra)", conn, tx))
                         {
                             cmd.Parameters.AddWithValue("@cid", characterId);
                             cmd.Parameters.AddWithValue("@ord", i);
@@ -471,6 +556,7 @@ ON CONFLICT(character_id) DO UPDATE SET
                             cmd.Parameters.AddWithValue("@fav", (int)entry.FieldAfterValue32);
                             cmd.Parameters.AddWithValue("@txt", entry.CreatureTextBytes != null && entry.CreatureTextBytes.Length > 0 ? (object)entry.CreatureTextBytes : DBNull.Value);
                             cmd.Parameters.AddWithValue("@tf", (int)entry.TailFlag);
+                            cmd.Parameters.AddWithValue("@extra", string.IsNullOrWhiteSpace(entry.ExtraJson) ? "{}" : entry.ExtraJson);
                             cmd.ExecuteNonQuery();
                         }
                     }

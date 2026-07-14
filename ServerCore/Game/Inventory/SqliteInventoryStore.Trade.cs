@@ -73,6 +73,10 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             if (metadata.ItemKind == "special")
                 return false;
 
+            if ((CharmInventoryPolicy.IsCharmItem(itemTemplateId) && Math.Max(1, stackCount) > 1)
+                || !CharmInventoryPolicy.CanEnterMain(connection, transaction, characterId, itemTemplateId))
+                return false;
+
             bool isConsumable = metadata.IsStackable
                 && metadata.StackableType != null
                 && metadata.StackableType.IndexOf("[waste]", System.StringComparison.OrdinalIgnoreCase) >= 0;

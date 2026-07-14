@@ -11,7 +11,7 @@ namespace DfoGmTool.ServerCore.Game.TitleBook
         private readonly string _connectionString;
         private readonly InventoryDbPrimitives _db = new InventoryDbPrimitives();
         private readonly CharacterTitleBookRepository _titleBookRepository;
-        private readonly CharacterAchievementProgressRepository _achievementRepository;
+        private readonly CharacterAchievementRepository _achievementRepository;
         private readonly TitleBookStaticDataProvider _staticData;
         private const int TitleBookLockListTypeBase = 19;
 
@@ -19,7 +19,7 @@ namespace DfoGmTool.ServerCore.Game.TitleBook
         {
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
             _titleBookRepository = new CharacterTitleBookRepository(connectionString);
-            _achievementRepository = new CharacterAchievementProgressRepository(connectionString);
+            _achievementRepository = new CharacterAchievementRepository(connectionString);
             _staticData = TitleBookStaticDataProvider.LoadDefault();
         }
 

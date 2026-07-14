@@ -1,6 +1,8 @@
 using GmPvfLib;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace DfoGmTool.ServerCore.GameWorld
 {
@@ -50,6 +52,45 @@ namespace DfoGmTool.ServerCore.GameWorld
             _archive = PvfArchive.Open(path);
             _archivePath = path;
             return _archive;
+        }
+
+        // GM适配: 服务端原版经进程级 Lazy Archive 访问, 此处改经 GetArchive()+Sync 以兼容运行时切换 PVF
+        public static IReadOnlyList<string> ReadAllText(string relativePath)
+        {
+            var normalizedPath = NormalizeRelativePath(relativePath);
+            var result = new List<string>();
+            lock (Sync)
+            {
+                var archive = GetArchive();
+                foreach (var file in archive.Files)
+                {
+                    if (!string.Equals(file.Path, normalizedPath, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    var content = archive.GetFileContent(file);
+                    if (!string.IsNullOrEmpty(content))
+                        result.Add(content);
+                }
+            }
+            return result;
+        }
+
+        public static IReadOnlyList<string> FindPathsContaining(string fragment)
+        {
+            if (string.IsNullOrWhiteSpace(fragment))
+                return Array.Empty<string>();
+            lock (Sync)
+            {
+                return GetArchive().Files
+                    .Select(file => string.IsNullOrEmpty(file.Path)
+                        ? file.Name
+                        : string.IsNullOrEmpty(file.Name)
+                            ? file.Path
+                            : file.Path.TrimEnd('/', '\\') + "/" + file.Name)
+                    .Where(path => !string.IsNullOrEmpty(path)
+                        && path.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
         }
 
         private static string NormalizeRelativePath(string relativePath)

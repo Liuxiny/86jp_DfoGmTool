@@ -9,21 +9,6 @@ namespace DfoGmTool.ServerCore.Game.SelectCharacter
         public ushort Points { get; set; }
     }
 
-    public sealed class CollectionBoxItemSnapshot
-    {
-        public uint ItemId { get; set; }
-        public uint Count { get; set; }
-    }
-
-    public sealed class CollectionBoxSnapshot
-    {
-        public byte BoxType { get; set; }
-        public byte DisplayMode { get; set; }
-        public uint CollectionId { get; set; }
-        public byte StatusFlags { get; set; }
-        public List<CollectionBoxItemSnapshot> Items { get; } = new List<CollectionBoxItemSnapshot>();
-    }
-
     public sealed class RentalItemSnapshot
     {
         // ItemId 是租赁商店条目ID，仅供服务端恢复映射；协议包使用背包模板ID。
@@ -101,6 +86,8 @@ namespace DfoGmTool.ServerCore.Game.SelectCharacter
             return false;
         }
 
+        // 旧 character_init_bodies(0x0357) 存储编码。生产读写已迁到 character_rental_items 表;
+        // 保留解析仅供迁移 22 与自测使用。
         public static void ParseStorageBody(byte[] body, RentalInfoSnapshot rental)
         {
             if (rental == null)

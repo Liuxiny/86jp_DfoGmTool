@@ -1,5 +1,6 @@
 using DfoGmTool.ServerCore.Game.SelectCharacter;
 using DfoGmTool.ServerCore.Game.CharacterData;
+using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.ServerCore.Game.Skills
 {
@@ -16,6 +17,18 @@ namespace DfoGmTool.ServerCore.Game.Skills
         public byte SyncedLevel { get; set; }
 
         public bool HasPersistedState { get; set; }
+    }
+
+    // NOTI 0x0025 中连续四个 u16 的绝对状态快照。
+    public struct SkillPointProtocolState
+    {
+        public ushort Page0Sp { get; set; }
+
+        public ushort Page1Sp { get; set; }
+
+        public ushort Page0Tp { get; set; }
+
+        public ushort Page1Tp { get; set; }
     }
 
     public static class SkillStateService
@@ -66,19 +79,60 @@ namespace DfoGmTool.ServerCore.Game.Skills
             skills.HasTailValues = true;
         }
 
-        public static ushort GetPageRemainingSp(SkillInfoSnapshot skills, SkillPointState points, int pageIndex)
+        public static SkillPointProtocolState GetProtocolState(
+            SkillInfoSnapshot skills,
+            SkillPointState points)
         {
-            if (pageIndex < 0)
-                pageIndex = 0;
-
-            if (skills != null && pageIndex < skills.Pages.Count)
+            var fallbackSp = ToUInt16(points != null ? points.RemainingSp : 0);
+            var sharedTp = ToUInt16(points != null ? points.RemainingTp : 0);
+            return new SkillPointProtocolState
             {
-                var page = skills.Pages[pageIndex];
-                if (page != null && page.HeaderValue > 0)
-                    return page.HeaderValue;
+                Page0Sp = GetProtocolPageSp(skills, 0, fallbackSp),
+                Page1Sp = GetProtocolPageSp(skills, 1, 0),
+                // 当前业务模型的 TP 在两套技能页之间共享，因此两个协议槽写同一绝对值。
+                // 历史 Tail1 曾被旧代码写入 SP，不能作为任何 TP 状态来源。
+                Page0Tp = sharedTp,
+                Page1Tp = sharedTp,
+            };
+        }
+
+        public static SkillPointProtocolState LoadProtocolState(
+            SqliteCharacterProgressRepository repository,
+            int characterId,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp,
+            bool persist)
+        {
+            if (repository == null)
+                throw new System.ArgumentNullException(nameof(repository));
+
+            var synced = LoadAndSync(
+                repository,
+                characterId,
+                job,
+                level,
+                bonusSp,
+                bonusTp,
+                persist);
+            return GetProtocolState(synced.Skills, synced.Points);
+        }
+
+        private static ushort GetProtocolPageSp(
+            SkillInfoSnapshot skills,
+            int pageIndex,
+            ushort fallback)
+        {
+            if (skills != null
+                && pageIndex >= 0
+                && pageIndex < skills.Pages.Count
+                && skills.Pages[pageIndex] != null)
+            {
+                return skills.Pages[pageIndex].HeaderValue;
             }
 
-            return ToUInt16(points != null ? points.RemainingSp : 0);
+            return fallback;
         }
 
         public static void Persist(
@@ -119,14 +173,52 @@ namespace DfoGmTool.ServerCore.Game.Skills
         {
             var skills = repository.LoadSkills(characterId);
             var persisted = repository.LoadSkillPointState(characterId);
+            var synced = Synchronize(
+                skills, persisted, job, level, bonusSp, bonusTp);
+            if (persist)
+                repository.SaveSkillProgress(characterId, synced.Skills, synced.Points);
+            return synced;
+        }
+
+        internal static (SkillInfoSnapshot Skills, SkillPointState Points) LoadAndSync(
+            SqliteCharacterProgressRepository repository,
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp,
+            bool persist)
+        {
+            if (repository == null) throw new System.ArgumentNullException(nameof(repository));
+            if (connection == null) throw new System.ArgumentNullException(nameof(connection));
+            if (transaction == null) throw new System.ArgumentNullException(nameof(transaction));
+
+            var skills = repository.LoadSkills(connection, transaction, characterId);
+            var persisted = repository.LoadSkillPointState(connection, transaction, characterId);
+            var synced = Synchronize(
+                skills, persisted, job, level, bonusSp, bonusTp);
+            if (persist)
+            {
+                repository.SaveSkillProgress(
+                    connection, transaction, characterId, synced.Skills, synced.Points);
+            }
+            return synced;
+        }
+
+        private static (SkillInfoSnapshot Skills, SkillPointState Points) Synchronize(
+            SkillInfoSnapshot skills,
+            SkillPointState persisted,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp)
+        {
             var oldTotalSp = ResolvePreviousTotalSp(skills, persisted, job, level, bonusSp, bonusTp);
             var points = ResolvePointState(skills, persisted, job, level, bonusSp, bonusTp);
             SyncSkillPageRemainingSp(skills, job, level, bonusSp, oldTotalSp, points.TotalSp);
             ApplyProtocolMirrors(skills, points);
-            if (persist)
-            {
-                repository.SaveSkillProgress(characterId, skills, points);
-            }
             return (skills, points);
         }
 
