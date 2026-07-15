@@ -159,25 +159,17 @@ CREATE TABLE IF NOT EXISTS item_audit_log (
 CREATE INDEX IF NOT EXISTS idx_item_audit_log_char_time
     ON item_audit_log(character_id, created_at);
 
+-- SP/TP 由 SkillPointLedger 从已学技能全量派生, 不落库(迁移23退役了镜像表)。
 CREATE TABLE IF NOT EXISTS character_skills (
     character_id INTEGER NOT NULL,
-    page_index INTEGER NOT NULL,
-    page_header INTEGER NOT NULL DEFAULT 0,
-    slot INTEGER NOT NULL,
-    skill_id INTEGER NOT NULL,
+    page_index INTEGER NOT NULL DEFAULT 0,
+    slot INTEGER NOT NULL DEFAULT -1,
+    skill_id INTEGER NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 0,
     extra_values BLOB,
     PRIMARY KEY (character_id, page_index, slot),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS character_skill_tail (
-    character_id INTEGER PRIMARY KEY,
-    tail0 INTEGER NOT NULL DEFAULT 0,
-    tail1 INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
 
 CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
     character_id INTEGER NOT NULL,
@@ -185,18 +177,6 @@ CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
     body BLOB NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (character_id, page_index),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS character_skill_points (
-    character_id INTEGER PRIMARY KEY,
-    total_sp INTEGER NOT NULL DEFAULT 0,
-    remaining_sp INTEGER NOT NULL DEFAULT 0,
-    total_sfp INTEGER NOT NULL DEFAULT 0,
-    remaining_sfp INTEGER NOT NULL DEFAULT 0,
-    total_tp INTEGER NOT NULL DEFAULT 0,
-    remaining_tp INTEGER NOT NULL DEFAULT 0,
-    synced_level INTEGER NOT NULL DEFAULT 1,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 

@@ -494,7 +494,50 @@ DROP TABLE account_settings;
 ALTER TABLE account_settings_new RENAME TO account_settings;");
                 }
             }),
+
+            // 23: SP/TP 派生化——点数由 SkillPointLedger 从已学技能全量重算, 不再持久化余额。
+            // 删 character_skill_points(派生值)和 character_skill_tail(协议镜像);
+            // character_skills 直接清空重建为新结构(去掉 page_header 镜像列), 不搬运历史行:
+            // 全部角色下次选角时由统一建构器按 (job, growType, 觉醒, 等级) 重建技能面板,
+            // 学习进度清零、SP/TP 随派生回满, 杜绝任何旧口径残留。
+            (23, "技能点数派生化, 退役镜像表, 技能面板清零重建", MigrateSkillPointDerivation),
         };
+
+        private static void MigrateSkillPointDerivation(SqliteConnection connection)
+        {
+            bool foreignKeysEnabled;
+            using (var cmd = new SqliteCommand("PRAGMA foreign_keys;", connection))
+                foreignKeysEnabled = Convert.ToInt32(cmd.ExecuteScalar()) != 0;
+            if (foreignKeysEnabled)
+                ExecuteBatch(connection, "PRAGMA foreign_keys=OFF;");
+
+            try
+            {
+                using (var tx = connection.BeginTransaction())
+                {
+                    ExecuteBatch(connection, @"
+DROP TABLE IF EXISTS character_skill_points;
+DROP TABLE IF EXISTS character_skill_tail;
+DROP TABLE IF EXISTS character_skills;
+CREATE TABLE character_skills (
+    character_id INTEGER NOT NULL,
+    page_index INTEGER NOT NULL DEFAULT 0,
+    slot INTEGER NOT NULL DEFAULT -1,
+    skill_id INTEGER NOT NULL DEFAULT 0,
+    level INTEGER NOT NULL DEFAULT 0,
+    extra_values BLOB,
+    PRIMARY KEY (character_id, page_index, slot),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);");
+                    tx.Commit();
+                }
+            }
+            finally
+            {
+                if (foreignKeysEnabled)
+                    ExecuteBatch(connection, "PRAGMA foreign_keys=ON;");
+            }
+        }
 
         private static bool TableExists(SqliteConnection connection, string tableName)
         {

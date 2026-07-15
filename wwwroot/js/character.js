@@ -5,10 +5,11 @@ async function setLevel() {
   const level = parseInt($('#level-input').value, 10);
   try {
     await post(`/api/characters/${currentChar.characterId}/level`, { level });
-    toast('等级已设置为 ' + level);
+    toast('等级已设置为 ' + level + '，技能已清空待重建（下次进入角色时服务端重发技能，SP/TP 自动回满）');
     refreshHeader();
     loadCharacters();
     loadStats();
+    loadSpTp();
   } catch (e) {
     toast(e.message, true);
   }
@@ -55,10 +56,11 @@ async function setGrowType() {
   const second = parseInt($('#grow-second').value, 10);
   try {
     await post(`/api/characters/${currentChar.characterId}/growtype`, { first, second });
-    toast('转职/觉醒已覆写，战斗属性已重算');
+    toast('转职/觉醒已覆写，技能已清空待重建（下次进入角色时服务端按新方向重发技能，SP/TP 自动回满）');
     refreshHeader();
     loadCharacters();
     loadStats();
+    loadSpTp();
   } catch (e) {
     toast(e.message, true);
   }
@@ -98,7 +100,10 @@ async function loadSpTp() {
     $('#sptp-view').innerHTML =
       `<b>剩余 SP ${d.remainingSp.toLocaleString()}</b>&nbsp;/ 总 SP ${d.totalSp.toLocaleString()}` +
       `&nbsp;&nbsp;|&nbsp;&nbsp;<b>剩余 TP ${d.remainingTp}</b>&nbsp;/ 总 TP ${d.totalTp}` +
-      `&nbsp;&nbsp;(其中附加 SP ${d.bonusSp} / TP ${d.bonusTp})`;
+      `&nbsp;&nbsp;(其中附加 SP ${d.bonusSp} / TP ${d.bonusTp})` +
+      (d.remainingSpPvp !== undefined
+        ? `<br>PVP 页: 剩余 SP ${d.remainingSpPvp.toLocaleString()} / TP ${d.remainingTpPvp}`
+        : '');
     $('#sp-now').textContent = `当前附加 SP ${d.bonusSp} / TP ${d.bonusTp}`;
   } catch (e) {
     $('#sptp-view').textContent = e.message;

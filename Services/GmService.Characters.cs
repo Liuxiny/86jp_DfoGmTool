@@ -219,21 +219,42 @@ FROM characters WHERE character_id = @cid;";
             if (!updated)
                 return Error("写入失败");
 
-            return new { success = true, characterId, level, exp };
+            // 改等级后清技能表: 降级不留超出等级门槛的非法技能, 自动成长技的条目
+            // 等级随重建刷新; 下次选角由服务端重建面板, SP/TP 随派生自动回满。
+            ResetSkillsForRebuild(characterId);
+
+            return new { success = true, characterId, level, exp, skillsReset = true };
+        }
+
+        // 清空该角色已学技能: 服务端在下次选角加载时按 (职业, 转职, 觉醒, 等级)
+        // 自动重建技能面板(与迁移23"清零重建"同一机制), 余额是派生值无需另算。
+        private void ResetSkillsForRebuild(int characterId)
+        {
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "DELETE FROM character_skills WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.ExecuteNonQuery();
+                }
+            }
         }
 
         // 玩家实际看到的 SP/TP: 总点数(等级表+加成) 与 剩余点数(扣除已学技能),
-        // 用服务端 SkillStateService.LoadAndSync 同一条链计算
+        // 用服务端 SkillStateService.LoadAndSync 同一条链计算。
+        // growType 必须解码传入: 免费基线含转职送技/觉醒技, 缺了会把送技误计为花费。
         public object GetSpTp(int characterId)
         {
-            byte job, level;
+            byte job, level, growTypeRaw;
             int bonusSp, bonusTp;
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT job, level, bonus_sp, bonus_tp FROM characters WHERE character_id = @cid;";
+                    cmd.CommandText = "SELECT job, level, bonus_sp, bonus_tp, grow_type FROM characters WHERE character_id = @cid;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
                     {
@@ -243,19 +264,24 @@ FROM characters WHERE character_id = @cid;";
                         level = (byte)reader.GetInt32(1);
                         bonusSp = reader.GetInt32(2);
                         bonusTp = reader.GetInt32(3);
+                        growTypeRaw = (byte)reader.GetInt32(4);
                     }
                 }
             }
 
             try
             {
+                DfoGmTool.ServerCore.Game.Characters.CharacterStatComputer.DecodeGrowType(
+                    growTypeRaw, out var firstGrow, out var secondGrow);
                 var repository = new DfoGmTool.ServerCore.Game.CharacterData.SqliteCharacterProgressRepository(
                     _config.DatabasePath, _config.SchemaPath);
                 var synced = DfoGmTool.ServerCore.Game.Skills.SkillStateService.LoadAndSync(
-                    repository, characterId, job, level, bonusSp, bonusTp, persist: false);
+                    repository, characterId, job, level, bonusSp, bonusTp, persist: false,
+                    growType: firstGrow, secondGrowType: secondGrow);
                 if (synced.Points == null)
                     return Error("技能点状态加载失败");
 
+                // 四池独立(page0=PVE树, page1=PVP树), 与服务端 INIT 包 header/tail 同源。
                 return new
                 {
                     characterId,
@@ -263,6 +289,8 @@ FROM characters WHERE character_id = @cid;";
                     remainingSp = synced.Points.RemainingSp,
                     totalTp = synced.Points.TotalTp,
                     remainingTp = synced.Points.RemainingTp,
+                    remainingSpPvp = synced.Points.RemainingSpPage1,
+                    remainingTpPvp = synced.Points.RemainingTpPage1,
                     bonusSp,
                     bonusTp,
                 };
@@ -334,12 +362,27 @@ WHERE character_id = @cid;";
                 var secondGrow = second ?? ((current >> 4) & 0xF);
                 var packed = (byte)((secondGrow << 4) | (firstGrow & 0xF));
 
-                using (var cmd = conn.CreateCommand())
+                using (var tx = conn.BeginTransaction())
                 {
-                    cmd.CommandText = "UPDATE characters SET grow_type = @grow, updated_at = CURRENT_TIMESTAMP WHERE character_id = @cid;";
-                    cmd.Parameters.AddWithValue("@grow", (int)packed);
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.ExecuteNonQuery();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = "UPDATE characters SET grow_type = @grow, updated_at = CURRENT_TIMESTAMP WHERE character_id = @cid;";
+                        cmd.Parameters.AddWithValue("@grow", (int)packed);
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    // 与服务端转职流程(清空重建+送技)同口径: 清掉技能表,
+                    // 下次选角由服务端按新 grow_type 重建面板, SP/TP 随派生自动回满。
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = "DELETE FROM character_skills WHERE character_id = @cid;";
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.ExecuteNonQuery();
+                    }
+                    tx.Commit();
                 }
             }
 
@@ -398,7 +441,7 @@ WHERE character_id = @cid;";
             if (!ApplyGrowType(characterId, first, second))
                 return Error("角色不存在或写入失败: " + characterId);
 
-            return new { success = true, characterId, first, second };
+            return new { success = true, characterId, first, second, skillsReset = true };
         }
     }
 }

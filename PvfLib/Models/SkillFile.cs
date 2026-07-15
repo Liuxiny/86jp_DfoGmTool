@@ -72,6 +72,15 @@ namespace GmPvfLib
         public string SkillFitnessGrowtype { get; set; }
         public string SkillFitnessSecondGrowtype { get; set; }
         public string SecondGrowtypeMaximumLevel { get; set; }
+
+        #endregion
+
+        #region 固定等级技能(觉醒等自动按角色等级升级的技能)
+
+        public bool IsFixedLevelSkill { get; set; }
+        public int FixedLevelBase { get; set; }
+        public int FixedLevelInterval { get; set; } = 1;
+        public int FixedLevelAddPerInterval { get; set; } = 1;
         public string FeatureSkillType { get; set; }
         public int FeatureSkillIndex { get; set; } = -1;
 
@@ -160,6 +169,13 @@ namespace GmPvfLib
                     case "second growtype maximum level": skl.SecondGrowtypeMaximumLevel = data; break;
                     case "feature skill type": skl.FeatureSkillType = data; break;
                     case "feature skill index": skl.FeatureSkillIndex = ParseInt(data); break;
+
+                    case "fixed level skill":
+                        skl.IsFixedLevelSkill = true;
+                        skl.FixedLevelBase = ParseInt(data);
+                        break;
+                    case "interval level": skl.FixedLevelInterval = Math.Max(1, ParseInt(data)); break;
+                    case "add level per interval": skl.FixedLevelAddPerInterval = Math.Max(1, ParseInt(data)); break;
 
                     
                     case "pvp": skl.Pvp = data; break;

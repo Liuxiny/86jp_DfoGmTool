@@ -13,19 +13,40 @@ namespace DfoGmTool.ServerCore.Game.Skills
     public sealed class SkillStaticData
     {
         public int Job;
-        public int SkillIndex;          
+        public int SkillIndex;
         public string PvfPath;
         public string Name;
-        public bool IsActive;           
-        public int MaxLevel = 1;        
-        public int RequiredLevel;       
-        public int NumGrowtypes;        
-        public int RawGroup;            
+        public bool IsActive;
+        public int MaxLevel = 1;
+        public int RequiredLevel;
+        public int NumGrowtypes;
+        public int RawGroup;
         public bool IsSpecial;
         public bool IsTpSkill;
         public int[] PreRequiredSkills;
         public int[] SpCostPerLevel;
         public int[] TpCostPerLevel;
+        // 逐 growType 等级上限(6槽, 按 growType 0-5 索引); 上限 0 = 该方向不可学
+        public int[] GrowtypeMaxLevels;
+        // 逐 觉醒段 等级上限(12槽 = growType*2 + (觉醒段-1)); 0 = 不可学
+        public int[] SecondGrowtypeMaxLevels;
+        // 等级门槛间隔: reqLevel + (targetLv-1)*levelInterval <= characLevel
+        public int LevelInterval = 1;
+        // [fixed level skill] 标志: 等级按角色等级自动派生, purchase cost=0, 不消耗 SP。
+        // 公式: base + max(0, charLevel-reqLevel) / interval * addPerInterval
+        public bool IsFixedLevelSkill;
+        public int FixedLevelBase;
+        public int FixedLevelInterval = 1;
+        public int FixedLevelAddPerInterval = 1;
+
+        public int GetFixedLevel(int charLevel)
+        {
+            if (!IsFixedLevelSkill) return 0;
+            if (charLevel < RequiredLevel) return 0;
+            var level = FixedLevelBase + (charLevel - RequiredLevel) / FixedLevelInterval * FixedLevelAddPerInterval;
+            var maxLv = MaxLevel > 0 ? MaxLevel : int.MaxValue;
+            return Math.Min(level, maxLv);
+        }
 
         public int SpCostFor(int fromLevel, int toLevel)
         {
@@ -50,12 +71,40 @@ namespace DfoGmTool.ServerCore.Game.Skills
             }
             return sum;
         }
+
+        // 该 (growType, 觉醒段) 下的等级上限。老服口径(CSkill::can_learn):
+        // 觉醒段>0 先查 12 槽表(growType*2+段-1), 值为 0 再回落 6 槽表;
+        // 两表都缺省(数组为空)时回落 MaxLevel; 最终 0 = 该方向不可学。
+        public int GetMaxLevelFor(int growType, int secondGrowType)
+        {
+            if (secondGrowType > 0
+                && SecondGrowtypeMaxLevels != null
+                && SecondGrowtypeMaxLevels.Length > 0)
+            {
+                var idx = growType * 2 + (secondGrowType - 1);
+                var secondMax = idx >= 0 && idx < SecondGrowtypeMaxLevels.Length
+                    ? SecondGrowtypeMaxLevels[idx]
+                    : 0;
+                if (secondMax > 0)
+                    return secondMax;
+            }
+
+            if (GrowtypeMaxLevels != null && GrowtypeMaxLevels.Length > 0)
+            {
+                return growType >= 0 && growType < GrowtypeMaxLevels.Length
+                    ? GrowtypeMaxLevels[growType]
+                    : 0;
+            }
+
+            return MaxLevel;
+        }
+
+        // 注: [skill fitness growtype]/[skill fitness second growtype] 是技能从属标记
+        // (记录该技能属于哪些方向/觉醒段), 不是 SP 折扣——"fitness=百分比折扣"的旧解读
+        // 已被实测推翻(斩铁式+1 真机成本 45 整)。门禁走 GetMaxLevelFor, 成本走费用表原值;
+        // fitness 数组仅剩的用途是 NumGrowtypes(数组长度)参与槽位分组。
     }
 
-    
-    
-    
-    
     public static class SkillDataProvider
     {
         private static readonly object _lock = new object();
@@ -134,6 +183,13 @@ namespace DfoGmTool.ServerCore.Game.Skills
                 PreRequiredSkills = ParseInts(skl.PreRequiredSkill),
                 SpCostPerLevel = ParseInts(skl.PurchaseCost),
                 TpCostPerLevel = ParseInts(skl.SpecialPurchaseCost),
+                GrowtypeMaxLevels = ParseInts(skl.GrowtypeMaximumLevel),
+                SecondGrowtypeMaxLevels = ParseInts(skl.SecondGrowtypeMaximumLevel),
+                LevelInterval = ParseLevelInterval(skl.RequiredLevelRange),
+                IsFixedLevelSkill = skl.IsFixedLevelSkill,
+                FixedLevelBase = skl.FixedLevelBase,
+                FixedLevelInterval = skl.FixedLevelInterval,
+                FixedLevelAddPerInterval = skl.FixedLevelAddPerInterval,
             };
             return data;
         }
@@ -183,6 +239,13 @@ namespace DfoGmTool.ServerCore.Game.Skills
             foreach (var tok in s.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                 if (int.TryParse(tok, out _)) c++;
             return c;
+        }
+
+        private static int ParseLevelInterval(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return 1;
+            if (int.TryParse(s.Trim(), out var v) && v > 0) return v;
+            return 1;
         }
     }
 }
