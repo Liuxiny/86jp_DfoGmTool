@@ -11,6 +11,17 @@ namespace DfoGmTool
     {
         public static void Main(string[] args)
         {
+            if (Array.IndexOf(args, "--selftest-item-grant-options") >= 0)
+            {
+                Environment.Exit(SelfTests.ItemGrantOptionsSelfTest.Run());
+                return;
+            }
+            if (Array.IndexOf(args, "--selftest-character-mutations") >= 0)
+            {
+                Environment.Exit(SelfTests.CharacterMutationSelfTest.Run());
+                return;
+            }
+
             GmToolHostConfig hostConfig;
             GmConfig initialConfig;
             try
@@ -137,6 +148,12 @@ namespace DfoGmTool
 
             app.MapGet("/api/accounts", () => WithRuntime((gm, _) => gm.ListAccounts()));
             app.MapGet("/api/accounts/{id:int}/detail", (int id) => WithRuntime((gm, pvfIndex) => gm.GetAccountDetail(id, pvfIndex)));
+            app.MapPost("/api/accounts/{id:int}/backup", (int id) =>
+                WithRuntime((gm, _) => gm.ExportAccountBackup(id)));
+            app.MapPost("/api/accounts/restore", (AccountBackupFile body) =>
+                WithRuntime((gm, _) => gm.RestoreAccountBackup(body)));
+            app.MapPost("/api/accounts/create-for-clone", (CreateAccountForCloneRequest body) =>
+                WithRuntime((gm, _) => gm.CreateAccountForClone(body?.AccountName, body?.Password, body?.ConfirmPassword)));
             app.MapPost("/api/accounts/{id:int}/currency", (int id, CurrencyRequest body) =>
                 WithRuntime((gm, _) => gm.AdjustAccountCurrency(id, body.Type, body.Amount, body.Value)));
             app.MapPost("/api/accounts/{id:int}/cube", (int id, CubeRequest body) =>
@@ -155,32 +172,52 @@ namespace DfoGmTool
                 WithRuntime((gm, _) => gm.DeleteAccountCargoAt(id, body.Slot)));
             app.MapPost("/api/accounts/{id:int}/cargo/clear", (int id) =>
                 WithRuntime((gm, _) => gm.ClearAccountCargo(id)));
+            app.MapPost("/api/accounts/{id:int}/cargo/max", (int id) =>
+                WithRuntime((gm, _) => gm.MaxAccountCargo(id)));
             app.MapGet("/api/characters", (int? accountId) => WithRuntime((gm, _) => gm.ListCharacters(accountId ?? -1)));
             app.MapGet("/api/characters/{id:int}", (int id) => WithRuntime((gm, _) => gm.GetCharacter(id)));
             app.MapGet("/api/characters/{id:int}/items", (int id) => WithRuntime((gm, pvfIndex) => gm.ListItems(id, pvfIndex)));
+            app.MapGet("/api/characters/{id:int}/items/{templateId:int}/grant-options", (int id, int templateId) =>
+                WithRuntime((gm, pvfIndex) => gm.GetItemGrantOptions(id, templateId, pvfIndex)));
+            app.MapGet("/api/characters/{id:int}/items/config-options", (int id, int listType, int slot) =>
+                WithRuntime((gm, pvfIndex) => gm.GetInventoryItemConfigOptions(id, listType, slot, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/quests", (int id) => WithRuntime((gm, pvfIndex) => gm.ListQuests(id, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/stats", (int id) => WithRuntime((gm, _) => gm.GetCharacterStats(id)));
             app.MapGet("/api/characters/{id:int}/sptp", (int id) => WithRuntime((gm, _) => gm.GetSpTp(id)));
+            app.MapGet("/api/characters/{id:int}/clone-plan", (int id) => WithRuntime((gm, _) => gm.GetCharacterClonePlan(id)));
+            app.MapGet("/api/characters/name-available", (string name) => WithRuntime((gm, _) => gm.CheckCharacterNameAvailable(name)));
 
             app.MapPost("/api/characters/{id:int}/items", (int id, ItemRequest body) =>
-                WithRuntime((gm, pvfIndex) => gm.GiveItem(id, body.TemplateId, body.Count, pvfIndex)));
+                WithRuntime((gm, pvfIndex) => gm.GiveItem(id, body.TemplateId, body.Count, body.Options, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/items/remove", (int id, ItemRequest body) =>
                 WithRuntime((gm, _) => gm.RemoveItem(id, body.TemplateId, body.Count)));
             app.MapPost("/api/characters/{id:int}/items/delete-at", (int id, DeleteAtRequest body) =>
                 WithRuntime((gm, _) => gm.DeleteItemAt(id, body.ListType, body.Slot, body.Count)));
             app.MapPost("/api/characters/{id:int}/items/batch-delete", (int id, BatchDeleteRequest body) =>
                 WithRuntime((gm, _) => gm.BatchDeleteItems(id, body.Items)));
+            app.MapPost("/api/characters/{id:int}/items/configure", (int id, InventoryItemConfigureRequest body) =>
+                WithRuntime((gm, pvfIndex) => gm.ConfigureInventoryItem(id, body, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/gold", (int id, AmountRequest body) =>
                 WithRuntime((gm, _) => gm.AdjustGold(id, body.Amount)));
             app.MapPost("/api/characters/{id:int}/cera", (int id, CeraRequest body) =>
                 WithRuntime((gm, _) => gm.AdjustCera(id, body.Amount, body.Type)));
             app.MapPost("/api/characters/{id:int}/level", (int id, LevelRequest body) =>
                 WithRuntime((gm, _) => gm.SetLevel(id, body.Level)));
+            app.MapPost("/api/characters/{id:int}/personal-cargo/max", (int id) =>
+                WithRuntime((gm, _) => gm.MaxPersonalCargo(id)));
+            app.MapPost("/api/characters/{id:int}/dungeon-permissions/unlock", (int id) =>
+                WithRuntime((gm, pvfIndex) => gm.UnlockDungeonPermissions(id, pvfIndex)));
+            app.MapPost("/api/characters/{id:int}/delete", (int id, DeleteCharacterRequest body) =>
+                WithRuntime((gm, _) => gm.DeleteCharacterPermanently(id, body?.ConfirmText)));
             app.MapPost("/api/characters/{id:int}/sp", (int id, SpRequest body) =>
-                WithRuntime((gm, _) => gm.AdjustSpTp(id, body.Sp, body.Tp)));
-            app.MapGet("/api/characters/{id:int}/growoptions", (int id) => WithRuntime((gm, _) => gm.GetGrowOptions(id)));
+                WithRuntime((gm, _) => gm.AdjustSpTpSynced(id, body.Sp, body.Tp)));
+            app.MapPost("/api/characters/{id:int}/sp/zero-remaining", (int id) =>
+                WithRuntime((gm, _) => gm.ZeroRemainingSpTp(id)));
+            app.MapPost("/api/characters/{id:int}/clone", (int id, CharacterCloneRequest body) =>
+                WithRuntime((gm, _) => gm.CloneCharacter(id, body)));
+            app.MapGet("/api/characters/{id:int}/growoptions", (int id, int? job) => WithRuntime((gm, _) => gm.GetGrowOptions(id, job)));
             app.MapPost("/api/characters/{id:int}/growtype", (int id, GrowTypeRequest body) =>
-                WithRuntime((gm, _) => gm.SetGrowType(id, body.First, body.Second)));
+                WithRuntime((gm, _) => gm.SetGrowTypeFixed(id, body.Job, body.First, body.Second)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/ready", (int id, int questId) =>
                 WithRuntime((gm, _) => gm.MarkQuestReady(id, questId)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/complete", (int id, int questId) =>
@@ -199,12 +236,16 @@ namespace DfoGmTool
                 WithRuntime((gm, pvfIndex) => gm.CompleteQuestChain(id, questId, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/complete-batch", (int id, QuestBatchRequest body) =>
                 WithRuntime((gm, _) => gm.CompleteQuestBatch(id, body.QuestIds)));
+            app.MapPost("/api/characters/{id:int}/quests/unclear-batch", (int id, QuestBatchRequest body) =>
+                WithRuntime((gm, _) => gm.UnclearQuestBatch(id, body.QuestIds)));
+            app.MapPost("/api/characters/{id:int}/quests/main/complete-current-level", (int id) =>
+                WithRuntime((gm, pvfIndex) => gm.CompleteCurrentLevelMainQuests(id, pvfIndex)));
 
             app.MapGet("/api/items/search", (string q, int? limit) =>
                 WithRuntime((_, pvfIndex) => pvfIndex.Search(q, limit ?? 30)));
             app.MapGet("/api/items/categories", () => WithRuntime((_, pvfIndex) => pvfIndex.GetItemCategories()));
-            app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset, string expiration = null) =>
-                WithRuntime((_, pvfIndex) => pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration)));
+            app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset, int? job, string expiration = null) =>
+                WithRuntime((_, pvfIndex) => pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration, job ?? -1)));
 
             Console.WriteLine("GM Tool 监听: " + hostConfig.ListenUrl);
             Console.WriteLine("配置文件: " + hostConfig.ConfigPath);
@@ -265,6 +306,7 @@ namespace DfoGmTool
     {
         public int TemplateId { get; set; }
         public int Count { get; set; }
+        public ServerCore.Game.Inventory.ItemGrantOptions Options { get; set; }
     }
 
     public sealed class AmountRequest
@@ -354,7 +396,20 @@ namespace DfoGmTool
 
     public sealed class GrowTypeRequest
     {
+        public int? Job { get; set; }
         public int First { get; set; }
         public int Second { get; set; }
+    }
+
+    public sealed class DeleteCharacterRequest
+    {
+        public string ConfirmText { get; set; }
+    }
+
+    public sealed class CreateAccountForCloneRequest
+    {
+        public string AccountName { get; set; }
+        public string Password { get; set; }
+        public string ConfirmPassword { get; set; }
     }
 }

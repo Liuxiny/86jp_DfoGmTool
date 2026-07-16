@@ -97,6 +97,28 @@ FROM accounts WHERE account_id = @aid;";
                 }
 
                 var cargo = new List<object>();
+                object cargoState = null;
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT selection_key, value32, item_count
+FROM account_cargo_state
+WHERE account_id = @aid;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                        {
+                            cargoState = new
+                            {
+                                selectionKey = reader.GetInt32(0),
+                                value32 = reader.GetInt32(1),
+                                itemCount = reader.GetInt32(2),
+                            };
+                        }
+                    }
+                }
+
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
@@ -127,7 +149,7 @@ ORDER BY slot_index;";
                 if (!_accountProgress.TryLoad(accountId, out var progress))
                     return Error("账号不存在: " + accountId);
 
-                return new { accountId, currencies, cubes, cargo, progress };
+                return new { accountId, currencies, cubes, cargo, cargoState, progress };
             }
         }
 
@@ -339,6 +361,37 @@ ORDER BY slot_index;";
                     cmd.Parameters.AddWithValue("@aid", accountId);
                     var deleted = cmd.ExecuteNonQuery();
                     return new { success = true, accountId, deleted };
+                }
+            }
+        }
+
+        public object MaxAccountCargo(int accountId)
+        {
+            const int MaxCargoSelectionKey = 152;
+
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE account_cargo_state
+SET selection_key = @selectionKey
+WHERE account_id = @aid;";
+                    cmd.Parameters.AddWithValue("@selectionKey", MaxCargoSelectionKey);
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    var updated = cmd.ExecuteNonQuery();
+                    if (updated == 0)
+                        return Error("账号仓库状态不存在: account_id=" + accountId);
+
+                    return new
+                    {
+                        success = true,
+                        accountId,
+                        listType = 2,
+                        listParam16 = MaxCargoSelectionKey,
+                        affectedRows = updated,
+                    };
                 }
             }
         }

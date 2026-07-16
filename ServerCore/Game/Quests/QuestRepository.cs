@@ -1,15 +1,9 @@
-// GM瘦身拷贝: 相对服务端原版删除了进行中任务区段(依赖 ActiveQuest); 保留成员与原版逐字一致
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.ServerCore.Game.Quests
 {
-    // 任务两张表的唯一数据访问点:
-    //   character_active_quests   进行中任务(槽位/任务号/触发器值)
-    //   character_invisible_falgs 完成标记(slot_index=任务号, flag_value=完成值/问答分支值)
-    // 这两张表的 SQL 只出现在这个文件里。需要并入外部事务的操作提供
-    // (conn, tx) 静态变体; 实例方法自开连接, 供没有现成事务的调用方使用。
     public sealed class QuestRepository
     {
         private readonly string _connStr;
@@ -19,10 +13,118 @@ namespace DfoGmTool.ServerCore.Game.Quests
             _connStr = connStr;
         }
 
-        // GM瘦身拷贝: 此处删除了进行中任务区段(LoadActiveQuests/SaveActiveQuests/InsertActiveQuest/
-        // DeleteActiveQuest/UpdateTriggerValue/UpdateTriggerValues, 依赖未拷贝的 ActiveQuest 类)
+        public List<ActiveQuest> LoadActiveQuests(int characterId)
+        {
+            using (var conn = new SqliteConnection(_connStr))
+            {
+                conn.Open();
+                return LoadActiveQuests(conn, null, characterId);
+            }
+        }
 
-        // ── 完成标记 ──
+        public static List<ActiveQuest> LoadActiveQuests(SqliteConnection conn, SqliteTransaction tx, int characterId)
+        {
+            var list = new List<ActiveQuest>();
+            using (var cmd = new SqliteCommand(
+                "SELECT slot, quest_id, trigger_value FROM character_active_quests WHERE character_id=@cid ORDER BY slot", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var r = cmd.ExecuteReader())
+                {
+                    while (r.Read())
+                        list.Add(new ActiveQuest { Slot = r.GetInt32(0), QuestId = (ushort)r.GetInt32(1), TriggerValue = (uint)r.GetInt64(2) });
+                }
+            }
+
+            return list;
+        }
+
+        public void SaveActiveQuests(int characterId, List<ActiveQuest> quests)
+        {
+            using (var conn = new SqliteConnection(_connStr))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    foreach (var q in quests)
+                        InsertActiveQuest(conn, tx, characterId, q.Slot, q.QuestId, q.TriggerValue);
+                    tx.Commit();
+                }
+            }
+        }
+
+        public static void InsertActiveQuest(SqliteConnection conn, SqliteTransaction tx, int characterId, int slot, ushort questId, uint triggerValue)
+        {
+            using (var cmd = new SqliteCommand(
+                "INSERT OR REPLACE INTO character_active_quests (character_id, slot, quest_id, trigger_value) VALUES (@cid, @s, @qid, @tv)",
+                conn,
+                tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@s", slot);
+                cmd.Parameters.AddWithValue("@qid", (int)questId);
+                cmd.Parameters.AddWithValue("@tv", (long)triggerValue);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        public void DeleteActiveQuest(int characterId, int slot)
+        {
+            using (var conn = new SqliteConnection(_connStr))
+            {
+                conn.Open();
+                DeleteActiveQuest(conn, null, characterId, slot);
+            }
+        }
+
+        public static void DeleteActiveQuest(SqliteConnection conn, SqliteTransaction tx, int characterId, int slot)
+        {
+            using (var cmd = new SqliteCommand(
+                "DELETE FROM character_active_quests WHERE character_id=@cid AND slot=@s", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@s", slot);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        public void UpdateTriggerValue(int characterId, int slot, uint triggerValue)
+        {
+            using (var conn = new SqliteConnection(_connStr))
+            {
+                conn.Open();
+                UpdateTriggerValue(conn, null, characterId, slot, triggerValue);
+            }
+        }
+
+        public static void UpdateTriggerValue(SqliteConnection conn, SqliteTransaction tx, int characterId, int slot, uint triggerValue)
+        {
+            using (var cmd = new SqliteCommand(
+                "UPDATE character_active_quests SET trigger_value=@tv WHERE character_id=@cid AND slot=@s", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@tv", (long)triggerValue);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@s", slot);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        public void UpdateTriggerValues(int characterId, IReadOnlyList<ActiveQuest> quests)
+        {
+            if (quests == null || quests.Count == 0)
+                return;
+
+            using (var conn = new SqliteConnection(_connStr))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    foreach (var q in quests)
+                        UpdateTriggerValue(conn, tx, characterId, q.Slot, q.TriggerValue);
+                    tx.Commit();
+                }
+            }
+        }
 
         public bool IsQuestCleared(int characterId, int questId)
         {
@@ -57,7 +159,6 @@ namespace DfoGmTool.ServerCore.Game.Quests
             }
         }
 
-        // 全部非零完成标记(任务号 → 完成值), 供可接任务计算与选角初始化使用。
         public Dictionary<int, int> LoadClearedFlags(int characterId)
         {
             using (var conn = new SqliteConnection(_connStr))
@@ -84,11 +185,10 @@ namespace DfoGmTool.ServerCore.Game.Quests
                     }
                 }
             }
+
             return flags;
         }
 
-        // 按存储原样(含零值)全量读, 供选角初始化快照使用 -- 快照要求逐字节回放,
-        // 与 LoadClearedFlags 的"只看非零"语义不同。
         public static List<KeyValuePair<int, int>> LoadAllFlagEntries(SqliteConnection conn, SqliteTransaction tx, int characterId)
         {
             var entries = new List<KeyValuePair<int, int>>();
@@ -102,10 +202,10 @@ namespace DfoGmTool.ServerCore.Game.Quests
                         entries.Add(new KeyValuePair<int, int>(r.GetInt32(0), r.GetInt32(1)));
                 }
             }
+
             return entries;
         }
 
-        // 写完成标记的同时抬高 init 载荷长度水位, 保证选角初始化包能覆盖到该任务号。
         public static void MarkQuestCleared(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId, int flagValue = 1)
         {
             if (flagValue == 0)
@@ -143,7 +243,6 @@ namespace DfoGmTool.ServerCore.Game.Quests
             }
         }
 
-        // 初始化路径的整表重建(先清后写), 供选角种子数据载入使用。
         public static void ReplaceAllClearedFlags(SqliteConnection conn, SqliteTransaction tx, int characterId, IReadOnlyList<KeyValuePair<int, int>> flags)
         {
             using (var cmd = new SqliteCommand("DELETE FROM character_invisible_falgs WHERE character_id = @cid", conn, tx))

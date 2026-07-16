@@ -219,42 +219,317 @@ FROM characters WHERE character_id = @cid;";
             if (!updated)
                 return Error("写入失败");
 
-            // 改等级后清技能表: 降级不留超出等级门槛的非法技能, 自动成长技的条目
-            // 等级随重建刷新; 下次选角由服务端重建面板, SP/TP 随派生自动回满。
-            ResetSkillsForRebuild(characterId);
-
-            return new { success = true, characterId, level, exp, skillsReset = true };
+            return new { success = true, characterId, level, exp };
         }
 
-        // 清空该角色已学技能: 服务端在下次选角加载时按 (职业, 转职, 觉醒, 等级)
-        // 自动重建技能面板(与迁移23"清零重建"同一机制), 余额是派生值无需另算。
-        private void ResetSkillsForRebuild(int characterId)
+        public object MaxPersonalCargo(int characterId)
         {
+            const int PersonalCargoListType = 2;
+            const int MaxPersonalCargoCapacity = 152;
+
+            if (!TryGetAccountId(characterId, out _))
+                return Error("角色不存在: " + characterId);
+
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "DELETE FROM character_skills WHERE character_id = @cid;";
+                    cmd.CommandText = @"
+INSERT INTO character_container_state (character_id, list_type, list_param16)
+VALUES (@cid, @listType, @capacity)
+ON CONFLICT(character_id, list_type) DO UPDATE SET list_param16 = excluded.list_param16;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@listType", PersonalCargoListType);
+                    cmd.Parameters.AddWithValue("@capacity", MaxPersonalCargoCapacity);
                     cmd.ExecuteNonQuery();
+                }
+            }
+
+            return new
+            {
+                success = true,
+                characterId,
+                listType = PersonalCargoListType,
+                listParam16 = MaxPersonalCargoCapacity,
+            };
+        }
+
+        public object UnlockDungeonPermissions(int characterId, PvfIndexService pvfIndex)
+        {
+            const int MaxClearState = 4;
+
+            if (!TryGetAccountId(characterId, out _))
+                return Error("角色不存在: " + characterId);
+
+            var dungeonIds = pvfIndex.GetDungeonPermissionIds();
+            if (dungeonIds.Count == 0)
+                return Error("PVF 中未读取到可开启难度的副本列表");
+
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = "DELETE FROM character_dungeon_permissions WHERE character_id = @cid;";
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = @"
+INSERT INTO character_dungeon_permissions(character_id, sort_order, dungeon_id, clear_state)
+VALUES (@cid, @sort, @dungeon, @state);";
+                        var cidParam = cmd.Parameters.Add("@cid", SqliteType.Integer);
+                        var sortParam = cmd.Parameters.Add("@sort", SqliteType.Integer);
+                        var dungeonParam = cmd.Parameters.Add("@dungeon", SqliteType.Integer);
+                        var stateParam = cmd.Parameters.Add("@state", SqliteType.Integer);
+                        cidParam.Value = characterId;
+                        stateParam.Value = MaxClearState;
+
+                        for (var i = 0; i < dungeonIds.Count; i++)
+                        {
+                            sortParam.Value = i;
+                            dungeonParam.Value = dungeonIds[i];
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+
+                    tx.Commit();
+                }
+            }
+
+            return new
+            {
+                success = true,
+                characterId,
+                insertedCount = dungeonIds.Count,
+                clearState = MaxClearState,
+            };
+        }
+
+        public object DeleteCharacterPermanently(int characterId, string confirmText)
+        {
+            if (!string.Equals(confirmText, "删除角色", StringComparison.Ordinal))
+                return Error("确认文本不正确，请输入：删除角色");
+
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var pragma = conn.CreateCommand())
+                {
+                    pragma.CommandText = "PRAGMA foreign_keys = ON;";
+                    pragma.ExecuteNonQuery();
+                }
+
+                using (var tx = conn.BeginTransaction())
+                {
+                    byte[] nameBlob;
+                    string name;
+                    int accountId;
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = @"
+SELECT CAST(name AS BLOB), name, account_id
+FROM characters
+WHERE character_id = @cid;";
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            if (!reader.Read())
+                                return Error("角色不存在: " + characterId);
+                            nameBlob = (byte[])reader.GetValue(0);
+                            name = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                            accountId = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+                        }
+                    }
+
+                    var deletedQuestRows = 0;
+                    var deletedAuditRows = 0;
+                    var deletedItemRows = 0;
+                    var deletedAccountEntryRows = 0;
+                    var updatedTemplateRows = 0;
+                    var replacementSeedCharacterId = ResolveReplacementSeedCharacterId(conn, tx, accountId, characterId);
+
+                    if (TableExists(conn, tx, "character_active_quests"))
+                        deletedQuestRows = ExecuteNonQuery(conn, tx,
+                            "DELETE FROM character_active_quests WHERE character_id = @cid;",
+                            ("@cid", characterId));
+
+                    if (TableExists(conn, tx, "item_audit_log"))
+                        deletedAuditRows = ExecuteNonQuery(conn, tx, @"
+DELETE FROM item_audit_log
+WHERE character_id = @cid
+   OR (owner_scope = 'character' AND owner_id = @cid);",
+                            ("@cid", characterId));
+
+                    if (TableExists(conn, tx, "character_items"))
+                        deletedItemRows = ExecuteNonQuery(conn, tx, @"
+DELETE FROM character_items
+WHERE character_id = @cid
+   OR (owner_scope = 'character' AND owner_id = @cid);",
+                            ("@cid", characterId));
+
+                    if (TableExists(conn, tx, "account_character_entries"))
+                        deletedAccountEntryRows = ExecuteNonQuery(conn, tx,
+                            "DELETE FROM account_character_entries WHERE CAST(name AS BLOB) = @name;",
+                            ("@name", nameBlob));
+
+                    if (TableExists(conn, tx, "get_userinfo_template")
+                        && ColumnExists(conn, tx, "get_userinfo_template", "seed_character_id"))
+                    {
+                        if (ColumnExists(conn, tx, "get_userinfo_template", "id"))
+                        {
+                            updatedTemplateRows += ExecuteNonQuery(conn, tx, @"
+INSERT OR IGNORE INTO get_userinfo_template (id, seed_character_id)
+VALUES (1, @seed);",
+                                ("@seed", replacementSeedCharacterId));
+                        }
+
+                        updatedTemplateRows += ExecuteNonQuery(conn, tx, @"
+UPDATE get_userinfo_template
+SET seed_character_id = @seed
+WHERE seed_character_id = @cid
+   OR NOT EXISTS (
+       SELECT 1
+       FROM characters c
+       WHERE c.character_id = get_userinfo_template.seed_character_id
+         AND c.delete_flag = 0
+   );",
+                            ("@seed", replacementSeedCharacterId),
+                            ("@cid", characterId));
+                    }
+
+                    var deletedCharacterRows = ExecuteNonQuery(conn, tx,
+                        "DELETE FROM characters WHERE character_id = @cid;",
+                        ("@cid", characterId));
+                    if (deletedCharacterRows == 0)
+                        return Error("角色删除失败: " + characterId);
+
+                    tx.Commit();
+
+                    return new
+                    {
+                        success = true,
+                        characterId,
+                        accountId,
+                        name,
+                        deletedQuestRows,
+                        deletedAuditRows,
+                        deletedItemRows,
+                        deletedAccountEntryRows,
+                        updatedTemplateRows,
+                        replacementSeedCharacterId,
+                        deletedCharacterRows,
+                    };
                 }
             }
         }
 
+        private static int ResolveReplacementSeedCharacterId(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int accountId,
+            int deletedCharacterId)
+        {
+            var sameAccount = ExecuteScalarInt(conn, tx, @"
+SELECT character_id
+FROM characters
+WHERE account_id = @aid
+  AND character_id <> @cid
+  AND delete_flag = 0
+ORDER BY character_id
+LIMIT 1;",
+                ("@aid", accountId),
+                ("@cid", deletedCharacterId));
+            if (sameAccount > 0)
+                return sameAccount;
+
+            var anyActive = ExecuteScalarInt(conn, tx, @"
+SELECT character_id
+FROM characters
+WHERE character_id <> @cid
+  AND delete_flag = 0
+ORDER BY character_id
+LIMIT 1;",
+                ("@cid", deletedCharacterId));
+            return anyActive > 0 ? anyActive : 1000;
+        }
+
+        private static int ExecuteScalarInt(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            string sql,
+            params (string Name, object Value)[] parameters)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = sql;
+                foreach (var parameter in parameters)
+                    cmd.Parameters.AddWithValue(parameter.Name, parameter.Value ?? DBNull.Value);
+                var value = cmd.ExecuteScalar();
+                return value == null || value == DBNull.Value ? 0 : Convert.ToInt32(value);
+            }
+        }
+
+        private static int ExecuteNonQuery(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            string sql,
+            params (string Name, object Value)[] parameters)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = sql;
+                foreach (var parameter in parameters)
+                    cmd.Parameters.AddWithValue(parameter.Name, parameter.Value ?? DBNull.Value);
+                return cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static bool TableExists(SqliteConnection conn, SqliteTransaction tx, string tableName)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = @name;";
+                cmd.Parameters.AddWithValue("@name", tableName);
+                return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+            }
+        }
+
+        private static bool ColumnExists(SqliteConnection conn, SqliteTransaction tx, string tableName, string columnName)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info(@table) WHERE name = @column;";
+                cmd.Parameters.AddWithValue("@table", tableName);
+                cmd.Parameters.AddWithValue("@column", columnName);
+                return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+            }
+        }
+
         // 玩家实际看到的 SP/TP: 总点数(等级表+加成) 与 剩余点数(扣除已学技能),
-        // 用服务端 SkillStateService.LoadAndSync 同一条链计算。
-        // growType 必须解码传入: 免费基线含转职送技/觉醒技, 缺了会把送技误计为花费。
+        // 用服务端 SkillStateService.LoadAndSync 同一条链计算
         public object GetSpTp(int characterId)
         {
-            byte job, level, growTypeRaw;
+            byte job, level;
             int bonusSp, bonusTp;
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT job, level, bonus_sp, bonus_tp, grow_type FROM characters WHERE character_id = @cid;";
+                    cmd.CommandText = "SELECT job, level, bonus_sp, bonus_tp FROM characters WHERE character_id = @cid;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
                     {
@@ -264,24 +539,19 @@ FROM characters WHERE character_id = @cid;";
                         level = (byte)reader.GetInt32(1);
                         bonusSp = reader.GetInt32(2);
                         bonusTp = reader.GetInt32(3);
-                        growTypeRaw = (byte)reader.GetInt32(4);
                     }
                 }
             }
 
             try
             {
-                DfoGmTool.ServerCore.Game.Characters.CharacterStatComputer.DecodeGrowType(
-                    growTypeRaw, out var firstGrow, out var secondGrow);
                 var repository = new DfoGmTool.ServerCore.Game.CharacterData.SqliteCharacterProgressRepository(
                     _config.DatabasePath, _config.SchemaPath);
                 var synced = DfoGmTool.ServerCore.Game.Skills.SkillStateService.LoadAndSync(
-                    repository, characterId, job, level, bonusSp, bonusTp, persist: false,
-                    growType: firstGrow, secondGrowType: secondGrow);
+                    repository, characterId, job, level, bonusSp, bonusTp, persist: false);
                 if (synced.Points == null)
                     return Error("技能点状态加载失败");
 
-                // 四池独立(page0=PVE树, page1=PVP树), 与服务端 INIT 包 header/tail 同源。
                 return new
                 {
                     characterId,
@@ -289,8 +559,6 @@ FROM characters WHERE character_id = @cid;";
                     remainingSp = synced.Points.RemainingSp,
                     totalTp = synced.Points.TotalTp,
                     remainingTp = synced.Points.RemainingTp,
-                    remainingSpPvp = synced.Points.RemainingSpPage1,
-                    remainingTpPvp = synced.Points.RemainingTpPage1,
                     bonusSp,
                     bonusTp,
                 };
@@ -336,53 +604,42 @@ WHERE character_id = @cid;";
         // 转职/觉醒写入, 与服务端 QuestService.UpdateGrowType 同语义:
         // grow_type 低4位=转职 高4位=觉醒, 改完用当前等级/经验重走
         // PersistLevelAndExp(它按库里新 grow_type 重算战斗属性, 同一事务)
-        private bool ApplyGrowType(int characterId, int? first, int? second)
+        private bool ApplyGrowType(int characterId, int? job, int? first, int? second)
         {
             byte level;
             uint exp;
             int current;
+            int currentJob;
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT grow_type, level, exp FROM characters WHERE character_id = @cid;";
+                    cmd.CommandText = "SELECT job, grow_type, level, exp FROM characters WHERE character_id = @cid;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
                     {
                         if (!reader.Read())
                             return false;
-                        current = reader.GetInt32(0);
-                        level = (byte)reader.GetInt32(1);
-                        exp = (uint)reader.GetInt64(2);
+                        currentJob = reader.GetInt32(0);
+                        current = reader.GetInt32(1);
+                        level = (byte)reader.GetInt32(2);
+                        exp = (uint)reader.GetInt64(3);
                     }
                 }
 
                 var firstGrow = first ?? (current & 0xF);
                 var secondGrow = second ?? ((current >> 4) & 0xF);
+                var targetJob = job ?? currentJob;
                 var packed = (byte)((secondGrow << 4) | (firstGrow & 0xF));
 
-                using (var tx = conn.BeginTransaction())
+                using (var cmd = conn.CreateCommand())
                 {
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.Transaction = tx;
-                        cmd.CommandText = "UPDATE characters SET grow_type = @grow, updated_at = CURRENT_TIMESTAMP WHERE character_id = @cid;";
-                        cmd.Parameters.AddWithValue("@grow", (int)packed);
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-
-                    // 与服务端转职流程(清空重建+送技)同口径: 清掉技能表,
-                    // 下次选角由服务端按新 grow_type 重建面板, SP/TP 随派生自动回满。
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.Transaction = tx;
-                        cmd.CommandText = "DELETE FROM character_skills WHERE character_id = @cid;";
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    tx.Commit();
+                    cmd.CommandText = "UPDATE characters SET job = @job, grow_type = @grow, updated_at = CURRENT_TIMESTAMP WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@job", targetJob);
+                    cmd.Parameters.AddWithValue("@grow", (int)packed);
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.ExecuteNonQuery();
                 }
             }
 
@@ -396,13 +653,13 @@ WHERE character_id = @cid;";
             if (meta == null || meta.GrowNumber <= 0)
                 return false;
             if (meta.JobChangeQuestValue == 1)
-                return ApplyGrowType(characterId, meta.GrowNumber, null);
+                return ApplyGrowType(characterId, null, meta.GrowNumber, null);
             if (meta.JobChangeQuestValue == 2)
-                return ApplyGrowType(characterId, null, meta.GrowNumber);
+                return ApplyGrowType(characterId, null, null, meta.GrowNumber);
             return false;
         }
 
-        public object GetGrowOptions(int characterId)
+        public object GetGrowOptions(int characterId, int? selectedJob)
         {
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
@@ -417,31 +674,37 @@ WHERE character_id = @cid;";
                             return Error("角色不存在: " + characterId);
                         var job = reader.GetInt32(0);
                         var grow = reader.GetInt32(1);
+                        var optionJob = selectedJob ?? job;
+                        var optionGrow = optionJob == job ? grow : 0;
                         return new
                         {
                             characterId,
-                            job,
-                            first = grow & 0xF,
-                            second = (grow >> 4) & 0xF,
-                            options = _pvfIndex.GetJobGrowOptions(job),
+                            currentJob = job,
+                            job = optionJob,
+                            first = optionGrow & 0xF,
+                            second = (optionGrow >> 4) & 0xF,
+                            jobs = _pvfIndex.GetAllJobOptions(),
+                            options = _pvfIndex.GetJobGrowOptions(optionJob),
                         };
                     }
                 }
             }
         }
 
-        public object SetGrowType(int characterId, int first, int second)
+        public object SetGrowType(int characterId, int? job, int first, int second)
         {
+            if (job.HasValue && (job.Value < 0 || job.Value > byte.MaxValue))
+                return Error("职业范围 0-255");
             // 与服务端 CharacterStatComputer.ComputeStat 的守卫一致
             if (first < 0 || first > 5 || second < 0 || second > 2)
                 return Error("转职范围 0-5, 觉醒范围 0-2");
             if (second > 0 && first == 0)
                 return Error("未转职不能设置觉醒");
 
-            if (!ApplyGrowType(characterId, first, second))
+            if (!ApplyGrowType(characterId, job, first, second))
                 return Error("角色不存在或写入失败: " + characterId);
 
-            return new { success = true, characterId, first, second, skillsReset = true };
+            return new { success = true, characterId, job, first, second };
         }
     }
 }

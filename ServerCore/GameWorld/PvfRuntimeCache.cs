@@ -11,16 +11,24 @@ namespace DfoGmTool.ServerCore.GameWorld
     {
         internal static void ResetForPvfChange()
         {
-            CharacterSkillProfile.ResetForPvfChange();
             CharacterStatComputer.ResetForPvfChange();
             ExpTableProvider.ResetForPvfChange();
             InitialCharacterSkills.ResetForPvfChange();
             ItemMetadataResolver.ResetForPvfChange();
+            AmplifyInitialValueResolver.ResetForPvfChange();
+            AvatarAbilityDataProvider.ResetForPvfChange();
+            AvatarDurationResolver.ResetForPvfChange();
             CreatureExtraResolver.ResetForPvfChange();
             RentalWeaponInventoryMapper.ResetForPvfChange();
             SkillDataProvider.ResetForPvfChange();
             SpTableProvider.ResetForPvfChange();
             SqliteInventoryStore.ResetForPvfChange();
+        }
+
+        internal static void WarmForPvfChange()
+        {
+            SkillDataProvider.WarmUp();
+            AvatarAbilityDataProvider.WarmUp();
         }
     }
 }

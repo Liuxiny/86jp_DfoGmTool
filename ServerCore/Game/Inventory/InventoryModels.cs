@@ -3,6 +3,7 @@
 // 保留成员与原版逐字一致
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 
 namespace DfoGmTool.ServerCore.Game.Inventory
 {
@@ -11,6 +12,27 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     public static class ItemQuality
     {
         public const uint TopQualitySeed = 999999998u;
+
+        public static uint ResolveSeed(ItemQualityMode mode)
+        {
+            if (mode == ItemQualityMode.Top)
+                return TopQualitySeed;
+
+            uint seed;
+            do
+            {
+                seed = unchecked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue));
+            }
+            while (seed == TopQualitySeed);
+
+            return seed;
+        }
+    }
+
+    public enum ItemQualityMode
+    {
+        Random = 0,
+        Top = 1,
     }
 
     public sealed class ItemGrantResult

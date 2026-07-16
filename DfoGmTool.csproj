@@ -27,6 +27,10 @@
     <Content Include="ServerCore\Sqlite\item_schema.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Update="awakening_skill_grants.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
     <EmbeddedResource Include="config.ini" LogicalName="DfoGmTool.config.ini" />
   </ItemGroup>
   <Target Name="CopyDefaultConfigToBuildOutput" AfterTargets="Build" Condition="!Exists('$(OutDir)config.ini')">

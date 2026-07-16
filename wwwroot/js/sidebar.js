@@ -192,6 +192,16 @@ function renderAccountPanel(accountId, detail) {
   if (detail.cargo.length === 0)
     cargoBody.innerHTML = '<tr><td colspan="6" class="hint">账号金库为空</td></tr>';
 
+  $('#btn-max-cargo').onclick = async () => {
+    try {
+      const r = await post(`/api/accounts/${accountId}/cargo/max`);
+      toast(`账号金库满级已设置: ${r.listParam16}`);
+      showAccountPanel();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+
   $('#btn-clear-cargo').onclick = async () => {
     if (detail.cargo.length === 0)
       return toast('账号金库已是空的', true);
@@ -202,6 +212,70 @@ function renderAccountPanel(accountId, detail) {
       toast(`已清空账号金库 (${r.deleted} 件)`);
       showAccountPanel();
     } catch (e) {
+      toast(e.message, true);
+    }
+  };
+
+  bindAccountBackupPanel(accountId);
+}
+
+function bindAccountBackupPanel(accountId) {
+  const state = $('#account-backup-state');
+  const fileInput = $('#account-backup-file');
+
+  $('#btn-export-account-backup').onclick = async () => {
+    try {
+      if (state) state.textContent = '正在导出...';
+      const backup = await post(`/api/accounts/${accountId}/backup`);
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const link = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      link.href = URL.createObjectURL(blob);
+      link.download = `账号备份-account_${accountId}-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+      if (state) state.textContent = `已导出 ${backup.tables?.length || 0} 张表，${backup.characterIDs?.length || 0} 个角色。`;
+      toast('账号备份已导出');
+    } catch (e) {
+      if (state) state.textContent = e.message;
+      toast(e.message, true);
+    }
+  };
+
+  if (fileInput) {
+    fileInput.onchange = () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (state) state.textContent = file ? `已选择: ${file.name}` : '';
+    };
+  }
+
+  $('#btn-restore-account-backup').onclick = async () => {
+    const file = fileInput && fileInput.files && fileInput.files[0];
+    if (!file) return toast('请先选择备份 JSON 文件', true);
+
+    const confirmText = prompt('恢复会覆盖备份文件内账号 ID 对应的当前账号数据。请输入“恢复账号”确认。');
+    if (confirmText !== '恢复账号')
+      return toast('已取消恢复', true);
+
+    try {
+      if (state) state.textContent = '正在读取备份...';
+      const backup = JSON.parse(await file.text());
+      if (state) state.textContent = '正在恢复备份...';
+      const result = await post('/api/accounts/restore', backup);
+      if (state) {
+        state.textContent =
+          `已恢复账号 #${result.accountID}，角色 ${result.restoredCharacterCount} 个，覆盖旧角色 ${result.deletedExistingCharacterCount} 个。`;
+      }
+      toast('账号备份已恢复');
+      await loadAccounts(runtimeSourceEpoch);
+      if (result.accountID) {
+        $('#account-select').value = String(result.accountID);
+        await showAccountPanel();
+      }
+    } catch (e) {
+      if (state) state.textContent = e.message;
       toast(e.message, true);
     }
   };
@@ -319,6 +393,7 @@ async function selectCharacter(id, li) {
     const c = await api('/api/characters/' + id);
     if (epoch !== selectEpoch) return; // 期间又切了别的角色, 本次结果作废
     currentChar = c;
+    clearGiveConfiguration();
     $('#account-panel').classList.add('hidden');
     $('#detail').classList.remove('hidden');
     $('#char-header').innerHTML =
@@ -335,6 +410,7 @@ async function selectCharacter(id, li) {
     loadMainQuests();
     loadAchieveQuests();
     loadClearedQuests();
+    searchItems(0);
   } catch (e) {
     toast(e.message, true);
   }

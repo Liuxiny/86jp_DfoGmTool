@@ -28,6 +28,7 @@ namespace DfoGmTool.Services
         private volatile Dictionary<string, string> _regionNames;
         private volatile Dictionary<int, string> _dungeonRegion;
         private volatile Dictionary<int, int> _mapDungeon;
+        private volatile List<int> _dungeonPermissionIds;
         private volatile HashSet<string> _openHubKeys;
         private volatile Dictionary<int, JobNameInfo> _jobNames;
         private volatile List<ItemEntry> _searchList;
@@ -72,6 +73,7 @@ namespace DfoGmTool.Services
                 _regionNames = BuildRegionNames(archive);
                 _dungeonRegion = BuildDungeonRegionMap(archive);
                 _mapDungeon = BuildMapDungeonMap(archive);
+                _dungeonPermissionIds = BuildDungeonPermissionIds(archive);
                 _openHubKeys = BuildOpenHubKeys(archive);
                 BuildKind(archive, "equipment/equipment.lst", "equipment", itemNames, searchList);
                 BuildKind(archive, "stackable/stackable.lst", "stackable", itemNames, searchList);

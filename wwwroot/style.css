@@ -747,6 +747,85 @@ td input.val-input {
   overflow-x: auto;
 }
 
+.give-config-card {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.give-config-head,
+.give-config-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.give-config-head {
+  margin-bottom: 12px;
+}
+
+.give-config-title {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.give-config-meta {
+  color: var(--text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.give-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 12px;
+}
+
+.give-config-field {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.give-config-field > span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.give-config-field input,
+.give-config-field select {
+  width: 100%;
+  min-width: 0;
+}
+
+.give-config-value {
+  min-height: 34px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.give-config-actions {
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+#search-results tr.config-selected td,
+#item-table tr.config-selected td {
+  background: var(--surface-selected);
+}
+
 .stats-table { max-width: 560px; }
 .stats-table td.dim { color: var(--text-dim); }
 
@@ -859,6 +938,31 @@ table .hint { font-size: inherit; }
 .hint.err { color: var(--danger); }
 
 .hidden { display: none !important; }
+
+.password-inline {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.password-inline input {
+  flex: 1;
+  min-width: 0;
+}
+
+.clone-option-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 12px;
+  margin: 10px 0;
+}
+
+.clone-option-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
 
 .toast {
   position: fixed;
@@ -975,6 +1079,16 @@ button,
 
   .inventory-table-wrap > table {
     min-width: 760px;
+  }
+
+  .give-config-card {
+    min-width: 0;
+  }
+
+  .give-config-head,
+  .give-config-actions {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 }
 

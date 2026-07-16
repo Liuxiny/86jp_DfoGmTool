@@ -35,7 +35,26 @@ $('#btn-clear-category').onclick = clearCurrentCategory;
 $('#inventory-expiration').onchange = () => { invPage = 0; renderItemTable(); };
 $('#btn-account-panel').onclick = showAccountPanel;
 $('#btn-set-level').onclick = setLevel;
+$('#btn-max-personal-cargo').onclick = maxPersonalCargo;
+$('#btn-unlock-dungeon-permissions').onclick = unlockDungeonPermissions;
+$('#btn-delete-character').onclick = deleteCurrentCharacter;
+$('#btn-open-character-clone').onclick = openCharacterClonePanel;
+$('#btn-cancel-character-clone').onclick = closeCharacterClonePanel;
+$('#clone-target-account').onchange = updateCloneAccountLimit;
+$('#btn-check-clone-name').onclick = checkCloneCharacterName;
+$('#clone-character-name').addEventListener('input', () => {
+  cloneNameAvailable = false;
+  $('#clone-name-state').textContent = '';
+});
+$('#btn-run-character-clone').onclick = runCharacterClone;
+$('#btn-open-clone-account').onclick = openCloneAccountPanel;
+$('#btn-close-clone-account').onclick = closeCloneAccountPanel;
+$('#clone-account-form').onsubmit = createCloneAccount;
+$('#btn-toggle-clone-password').onclick = () => togglePasswordInput('#clone-account-password', '#btn-toggle-clone-password');
+$('#btn-toggle-clone-password-confirm').onclick = () => togglePasswordInput('#clone-account-password-confirm', '#btn-toggle-clone-password-confirm');
 $('#btn-sp').onclick = adjustSp;
+$('#btn-zero-sptp').onclick = zeroRemainingSpTp;
+$('#grow-job').onchange = loadGrowOptionsForJob;
 $('#grow-first').onchange = renderSecondOptions;
 $('#btn-grow').onclick = setGrowType;
 
@@ -68,8 +87,10 @@ document.querySelectorAll('.acc-tab').forEach((tab) => {
 
 $('#btn-refresh-quests').onclick = loadQuests;
 $('#btn-refresh-main').onclick = loadMainQuests;
+$('#btn-complete-current-main').onclick = completeCurrentLevelMainQuests;
 $('#btn-refresh-achieve').onclick = loadAchieveQuests;
 $('#btn-titlebook-all').onclick = completeAllTitleBook;
+$('#btn-titlebook-unclear-page').onclick = unclearCurrentTitleBookPage;
 $('#btn-refresh-cleared').onclick = loadClearedQuests;
 $('#btn-quest-search').onclick = searchQuestLib;
 $('#quest-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchQuestLib(); });

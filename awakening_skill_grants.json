@@ -1,0 +1,522 @@
+{
+  "grants": [
+    {
+      "job": 0,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 33, "level": 1 },
+        { "skillId": 86, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 94, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 0,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 87, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 93, "level": 1 }
+      ]
+    }
+	
+	,
+	{
+      "job": 0,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 85, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 56, "level": 1 }
+      ]
+    }
+	
+	,
+	{
+      "job": 0,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 88, "level": 1},
+        { "skillId": 197, "level": 1},
+        { "skillId": 61, "level": 1 }
+      ]
+    }
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	,
+	{
+      "job": 1,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 67, "level": 1 },
+        { "skillId": 197, "level": 1},
+        { "skillId": 97, "level": 1 }
+      ]
+    }
+	,
+	{
+      "job": 1,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 71, "level": 1},
+        { "skillId": 197, "level": 1},
+        { "skillId": 56, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 1,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 64, "level": 1 },
+        { "skillId": 197, "level": 1},
+        { "skillId": 73, "level": 1 }
+      ]
+    }
+	,
+	{
+      "job": 1,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 63, "level": 1 },
+        { "skillId": 197, "level": 1},
+        { "skillId": 57, "level": 1 }
+      ]
+    }
+	
+
+	,
+	{
+      "job": 2,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 64, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 55, "level": 1}
+      ]
+    }
+	
+
+	,
+	{
+      "job": 2,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 54, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 92, "level": 1 }
+      ]
+    }
+	
+
+	,
+	{
+      "job": 2,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 67, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 91, "level": 1}
+      ]
+    }
+	
+
+	,
+	{
+      "job": 2,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 70, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 61, "level": 1 }
+      ]
+    }
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	,
+	{
+      "job": 3,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 74, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 107, "level": 1 }
+      ]
+    }
+	
+
+	,
+	{
+      "job": 3,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 82, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 108, "level": 1}
+      ]
+    }
+	
+
+	,
+	{
+      "job": 3,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 83, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 67, "level": 1}
+      ]
+    }
+	
+	,
+	{
+      "job": 3,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 109, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 102, "level": 1}
+      ]
+    }
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	,
+	{
+      "job": 4,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 84, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 34, "level": 1 }
+      ]
+    }
+	
+
+	,
+	{
+      "job": 4,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 90, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 91, "level": 1}
+      ]
+    }
+	
+
+	,
+	{
+      "job": 4,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 93, "level": 1 },
+        { "skillId": 197, "level": 1 },
+		{ "skillId": 92, "level": 1 },
+        { "skillId": 96, "level": 1}
+      ]
+    }
+	
+	,
+	{
+      "job": 4,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 119, "level": 1 },
+        { "skillId": 120, "level": 1 },
+		{ "skillId": 197, "level": 1 },
+        { "skillId": 126, "level": 1}
+      ]
+    }
+	
+	
+	
+	
+	
+	
+	
+	
+	,
+	{
+      "job": 5,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 233, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 55, "level": 1 }
+      ]
+    }
+	
+
+	,
+	{
+      "job": 5,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 97, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 92, "level": 1}
+      ]
+    }
+	
+
+	,
+	{
+      "job": 5,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 96, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 91, "level": 1}
+      ]
+    }
+	
+	,
+	{
+      "job": 5,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 98, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 61, "level": 1}
+      ]
+    }
+	
+	
+	
+	
+	
+	
+	,
+	{
+      "job": 6,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 57, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 61, "level": 1 }
+      ]
+    }
+	,
+	{
+      "job": 6,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 59, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 62, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 6,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 97, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 63, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 6,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 114, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 64, "level": 1}
+      ]
+    }
+	
+	
+	
+	
+	
+	
+	,
+	{
+      "job": 7,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 67, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 97, "level": 1 }
+      ]
+    }
+	,
+	{
+      "job": 7,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 41, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 56, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 7,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 105, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 73, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 7,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 63, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 57, "level": 1}
+      ]
+    }
+	
+	
+	
+	
+	
+	
+	
+	,
+	{
+      "job": 8,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 49, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 36, "level": 1 }
+      ]
+    }
+	,
+	{
+      "job": 8,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 48, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 37, "level": 1}
+      ]
+    }
+	
+	
+	
+	,
+	{
+      "job": 9,
+      "growType": [0],
+      "skills": [
+        { "skillId": 56, "level": 1},
+        { "skillId": 197, "level": 1 },
+		{ "skillId": 93, "level": 1 },
+		{ "skillId": 94, "level": 1 },
+        { "skillId": 61, "level": 1}
+      ]
+    }
+	
+	
+	
+	,
+	{
+      "job": 10,
+      "growType": [0],
+      "skills": [
+        { "skillId": 197, "level": 1 },
+		{ "skillId": 196, "level": 1 }
+
+      ]
+    }
+	
+	
+	
+	
+	,
+	{
+      "job": 11,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 54, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 22, "level": 1 }
+      ]
+    }
+	,
+	{
+      "job": 11,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 74, "level": 1},
+        { "skillId": 197, "level": 1 },
+        { "skillId": 24, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 11,
+      "growType": [19, 35],
+      "skills": [
+        { "skillId": 19, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 23, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 11,
+      "growType": [20, 36],
+      "skills": [
+        { "skillId": 73, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 25, "level": 1}
+      ]
+    }
+	
+	
+	
+	,
+	{
+      "job": 12,
+      "growType": [17, 33],
+      "skills": [
+        { "skillId": 51, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 22, "level": 1}
+      ]
+    }
+	,
+	{
+      "job": 12,
+      "growType": [18, 34],
+      "skills": [
+        { "skillId": 76, "level": 1 },
+        { "skillId": 197, "level": 1 },
+        { "skillId": 77, "level": 1}
+      ]
+    }
+  ]
+}

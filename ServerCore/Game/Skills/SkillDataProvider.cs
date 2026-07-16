@@ -13,40 +13,22 @@ namespace DfoGmTool.ServerCore.Game.Skills
     public sealed class SkillStaticData
     {
         public int Job;
-        public int SkillIndex;
+        public int SkillIndex;          
         public string PvfPath;
         public string Name;
-        public bool IsActive;
-        public int MaxLevel = 1;
-        public int RequiredLevel;
-        public int NumGrowtypes;
-        public int RawGroup;
+        public bool IsActive;           
+        public bool IsPassive;
+        public int MaxLevel = 1;        
+        public int RequiredLevel;       
+        public int NumGrowtypes;        
+        public int[] SkillFitnessGrowtypes;
+        public int[] SkillFitnessSecondGrowtypes;
+        public int RawGroup;            
         public bool IsSpecial;
         public bool IsTpSkill;
         public int[] PreRequiredSkills;
         public int[] SpCostPerLevel;
         public int[] TpCostPerLevel;
-        // 逐 growType 等级上限(6槽, 按 growType 0-5 索引); 上限 0 = 该方向不可学
-        public int[] GrowtypeMaxLevels;
-        // 逐 觉醒段 等级上限(12槽 = growType*2 + (觉醒段-1)); 0 = 不可学
-        public int[] SecondGrowtypeMaxLevels;
-        // 等级门槛间隔: reqLevel + (targetLv-1)*levelInterval <= characLevel
-        public int LevelInterval = 1;
-        // [fixed level skill] 标志: 等级按角色等级自动派生, purchase cost=0, 不消耗 SP。
-        // 公式: base + max(0, charLevel-reqLevel) / interval * addPerInterval
-        public bool IsFixedLevelSkill;
-        public int FixedLevelBase;
-        public int FixedLevelInterval = 1;
-        public int FixedLevelAddPerInterval = 1;
-
-        public int GetFixedLevel(int charLevel)
-        {
-            if (!IsFixedLevelSkill) return 0;
-            if (charLevel < RequiredLevel) return 0;
-            var level = FixedLevelBase + (charLevel - RequiredLevel) / FixedLevelInterval * FixedLevelAddPerInterval;
-            var maxLv = MaxLevel > 0 ? MaxLevel : int.MaxValue;
-            return Math.Min(level, maxLv);
-        }
 
         public int SpCostFor(int fromLevel, int toLevel)
         {
@@ -71,42 +53,19 @@ namespace DfoGmTool.ServerCore.Game.Skills
             }
             return sum;
         }
-
-        // 该 (growType, 觉醒段) 下的等级上限。老服口径(CSkill::can_learn):
-        // 觉醒段>0 先查 12 槽表(growType*2+段-1), 值为 0 再回落 6 槽表;
-        // 两表都缺省(数组为空)时回落 MaxLevel; 最终 0 = 该方向不可学。
-        public int GetMaxLevelFor(int growType, int secondGrowType)
-        {
-            if (secondGrowType > 0
-                && SecondGrowtypeMaxLevels != null
-                && SecondGrowtypeMaxLevels.Length > 0)
-            {
-                var idx = growType * 2 + (secondGrowType - 1);
-                var secondMax = idx >= 0 && idx < SecondGrowtypeMaxLevels.Length
-                    ? SecondGrowtypeMaxLevels[idx]
-                    : 0;
-                if (secondMax > 0)
-                    return secondMax;
-            }
-
-            if (GrowtypeMaxLevels != null && GrowtypeMaxLevels.Length > 0)
-            {
-                return growType >= 0 && growType < GrowtypeMaxLevels.Length
-                    ? GrowtypeMaxLevels[growType]
-                    : 0;
-            }
-
-            return MaxLevel;
-        }
-
-        // 注: [skill fitness growtype]/[skill fitness second growtype] 是技能从属标记
-        // (记录该技能属于哪些方向/觉醒段), 不是 SP 折扣——"fitness=百分比折扣"的旧解读
-        // 已被实测推翻(斩铁式+1 真机成本 45 整)。门禁走 GetMaxLevelFor, 成本走费用表原值;
-        // fitness 数组仅剩的用途是 NumGrowtypes(数组长度)参与槽位分组。
     }
 
+    
+    
+    
+    
     public static class SkillDataProvider
     {
+        internal const int MaximumAvatarOptionRequiredLevel = 45;
+        private static readonly HashSet<int> NonCombatSkillIds = new HashSet<int>
+        {
+            179, 181, 182, 183, 184, 191, 192, 193, 194,
+        };
         private static readonly object _lock = new object();
         
         private static Dictionary<int, Dictionary<int, string>> _jobSkillPaths;
@@ -119,6 +78,14 @@ namespace DfoGmTool.ServerCore.Game.Skills
             {
                 _jobSkillPaths = null;
                 _cache.Clear();
+            }
+        }
+
+        internal static void WarmUp()
+        {
+            lock (_lock)
+            {
+                EnsureJobIndexLoaded();
             }
         }
 
@@ -140,6 +107,88 @@ namespace DfoGmTool.ServerCore.Game.Skills
                 _cache[key] = data; 
                 return data;
             }
+        }
+
+        public static IReadOnlyList<SkillStaticData> GetAvatarOptionSkills(int job, int avatarGrade)
+        {
+            var result = new List<SkillStaticData>();
+            lock (_lock)
+            {
+                EnsureJobIndexLoaded();
+                if (!_jobSkillPaths.TryGetValue(job, out var paths))
+                    return result;
+
+                foreach (var pair in paths)
+                {
+                    if (pair.Key < 0 || pair.Key > byte.MaxValue)
+                        continue;
+                    SkillStaticData skill;
+                    try
+                    {
+                        skill = GetSkillWithoutLock(job, pair.Key, pair.Value);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+                    if (!IsValidAvatarOptionSkill(skill, avatarGrade))
+                        continue;
+                    result.Add(skill);
+                }
+            }
+            result.Sort((left, right) =>
+            {
+                return left.SkillIndex.CompareTo(right.SkillIndex);
+            });
+            return result;
+        }
+
+        public static bool IsValidAvatarOptionSkill(
+            SkillStaticData skill,
+            int avatarGrade)
+        {
+            if (skill == null || string.IsNullOrWhiteSpace(skill.Name))
+                return false;
+            if (skill.IsTpSkill || skill.IsSpecial || skill.RequiredLevel <= 0)
+                return false;
+            var advancedOrHigher = avatarGrade >= 2;
+            if (advancedOrHigher)
+            {
+                if (!skill.IsActive && !skill.IsPassive)
+                    return false;
+            }
+            else if (!skill.IsActive || skill.RequiredLevel > MaximumAvatarOptionRequiredLevel)
+                return false;
+            if (NonCombatSkillIds.Contains(skill.SkillIndex)
+                || skill.Name.IndexOf("((", StringComparison.Ordinal) >= 0
+                || skill.Name.IndexOf("不使用", StringComparison.OrdinalIgnoreCase) >= 0)
+                return false;
+
+            return true;
+        }
+
+        private static SkillStaticData GetSkillWithoutLock(int job, int skillIndex, string path)
+        {
+            var key = (job << 16) | (skillIndex & 0xFFFF);
+            if (_cache.TryGetValue(key, out var cached))
+                return cached;
+            SkillStaticData data;
+            try { data = ParseSkill(job, skillIndex, path); }
+            catch { data = null; }
+            _cache[key] = data;
+            return data;
+        }
+
+        private static bool IsAllowedForGrowType(int[] allowed, int firstGrowType)
+        {
+            if (allowed == null || allowed.Length == 0)
+                return true;
+            foreach (var value in allowed)
+            {
+                if (value == firstGrowType)
+                    return true;
+            }
+            return false;
         }
         private static void EnsureJobIndexLoaded()
         {
@@ -174,22 +223,18 @@ namespace DfoGmTool.ServerCore.Game.Skills
                 PvfPath = sklRel,
                 Name = skl.Name,
                 IsActive = skl.Type != null && skl.Type.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0,
+                IsPassive = skl.Type != null && skl.Type.IndexOf("passive", StringComparison.OrdinalIgnoreCase) >= 0,
                 MaxLevel = skl.MaximumLevel > 0 ? skl.MaximumLevel : 1,
                 RequiredLevel = skl.RequiredLevel > 0 ? skl.RequiredLevel : 0,
                 NumGrowtypes = CountInts(skl.SkillFitnessGrowtype),
+                SkillFitnessGrowtypes = ParseInts(skl.SkillFitnessGrowtype),
+                SkillFitnessSecondGrowtypes = ParseInts(skl.SkillFitnessSecondGrowtype),
                 RawGroup = skl.SkillClass >= 0 ? skl.SkillClass : 0,
                 IsSpecial = skillIndex >= 200 && skillIndex <= 208,
                 IsTpSkill = !string.IsNullOrWhiteSpace(skl.FeatureSkillType) && skl.FeatureSkillType.Trim() != "0",
                 PreRequiredSkills = ParseInts(skl.PreRequiredSkill),
                 SpCostPerLevel = ParseInts(skl.PurchaseCost),
                 TpCostPerLevel = ParseInts(skl.SpecialPurchaseCost),
-                GrowtypeMaxLevels = ParseInts(skl.GrowtypeMaximumLevel),
-                SecondGrowtypeMaxLevels = ParseInts(skl.SecondGrowtypeMaximumLevel),
-                LevelInterval = ParseLevelInterval(skl.RequiredLevelRange),
-                IsFixedLevelSkill = skl.IsFixedLevelSkill,
-                FixedLevelBase = skl.FixedLevelBase,
-                FixedLevelInterval = skl.FixedLevelInterval,
-                FixedLevelAddPerInterval = skl.FixedLevelAddPerInterval,
             };
             return data;
         }
@@ -239,13 +284,6 @@ namespace DfoGmTool.ServerCore.Game.Skills
             foreach (var tok in s.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                 if (int.TryParse(tok, out _)) c++;
             return c;
-        }
-
-        private static int ParseLevelInterval(string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return 1;
-            if (int.TryParse(s.Trim(), out var v) && v > 0) return v;
-            return 1;
         }
     }
 }

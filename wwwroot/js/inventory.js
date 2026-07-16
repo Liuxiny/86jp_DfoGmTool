@@ -67,6 +67,20 @@ let inventoryItems = [];
 let activeCategory = '全部';
 const INV_PAGE_SIZE = 10;
 let invPage = 0; // 切分类归零; 数据刷新后越界自动回退末页
+let inventoryConfiguration = null;
+let inventoryConfigurationEpoch = 0;
+
+function clearInventoryConfiguration() {
+  inventoryConfigurationEpoch++;
+  inventoryConfiguration = null;
+  const card = $('#inventory-config-card');
+  if (card) {
+    card.innerHTML = '';
+    card.classList.add('hidden');
+  }
+  document.querySelectorAll('#item-table tr.config-selected')
+    .forEach((row) => row.classList.remove('config-selected'));
+}
 
 async function loadItems() {
   if (!currentChar) return;
@@ -96,7 +110,7 @@ function renderCategoryNav() {
   const all = document.createElement('div');
   all.className = 'cat' + (activeCategory === '全部' ? ' active' : '');
   all.innerHTML = `<span>全部</span><span class="cnt">${inventoryItems.length}</span>`;
-  all.onclick = () => { activeCategory = '全部'; invPage = 0; renderCategoryNav(); renderItemTable(); };
+  all.onclick = () => { activeCategory = '全部'; invPage = 0; clearInventoryConfiguration(); renderCategoryNav(); renderItemTable(); };
   nav.appendChild(all);
 
   for (const group of CATEGORY_GROUPS) {
@@ -112,7 +126,7 @@ function renderCategoryNav() {
       const el = document.createElement('div');
       el.className = 'cat' + (activeCategory === category ? ' active' : '');
       el.innerHTML = `<span>${escapeHtml(category)}</span><span class="cnt">${counts.get(category)}</span>`;
-      el.onclick = () => { activeCategory = category; invPage = 0; renderCategoryNav(); renderItemTable(); };
+      el.onclick = () => { activeCategory = category; invPage = 0; clearInventoryConfiguration(); renderCategoryNav(); renderItemTable(); };
       nav.appendChild(el);
     }
   }
@@ -179,6 +193,105 @@ async function clearCurrentCategory() {
   }
 }
 
+function renderInventoryActionCell(item) {
+  const buttons = [];
+  if (item.configurable)
+    buttons.push('<button class="mini" data-act="config">配置</button>');
+  if (item.deletable)
+    buttons.push('<button class="mini danger" data-act="delete">删除</button>');
+  return `<td>${buttons.join(' ')}</td>`;
+}
+
+async function configureInventoryItem(item, row) {
+  if (!currentChar) { toast('请先选择角色', true); return; }
+  const epoch = ++inventoryConfigurationEpoch;
+  try {
+    const capability = await api(`/api/characters/${currentChar.characterId}/items/config-options?listType=${item.listType}&slot=${item.slot}`);
+    if (epoch !== inventoryConfigurationEpoch) return;
+    inventoryConfiguration = { item, capability };
+    document.querySelectorAll('#item-table tr.config-selected')
+      .forEach((candidate) => candidate.classList.remove('config-selected'));
+    if (row) row.classList.add('config-selected');
+    renderInventoryConfiguration();
+    $('#inventory-config-card').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function renderInventoryConfiguration() {
+  const card = $('#inventory-config-card');
+  if (!inventoryConfiguration || !card) {
+    clearInventoryConfiguration();
+    return;
+  }
+
+  const { item, capability } = inventoryConfiguration;
+  const fields = [];
+  let submitDisabled = false;
+  if (capability.type === 'avatar' && capability.avatar) {
+    const avatar = capability.avatar;
+    fields.push(`<div class="give-config-field"><span>装扮部位</span><div class="give-config-value">${escapeHtml(tagLabel((avatar.part || '').replace(/[\[\]`]/g, '').trim()))}</div></div>`);
+    if (!avatar.options || avatar.options.length === 0) {
+      fields.push('<div class="give-config-field"><span>可选属性</span><div class="give-config-value">无可用属性</div></div>');
+      submitDisabled = true;
+    } else {
+      fields.push(`<label class="give-config-field"><span>可选属性</span><select id="inventory-config-avatar-option">${optionHtml(avatar.options, avatar.currentOptionValue)}</select></label>`);
+    }
+  } else if (capability.type === 'equipment' && capability.equipment) {
+    const equipment = capability.equipment;
+    fields.push(`<label class="give-config-field"><span>装备品级</span><select id="inventory-config-quality">${optionHtml(equipment.qualityOptions, equipment.currentQualityMode)}</select></label>`);
+    if (equipment.canUpgrade || equipment.canAmplify) {
+      fields.push(`<label class="give-config-field"><span>强化 / 增幅</span><input id="inventory-config-upgrade" type="number" min="0" max="${equipment.maxUpgradeLevel}" value="${equipment.currentUpgradeLevel || 0}"></label>`);
+      fields.push(`<label class="give-config-field"><span>红字属性</span><select id="inventory-config-amplify" ${equipment.canAmplify ? '' : 'disabled'}>${optionHtml(equipment.amplifyTypes, equipment.currentAmplifyType || 0)}</select></label>`);
+    }
+    if (equipment.canForge)
+      fields.push(`<label class="give-config-field"><span>锻造</span><input id="inventory-config-forging" type="number" min="0" max="${equipment.maxForgingLevel}" value="${equipment.currentForgingLevel || 0}"></label>`);
+  } else {
+    fields.push('<div class="give-config-field"><span>配置</span><div class="give-config-value">该物品没有可配置项</div></div>');
+    submitDisabled = true;
+  }
+
+  card.innerHTML = `<div class="give-config-head"><div class="give-config-title rarity-${item.rarity >= 0 && item.rarity <= 6 ? item.rarity : 0}">${escapeHtml(item.name)}</div><div class="give-config-meta">ID ${item.templateId} · 槽位 ${item.slot}</div></div>` +
+    `<div class="give-config-grid">${fields.join('')}</div>` +
+    `<div class="give-config-actions"><button id="inventory-config-cancel" class="mini" type="button">取消</button><button id="inventory-config-submit" type="button" ${submitDisabled ? 'disabled' : ''}>保存配置</button></div>`;
+  card.classList.remove('hidden');
+
+  $('#inventory-config-cancel').onclick = clearInventoryConfiguration;
+  $('#inventory-config-submit').onclick = submitInventoryConfiguration;
+}
+
+async function submitInventoryConfiguration() {
+  if (!inventoryConfiguration || !currentChar) return;
+  const { item, capability } = inventoryConfiguration;
+  const options = {};
+  if (capability.type === 'avatar') {
+    const avatarOption = $('#inventory-config-avatar-option');
+    if (!avatarOption) return toast('没有可保存的时装属性', true);
+    options.avatarOptionValue = parseInt(avatarOption.value, 10);
+  } else if (capability.type === 'equipment') {
+    options.qualityMode = parseInt($('#inventory-config-quality')?.value || '1', 10);
+    options.upgradeLevel = parseInt($('#inventory-config-upgrade')?.value || '0', 10);
+    options.amplifyType = parseInt($('#inventory-config-amplify')?.value || '0', 10);
+    options.forgingLevel = parseInt($('#inventory-config-forging')?.value || '0', 10);
+  } else {
+    return toast('该物品没有可配置项', true);
+  }
+
+  try {
+    await post(`/api/characters/${currentChar.characterId}/items/configure`, {
+      listType: item.listType,
+      slot: item.slot,
+      options,
+    });
+    toast('配置已保存');
+    clearInventoryConfiguration();
+    loadItems();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 function renderItemTable() {
   updateClearButton();
   const template = templateFor(activeCategory);
@@ -214,15 +327,18 @@ function renderItemTable() {
     const tr = document.createElement('tr');
     // null 单元格 = 操作列, 按 deletable 渲染删除按钮
     tr.innerHTML = cells.map((cell) => cell === null
-      ? `<td>${item.deletable ? '<button class="mini danger">删除</button>' : ''}</td>`
+      ? renderInventoryActionCell(item)
       : `<td>${cell}</td>`).join('');
-    const btn = tr.querySelector('button');
-    if (btn) btn.onclick = async () => {
+    const configBtn = tr.querySelector('button[data-act="config"]');
+    if (configBtn) configBtn.onclick = () => configureInventoryItem(item, tr);
+    const deleteBtn = tr.querySelector('button[data-act="delete"]');
+    if (deleteBtn) deleteBtn.onclick = async () => {
       try {
         // count=0 整删, 单件删除直接生效
         await post(`/api/characters/${currentChar.characterId}/items/delete-at`,
           { listType: item.listType, slot: item.slot, count: 0 });
         toast('已删除');
+        clearInventoryConfiguration();
         loadItems();
       } catch (e) {
         toast(e.message, true);

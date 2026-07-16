@@ -337,6 +337,22 @@ async function completeWholeChain(root, pending) {
   }
 }
 
+async function completeCurrentLevelMainQuests() {
+  if (!currentChar) { toast('请先选择角色', true); return; }
+  if (!confirm(`一键完成 ${currentChar.name} 当前等级可用的主线任务，不发奖励，继续？`)) return;
+  const btn = $('#btn-complete-current-main');
+  btn.disabled = true;
+  try {
+    const r = await post(`/api/characters/${currentChar.characterId}/quests/main/complete-current-level`);
+    toast(`已完成 ${r.completedCount || 0} 个当前等级主线任务`);
+    refreshQuestViews();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // 缩进编码分叉结构而非顺序: 线性延伸保持同层(顺序由行序表达),
 // 只有一个任务有多个后续(真分叉)时, 各分支才多缩进一层
 function emitChildren(tbody, viewKey, parent, children, depth, visited) {
@@ -483,6 +499,37 @@ async function completeAllTitleBook() {
   try {
     const r = await post(`/api/characters/${currentChar.characterId}/quests/complete-batch`, { questIds: pending });
     toast(`已完成 ${r.completedCount} 个成就, 称号已入簿`);
+    refreshQuestViews();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function unclearCurrentTitleBookPage() {
+  if (!currentChar) { toast('请先选择角色', true); return; }
+  await loadQuestView('achieve');
+  const view = questViews.achieve;
+  if (!view.data) return;
+  const region = view.data.regions.find((r) => r.region === view.activeRegion);
+  if (!region || region.group !== '称号') {
+    toast('请先在成就页选择一个称号簿分类', true);
+    return;
+  }
+
+  const questIds = region.quests.map((quest) => quest.questId);
+  if (questIds.length === 0) {
+    toast('当前称号簿页没有可取消的任务');
+    return;
+  }
+  if (!confirm(`将当前称号簿页「${region.regionLabel}」的 ${questIds.length} 个任务标记为未完成，并移除对应称号簿记录，继续？`)) return;
+
+  const btn = $('#btn-titlebook-unclear-page');
+  btn.disabled = true;
+  try {
+    const r = await post(`/api/characters/${currentChar.characterId}/quests/unclear-batch`, { questIds });
+    toast(`已取消 ${r.clearedCount || 0} 个称号簿任务`);
     refreshQuestViews();
   } catch (e) {
     toast(e.message, true);

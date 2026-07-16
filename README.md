@@ -95,6 +95,41 @@ SQLite 原生库随发布件自带）。注意两点：可执行文件需要 `ch
 Linux 文件系统区分大小写，服务端数据目录必须是 `Data/inventory.db`、`Data/Pvf/Script.pvf`
 的准确大小写。win-x64 发布件经过完整回归，linux-x64 仅验证到发布产物层、未实机运行过。
 
+## Docker / Unraid
+
+项目可以按独立 Web 服务打包成 Docker 镜像。到上级 `Codes` 目录运行：
+
+```
+.\build-gm-docker.bat
+```
+
+脚本会发布 `linux-x64` 自包含版本、生成 Docker 文件、构建镜像并导出：
+
+```
+dfo-gm-tool_<version>.tar
+my-DfoGmTool.xml
+DOCKER-README.md
+Dockerfile
+docker-entrypoint.sh
+dist/
+```
+
+GM 容器不单独保存角色数据，Unraid 上直接复用 dfo-server 的数据映射：
+
+```
+/mnt/user/appdata/dfo-server/Data -> /server/Data
+```
+
+容器启动时会检查：
+
+```
+/server/Data/inventory.db
+/server/Data/Pvf/Script.pvf
+```
+
+默认 Web 端口为 `5050`，访问地址为 `http://<NAS-IP>:5050`。模板里的
+`GM_REMOTE_PASSWORD` 必须改成自己的强密码；工具是 HTTP 服务，不要直接暴露到公网。
+
 ## 注意
 
 - **服务器运行中做的改动，在线角色需要返回选角再进入才会生效**（服务端内存里的会话状态不会自动刷新）。

@@ -10,7 +10,7 @@ namespace DfoGmTool.ServerCore.Game.Dungeon
         public const int MaxLevel = 86;
 
         private static readonly object _lock = new object();
-        private static int[] _levelThresholds;
+        private static uint[] _levelThresholds;
         private static int[] _monsterBaseExp;
         private static int[] _monsterGold;
         private static int[] _monsterGoldVariance;
@@ -30,15 +30,15 @@ namespace DfoGmTool.ServerCore.Game.Dungeon
         // 四条经验入口(打怪/通关结算/教程/交任务)共用, 升级规则只在这里改。
         public static byte ApplyLevelUps(int level, uint totalExp)
         {
-            while (level < MaxLevel && totalExp >= (uint)GetLevelThreshold(level))
+            while (level < MaxLevel && totalExp >= GetLevelThreshold(level))
                 level++;
             return (byte)level;
         }
 
-        public static int GetLevelThreshold(int level)
+        public static uint GetLevelThreshold(int level)
         {
             EnsureLoaded();
-            if (level < 1 || level > _levelThresholds.Length) return int.MaxValue;
+            if (level < 1 || level > _levelThresholds.Length) return uint.MaxValue;
             return _levelThresholds[level - 1];
         }
 
@@ -86,26 +86,26 @@ namespace DfoGmTool.ServerCore.Game.Dungeon
             FileLogger.Log($"[ExpTableProvider] Loaded: {_levelThresholds.Length} level thresholds, {_monsterBaseExp.Length} monster exp, {_monsterGold.Length} monster gold");
         }
 
-        private static int[] ParseExpTable()
+        private static uint[] ParseExpTable()
         {
             try
             {
                 var text = PvfArchiveAccessor.ReadText("character/ExpTable.tbl");
-                if (string.IsNullOrEmpty(text)) return Array.Empty<int>();
+                if (string.IsNullOrEmpty(text)) return Array.Empty<uint>();
 
                 var tokens = text.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                var result = new int[tokens.Length];
+                var result = new uint[tokens.Length];
                 for (int i = 0; i < tokens.Length; i++)
                 {
-                    if (long.TryParse(tokens[i], out var v))
-                        result[i] = v > int.MaxValue ? int.MaxValue : (int)v;
+                    if (ulong.TryParse(tokens[i], out var v))
+                        result[i] = v > uint.MaxValue ? uint.MaxValue : (uint)v;
                 }
                 return result;
             }
             catch (Exception ex)
             {
                 FileLogger.Log($"[ExpTableProvider] ERROR loading ExpTable.tbl: {ex.Message}");
-                return Array.Empty<int>();
+                return Array.Empty<uint>();
             }
         }
 

@@ -1,4 +1,5 @@
 using DfoGmTool.ServerCore.Game.CharacterData;
+using DfoGmTool.ServerCore.Game.Skills;
 using DfoGmTool.ServerCore.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System;
@@ -55,7 +56,10 @@ namespace DfoGmTool.ServerCore.Game.Characters
             using (var tx = conn.BeginTransaction())
             {
                 var updated = PersistLevelAndExp(conn, tx, characterId, level, exp);
-                tx.Commit();
+                if (updated)
+                    tx.Commit();
+                else
+                    tx.Rollback();
                 return updated;
             }
         }
@@ -79,15 +83,18 @@ WHERE character_id = @cid;";
                 cmd.Parameters.AddWithValue("@lvl", (int)level);
                 cmd.Parameters.AddWithValue("@exp", (long)exp);
                 cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.ExecuteNonQuery();
+                if (cmd.ExecuteNonQuery() == 0)
+                    return false;
             }
 
             byte job;
             byte growType;
+            int bonusSp;
+            int bonusTp;
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT job, grow_type FROM characters WHERE character_id = @cid;";
+                cmd.CommandText = "SELECT job, grow_type, bonus_sp, bonus_tp FROM characters WHERE character_id = @cid;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 using (var reader = cmd.ExecuteReader())
                 {
@@ -96,12 +103,29 @@ WHERE character_id = @cid;";
 
                     job = (byte)reader.GetInt32(0);
                     growType = (byte)reader.GetInt32(1);
+                    bonusSp = reader.GetInt32(2);
+                    bonusTp = reader.GetInt32(3);
                 }
             }
 
             CharacterStatComputer.DecodeGrowType(growType, out int firstGrow, out int secondGrow);
             var combatStats = CharacterStatComputer.BuildAdditionalInfo(job, level, firstGrow, secondGrow);
-            return SqliteSubtype1Repository.UpdateCombatStatsOnConnection(conn, characterId, combatStats, tx) > 0;
+            if (SqliteSubtype1Repository.UpdateCombatStatsOnConnection(conn, characterId, combatStats, tx) <= 0)
+                return false;
+
+            var progressRepository = SqliteCharacterProgressRepository.FromConnectionString(conn.ConnectionString);
+            SkillStateService.LoadAndSync(
+                progressRepository,
+                conn,
+                tx,
+                characterId,
+                job,
+                level,
+                bonusSp,
+                bonusTp,
+                persist: true);
+
+            return true;
         }
     }
 }

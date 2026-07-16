@@ -73,6 +73,28 @@
     </form>
   </section>
 
+  <section id="clone-account-panel" class="runtime-source-panel hidden" aria-labelledby="clone-account-title">
+    <form id="clone-account-form" class="runtime-source-dialog">
+      <div class="runtime-source-title-row">
+        <h2 id="clone-account-title">新建账号</h2>
+        <button id="btn-close-clone-account" class="mini" type="button">关闭</button>
+      </div>
+      <label class="runtime-source-field">账号名
+        <input id="clone-account-name" type="text" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="runtime-source-field">密码
+        <span class="password-inline"><input id="clone-account-password" type="password" autocomplete="new-password"><button id="btn-toggle-clone-password" class="mini" type="button">显示</button></span>
+      </label>
+      <label class="runtime-source-field">重复密码
+        <span class="password-inline"><input id="clone-account-password-confirm" type="password" autocomplete="new-password"><button id="btn-toggle-clone-password-confirm" class="mini" type="button">显示</button></span>
+      </label>
+      <div class="runtime-source-actions">
+        <button id="btn-create-clone-account" type="submit">创建账号</button>
+        <span id="clone-account-state" class="hint" aria-live="polite"></span>
+      </div>
+    </form>
+  </section>
+
   <main id="workspace" class="hidden">
     <aside>
       <div class="side-card">
@@ -96,6 +118,7 @@
         <button class="acc-tab tab" data-acc-tab="cube">晶块</button>
         <button class="acc-tab tab" data-acc-tab="progress">账号进度</button>
         <button class="acc-tab tab" data-acc-tab="cargo">账号金库</button>
+        <button class="acc-tab tab" data-acc-tab="backup">账号备份</button>
       </nav>
 
       <div id="acc-tab-currency" class="acc-tab-page">
@@ -128,11 +151,26 @@
 
       <div id="acc-tab-cargo" class="acc-tab-page hidden">
         <div class="card">
-          <div class="card-title">账号金库 <button id="btn-clear-cargo" class="mini danger">一键清空</button></div>
+          <div class="card-title">账号金库 <button id="btn-max-cargo" class="mini">账号金库满级</button> <button id="btn-clear-cargo" class="mini danger">一键清空</button></div>
           <table id="cargo-table">
             <thead><tr><th>槽位</th><th>ID</th><th>名称</th><th>数量</th><th>耐久</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+      </div>
+
+      <div id="acc-tab-backup" class="acc-tab-page hidden">
+        <div class="card">
+          <div class="card-title">账号备份</div>
+          <div class="row">
+            <button id="btn-export-account-backup" class="mini">导出当前账号</button>
+            <span class="hint">包含当前库中可识别的账号、角色、背包、任务、技能、称号簿、金库等账号相关表。</span>
+          </div>
+          <div class="row">
+            <input id="account-backup-file" type="file" accept="application/json,.json">
+            <button id="btn-restore-account-backup" class="mini danger">恢复备份</button>
+          </div>
+          <div id="account-backup-state" class="hint"></div>
         </div>
       </div>
     </section>
@@ -185,6 +223,7 @@
               <tbody></tbody>
             </table>
             <div id="give-pager" class="row" style="margin-top:10px"></div>
+            <section id="give-config-card" class="give-config-card hidden" aria-live="polite"></section>
           </div>
         </div>
       </div>
@@ -211,6 +250,7 @@
           <div class="inventory-table-wrap">
             <table id="item-table"><thead></thead><tbody></tbody></table>
             <div id="inv-pager" class="row" style="margin-top:10px"></div>
+            <section id="inventory-config-card" class="give-config-card hidden" aria-live="polite"></section>
           </div>
         </div>
       </div>
@@ -235,10 +275,58 @@
           <div class="card">
             <div class="card-title">转职 / 觉醒</div>
             <div class="row">
+              <select id="grow-job"></select>
               <select id="grow-first"></select>
               <select id="grow-second"></select>
               <button id="btn-grow">覆写</button>
               <span class="hint">改完按服务端同一套算法重算战斗属性；GM 完成转职/觉醒任务时也会自动应用</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">角色仓库</div>
+            <div class="row">
+              <button id="btn-max-personal-cargo">仓库满级</button>
+              <span class="hint">仅修改当前角色的个人仓库容量，不影响账号金库</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">地图难度</div>
+            <div class="row">
+              <button id="btn-unlock-dungeon-permissions">一键开启地图难度</button>
+              <span class="hint">按 PVF 常规副本列表为当前角色开启最高难度</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">复制角色</div>
+            <div class="row">
+              <button id="btn-open-character-clone">复制角色</button>
+              <span class="hint">复制到当前或其他账号；账号金库、晶块、点券等账号数据不会复制</span>
+            </div>
+          </div>
+          <div id="character-clone-panel" class="card hidden">
+            <div class="card-title">复制角色设置</div>
+            <div class="row">
+              <label>目标账号 <select id="clone-target-account"></select></label>
+              <button id="btn-open-clone-account" class="mini" type="button">新建账号</button>
+              <span id="clone-account-limit" class="hint"></span>
+            </div>
+            <div class="row">
+              <label>新角色名 <input id="clone-character-name" type="text" autocomplete="off"></label>
+              <button id="btn-check-clone-name" class="mini" type="button">检查重名</button>
+              <span id="clone-name-state" class="hint"></span>
+            </div>
+            <div id="clone-option-list" class="clone-option-list"></div>
+            <div class="row">
+              <button id="btn-run-character-clone">开始复制</button>
+              <button id="btn-cancel-character-clone" class="mini" type="button">关闭</button>
+              <span id="clone-character-state" class="hint"></span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">危险操作</div>
+            <div class="row">
+              <button id="btn-delete-character" class="danger">彻底删除角色</button>
+              <span class="hint">物理删除当前角色及关联数据，操作后不可恢复</span>
             </div>
           </div>
           <div class="card">
@@ -258,6 +346,7 @@
               <label>SP <input id="sp-input" type="number" value="0"></label>
               <label>TP <input id="tp-input" type="number" value="0"></label>
               <button id="btn-sp">调整</button>
+              <button id="btn-zero-sptp" class="mini">剩余 SP/TP 归 0</button>
               <span id="sp-now" class="hint"></span>
             </div>
           </div>
@@ -297,6 +386,7 @@
         <div id="quest-tab-main" class="quest-tab-page hidden">
           <div class="row">
             <button id="btn-refresh-main" class="mini">刷新</button>
+            <button id="btn-complete-current-main" class="mini danger">一键完成当前等级主线</button>
             <span class="hint">剧情主线按区域分组(活动/决斗场/远古任务不在此列，去任务库查)；"连前置完成"会把该任务及全部前置链一并标记完成(不发奖励)</span>
           </div>
           <div class="inventory-layout">
@@ -314,6 +404,7 @@
           <div class="row">
             <button id="btn-refresh-achieve" class="mini">刷新</button>
             <button id="btn-titlebook-all" class="mini danger">一键称号簿</button>
+            <button id="btn-titlebook-unclear-page" class="mini danger">一键取消称号簿</button>
           </div>
           <div class="inventory-layout">
             <nav id="achieve-region-nav" class="category-nav"></nav>
@@ -372,6 +463,7 @@
   <script src="js/give.js"></script>
   <script src="js/inventory.js"></script>
   <script src="js/character.js"></script>
+  <script src="js/character-sp-overrides.js"></script>
   <script src="js/quests.js"></script>
   <script src="js/bindings.js"></script>
 </body>

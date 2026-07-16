@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace GmPvfLib
 {
@@ -102,6 +103,10 @@ namespace GmPvfLib
         /// </summary>
         public string ItemCategory { get; set; }
 
+        public int AbilityCaseIndex { get; set; } = -1;
+
+        public List<AvatarSelectAbilityEntry> AvatarSelectAbilities { get; set; } = new List<AvatarSelectAbilityEntry>();
+
         #endregion
         #region 解析
 
@@ -187,10 +192,93 @@ namespace GmPvfLib
                         equ.ImpossibleContentItems = ParseStringList(node, content);
                         break;
                     case "item category": equ.ItemCategory = StripBacktick(data); break;
+                    case "ability case index": equ.AbilityCaseIndex = ParseInt(data); break;
+                    case "avatar select ability": equ.AvatarSelectAbilities = ParseAvatarSelectAbilities(node, content); break;
                 }
             }
 
             return equ;
+        }
+
+        private static List<AvatarSelectAbilityEntry> ParseAvatarSelectAbilities(ScriptNode node, string content)
+        {
+            var result = new List<AvatarSelectAbilityEntry>();
+            if (node == null || node.DataItems == null)
+                return result;
+
+            var tokens = new List<string>();
+            foreach (var item in node.DataItems)
+                tokens.AddRange(ReadTokens(item.GetContent(content)));
+
+            var index = 0;
+            while (index + 1 < tokens.Count)
+            {
+                if (!int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var optionValue))
+                {
+                    index++;
+                    continue;
+                }
+
+                var ability = NormalizeToken(tokens[index + 1]);
+                index += 2;
+
+                var entry = new AvatarSelectAbilityEntry
+                {
+                    OptionValue = optionValue,
+                    Ability = ability,
+                };
+
+                if (string.Equals(ability, "SKILL_LEVEL", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (index < tokens.Count)
+                        entry.Job = NormalizeToken(tokens[index++]);
+                    if (index < tokens.Count && int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var skillIndex))
+                    {
+                        entry.SkillIndex = skillIndex;
+                        index++;
+                    }
+                    if (index < tokens.Count && int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var skillLevel))
+                    {
+                        entry.SkillLevel = skillLevel;
+                        index++;
+                    }
+                }
+                else
+                {
+                    if (index < tokens.Count && (tokens[index] == "+" || tokens[index] == "-"))
+                        entry.Operator = tokens[index++];
+                    if (index < tokens.Count && int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var amount))
+                    {
+                        entry.Amount = amount;
+                        index++;
+                    }
+                }
+
+                result.Add(entry);
+            }
+
+            return result;
+        }
+
+        private static IEnumerable<string> ReadTokens(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                yield break;
+
+            foreach (Match match in Regex.Matches(text, "`([^`]*)`|\\S+"))
+            {
+                var token = match.Groups[1].Success ? match.Groups[1].Value : match.Value;
+                if (!string.IsNullOrWhiteSpace(token))
+                    yield return token.Trim();
+            }
+        }
+
+        private static string NormalizeToken(string value)
+        {
+            var token = (value ?? string.Empty).Trim().Trim('`').Trim();
+            if (token.StartsWith("[", StringComparison.Ordinal) && token.EndsWith("]", StringComparison.Ordinal) && token.Length > 2)
+                token = token.Substring(1, token.Length - 2);
+            return token.Trim();
         }
 
         private static List<string> ParseStringList(ScriptNode node, string content)
@@ -211,5 +299,22 @@ namespace GmPvfLib
         }
 
         #endregion
+    }
+
+    public sealed class AvatarSelectAbilityEntry
+    {
+        public int OptionValue { get; set; }
+
+        public string Ability { get; set; }
+
+        public string Operator { get; set; }
+
+        public int Amount { get; set; }
+
+        public string Job { get; set; }
+
+        public int SkillIndex { get; set; }
+
+        public int SkillLevel { get; set; }
     }
 }

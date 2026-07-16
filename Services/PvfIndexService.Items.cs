@@ -22,10 +22,13 @@ namespace DfoGmTool.Services
             public string Special;   // 品质细分: legacy(传承)/boss(领主神器)/sealed(魔法封印), 无则 null
             public int Rarity;
             public int MinLevel;
+            public int Grade;
+            public string UsableJob;
             public int AbsoluteExpirationUnixTime;
             public int UsablePeriodDays;
             public bool DailyDeleteItem;
             public bool HasInvalidExpirationDefinition;
+            public bool RequiresManualGrantType;
         }
 
         public readonly struct ItemExpirationDefinition
@@ -158,7 +161,7 @@ namespace DfoGmTool.Services
             return new { ready = true, equipment, stackable };
         }
 
-        public object SearchItems(string query, string kind, string tag, string segment, string special, int minLevel, int maxLevel, int rarity, int limit, int offset, string expiration)
+        public object SearchItems(string query, string kind, string tag, string segment, string special, int minLevel, int maxLevel, int rarity, int limit, int offset, string expiration, int characterJob = -1)
         {
             var list = _searchList;
             if (list == null)
@@ -198,6 +201,10 @@ namespace DfoGmTool.Services
                     continue;
                 if (!MatchesExpirationFilter(entry, expiration, now))
                     continue;
+                if (characterJob >= 0
+                    && IsAvatarType(entry.TypeTag)
+                    && !AvatarGrantPolicy.IsUsableByJob(entry.UsableJob, characterJob))
+                    continue;
                 if (query.Length > 0
                     && entry.Id != numericId
                     && (entry.Name == null || entry.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0))
@@ -216,6 +223,9 @@ namespace DfoGmTool.Services
                     special = e.Special,
                     rarity = e.Rarity,
                     minLevel = e.MinLevel,
+                    grade = e.Grade,
+                    usableJob = e.UsableJob,
+                    requiresManualGrantType = e.RequiresManualGrantType,
                     templateExpiration = new
                     {
                         known = true,
@@ -258,6 +268,12 @@ namespace DfoGmTool.Services
             }
         }
 
+        private static bool IsAvatarType(string typeTag)
+        {
+            return !string.IsNullOrWhiteSpace(typeTag)
+                && typeTag.EndsWith(" avatar", StringComparison.OrdinalIgnoreCase);
+        }
+
         public object Search(string query, int limit)
         {
             if (string.IsNullOrWhiteSpace(query))
@@ -292,10 +308,7 @@ namespace DfoGmTool.Services
 
         private static string FirstTag(string typeString)
         {
-            if (string.IsNullOrWhiteSpace(typeString))
-                return null;
-            var match = TagPattern.Match(typeString.Replace("`", "").ToLowerInvariant());
-            return match.Success ? match.Groups[1].Value.Trim() : null;
+            return ItemMetadataResolver.FirstPvfTypeTag(typeString);
         }
 
         private static ItemExpirationDefinition ResolveEquipmentExpiration(EquipmentFile equipment)
@@ -371,10 +384,18 @@ namespace DfoGmTool.Services
                             Special = EquipSpecial(text),
                             Rarity = model.Rarity,
                             MinLevel = model.MinimumLevel,
+                            Grade = model.Grade,
+                            UsableJob = model.UsableJob,
                             AbsoluteExpirationUnixTime = expiration.AbsoluteExpirationUnixTime,
                             UsablePeriodDays = expiration.UsablePeriodDays,
                             DailyDeleteItem = expiration.DailyDeleteItem,
                             HasInvalidExpirationDefinition = expiration.HasInvalidDefinition,
+                            RequiresManualGrantType = ItemMetadataResolver.RequiresManualGrantType(new ItemMetadata
+                            {
+                                ItemKind = "equipment",
+                                EquipmentType = model.EquipmentType,
+                                ItemCategory = model.ItemCategory,
+                            }),
                         };
                     }
                     else
@@ -392,10 +413,17 @@ namespace DfoGmTool.Services
                             Segment = StackSegment(model.StackableType),
                             Rarity = model.Rarity,
                             MinLevel = model.MinimumLevel,
+                            Grade = model.Grade,
+                            UsableJob = model.UsableJob,
                             AbsoluteExpirationUnixTime = expiration.AbsoluteExpirationUnixTime,
                             UsablePeriodDays = expiration.UsablePeriodDays,
                             DailyDeleteItem = expiration.DailyDeleteItem,
                             HasInvalidExpirationDefinition = expiration.HasInvalidDefinition,
+                            RequiresManualGrantType = ItemMetadataResolver.RequiresManualGrantType(new ItemMetadata
+                            {
+                                ItemKind = "stackable",
+                                StackableType = model.StackableType,
+                            }),
                         };
                     }
                 }

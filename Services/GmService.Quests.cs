@@ -721,6 +721,44 @@ WHERE character_id = @cid AND quest_id = @qid;";
             return new { success = true, characterId, questId };
         }
 
+        public object UnclearQuestBatch(int characterId, List<int> questIds)
+        {
+            if (questIds == null || questIds.Count == 0)
+                return Error("questIds 为空");
+            if (questIds.Count > 1000)
+                return Error("一次最多 1000 个任务");
+
+            var cleared = 0;
+            var distinctIds = questIds.Distinct().ToArray();
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    foreach (var qid in distinctIds)
+                    {
+                        if (qid <= 0 || qid > ushort.MaxValue)
+                            continue;
+                        QuestRepository.DeleteClearedFlag(conn, tx, characterId, (ushort)qid);
+                        var meta = _pvfIndex.GetQuestMeta(qid);
+                        if (meta != null && meta.TargetQuestId > 0 && meta.TargetQuestId <= ushort.MaxValue)
+                            QuestRepository.DeleteClearedFlag(conn, tx, characterId, (ushort)meta.TargetQuestId);
+                        cleared++;
+                    }
+                    tx.Commit();
+                }
+            }
+
+            foreach (var qid in distinctIds)
+            {
+                if (qid <= 0 || qid > ushort.MaxValue)
+                    continue;
+                RemoveTitleIfBookShell(characterId, qid);
+            }
+
+            return new { success = true, characterId, clearedCount = cleared };
+        }
+
         // 任务库搜索: PVF 全量任务 + 该角色的进行中/已完成状态 + 类型/区域/等级
         public object SearchQuests(int characterId, string query, int limit, PvfIndexService pvfIndex)
         {
@@ -791,6 +829,58 @@ WHERE character_id = @cid AND quest_id = @qid;";
                 completed.Add(qid);
             }
             return new { success = true, characterId, completedCount = completed.Count };
+        }
+
+        public object CompleteCurrentLevelMainQuests(int characterId, PvfIndexService pvfIndex)
+        {
+            var all = pvfIndex.AllQuestMeta;
+            if (all == null)
+                return Error("任务索引还在构建中，稍等几秒");
+
+            int level = -1, job = -1, grow = -1;
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT level, job, grow_type FROM characters WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                        {
+                            level = reader.GetInt32(0);
+                            job = reader.GetInt32(1);
+                            grow = reader.GetInt32(2);
+                        }
+                    }
+                }
+            }
+            if (level < 0)
+                return Error("角色不存在 " + characterId);
+
+            var (_, cleared) = LoadQuestState(characterId);
+            var targets = all.Values
+                .Where(m => IsMainStoryEpic(m)
+                    && QuestMatchesCharacter(m, job, grow)
+                    && EffectiveLevel(m) <= level
+                    && (!cleared.TryGetValue(m.Id, out var flag) || flag == 0))
+                .OrderBy(m => EffectiveLevel(m))
+                .ThenBy(m => m.Id)
+                .Select(m => m.Id)
+                .ToList();
+
+            if (targets.Count == 0)
+                return new { success = true, characterId, completedCount = 0, questIds = Array.Empty<int>() };
+
+            var completed = new List<int>();
+            foreach (var qid in targets)
+            {
+                ForceCompleteQuest(characterId, qid);
+                completed.Add(qid);
+            }
+
+            return new { success = true, characterId, completedCount = completed.Count, questIds = completed.ToArray() };
         }
     }
 }

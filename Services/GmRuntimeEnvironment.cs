@@ -82,6 +82,7 @@ namespace DfoGmTool.Services
                     PvfArchiveAccessor.Configure(config.PvfPath);
                     PvfRuntimeCache.ResetForPvfChange();
                     GmService.ResetPvfStaticData();
+                    PvfRuntimeCache.WarmForPvfChange();
 
                     _active = new ActiveEnvironment(config, gm, pvfIndex);
                     _startupError = null;

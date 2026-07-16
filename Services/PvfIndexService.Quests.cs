@@ -75,6 +75,95 @@ namespace DfoGmTool.Services
             return result;
         }
 
+        public int[] ResolveAwakeningQuestChain(int job, int branch, bool second)
+        {
+            var metas = _questMeta;
+            if (metas == null || branch <= 0)
+                return Array.Empty<int>();
+
+            var jobTag = ResolveAwakeningQuestJobTag(job);
+            if (jobTag == null)
+                return Array.Empty<int>();
+
+            var prefix = second ? "二次觉醒 - " : "觉醒 - ";
+            var candidates = new Dictionary<int, QuestMeta>();
+            foreach (var pair in metas)
+            {
+                var meta = pair.Value;
+                if (meta == null || meta.Name == null)
+                    continue;
+                if (!meta.Name.StartsWith(prefix, StringComparison.Ordinal))
+                    continue;
+                if (!string.Equals(meta.Job, jobTag, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (meta.GrowType != branch)
+                    continue;
+                candidates[meta.Id] = meta;
+            }
+
+            if (candidates.Count == 0)
+                return Array.Empty<int>();
+
+            var referenced = new HashSet<int>();
+            foreach (var meta in candidates.Values)
+            {
+                foreach (var preId in meta.PreRequired ?? Array.Empty<int>())
+                {
+                    if (candidates.ContainsKey(preId))
+                        referenced.Add(preId);
+                }
+            }
+
+            var tailId = -1;
+            foreach (var id in candidates.Keys)
+            {
+                if (!referenced.Contains(id) && id > tailId)
+                    tailId = id;
+            }
+            if (tailId <= 0)
+                return Array.Empty<int>();
+
+            var chain = new List<int>();
+            var seen = new HashSet<int>();
+            var currentId = tailId;
+            while (currentId > 0 && candidates.TryGetValue(currentId, out var current) && seen.Add(currentId))
+            {
+                chain.Add(currentId);
+                var nextId = 0;
+                foreach (var preId in current.PreRequired ?? Array.Empty<int>())
+                {
+                    if (candidates.ContainsKey(preId))
+                    {
+                        nextId = preId;
+                        break;
+                    }
+                }
+                currentId = nextId;
+            }
+
+            chain.Reverse();
+            return chain.ToArray();
+        }
+
+        private static string ResolveAwakeningQuestJobTag(int job)
+        {
+            switch (job)
+            {
+                case 0: return "[swordman]";
+                case 1: return "[fighter]";
+                case 2: return "[gunner]";
+                case 3: return "[mage]";
+                case 4: return "[priest]";
+                case 5: return "[at gunner]";
+                case 6: return "[thief]";
+                case 7: return "[at fighter]";
+                case 8: return "[at mage]";
+                case 11: return "[at swordman]";
+                case 12: return "[knight]";
+                default: return null;
+            }
+        }
+
         private static readonly Regex IntPattern = new Regex(@"-?\d+", RegexOptions.Compiled);
         private static readonly Regex PreGroupPattern = new Regex(
             @"\[pre required quest\](.*?)\[/pre required quest\]",

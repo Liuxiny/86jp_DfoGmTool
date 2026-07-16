@@ -48,14 +48,15 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             }
         }
 
-        public ItemGrantResult TryGrantCharacterItem(DbScope scope, int itemTemplateId, int count)
+        public ItemGrantResult TryGrantCharacterItem(DbScope scope, int itemTemplateId, int count, ItemGrantOptions options = null)
         {
             return _store.CharacterItemGrants.TryGrant(
                 scope.Connection,
                 scope.Transaction,
                 scope.CharacterId,
                 itemTemplateId,
-                count);
+                count,
+                options);
         }
 
         public bool TryRemoveItem(DbScope scope, int itemTemplateId, int count, out short slot, out int remaining)

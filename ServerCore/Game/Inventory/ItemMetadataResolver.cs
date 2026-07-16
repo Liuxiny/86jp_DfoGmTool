@@ -1,4 +1,5 @@
 using DfoGmTool.ServerCore.GameWorld;
+using DfoGmTool.ServerCore.Game.ItemUpgrade;
 using GmPvfLib;
 using System;
 using System.Collections.Generic;
@@ -38,6 +39,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public int Rarity { get; set; }
 
         public string EquipmentType { get; set; }
+
+        public string ItemCategory { get; set; }
 
         public string AttachType { get; set; }
 
@@ -166,6 +169,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     MinimumLevel = equipment.MinimumLevel,
                     Rarity = equipment.Rarity,
                     EquipmentType = NormalizeEquipmentType(equipment.EquipmentType),
+                    ItemCategory = equipment.ItemCategory,
                     AttachType = equipment.AttachType,
                     ImpossibleContents = equipment.ImpossibleContentItems,
                 };
@@ -212,6 +216,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     Grade = stackable.Grade,
                     MinimumLevel = stackable.MinimumLevel,
                     Rarity = stackable.Rarity,
+                    ItemCategory = stackable.ItemCategory,
                     ImpossibleContents = stackable.ImpossibleContentItems,
                 };
             }
@@ -257,6 +262,64 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             return TryGetEquipmentType(itemTemplateId, out var equipmentType)
                 ? equipmentType
                 : null;
+        }
+
+        public static string ResolvePvfTypeTag(ItemMetadata metadata)
+        {
+            if (metadata == null)
+                return null;
+            return FirstPvfTypeTag(
+                string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal)
+                    ? metadata.EquipmentType
+                    : metadata.StackableType);
+        }
+
+        public static string FirstPvfTypeTag(string typeString)
+        {
+            if (string.IsNullOrWhiteSpace(typeString))
+                return null;
+
+            var match = Regex.Match(typeString.Replace("`", "").ToLowerInvariant(), @"\[([a-z ]+)\]");
+            return match.Success ? match.Groups[1].Value.Trim() : null;
+        }
+
+        public static bool IsAvatarMetadata(ItemMetadata metadata)
+        {
+            if (metadata == null || !string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal))
+                return false;
+
+            if (string.Equals(metadata.ItemCategory?.Trim(), "clear avatar", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var tag = ResolvePvfTypeTag(metadata);
+            if (!string.IsNullOrWhiteSpace(tag) && tag.EndsWith(" avatar", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var path = metadata.PvfFilePath;
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            var normalizedPath = "/" + path.Replace('\\', '/').Trim('/');
+            return normalizedPath.IndexOf("/avatar/", StringComparison.OrdinalIgnoreCase) >= 0
+                || normalizedPath.IndexOf("/at_avatar/", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        public static bool RequiresManualGrantType(ItemMetadata metadata)
+        {
+            if (metadata == null || string.Equals(metadata.ItemKind, "special", StringComparison.Ordinal))
+                return false;
+
+            if (string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal))
+            {
+                if (IsAvatarMetadata(metadata))
+                    return false;
+                return !EquipmentTypeInfo.TryParse(metadata.EquipmentType, out _);
+            }
+
+            if (string.Equals(metadata.ItemKind, "stackable", StringComparison.Ordinal))
+                return string.IsNullOrWhiteSpace(FirstPvfTypeTag(metadata.StackableType));
+
+            return true;
         }
 
         public static byte ResolveEmblemSocketType(int itemTemplateId)

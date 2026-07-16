@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using DfoGmTool.ServerCore.Game.Currency;
+using DfoGmTool.ServerCore.Game.Skills;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.ServerCore.Game.Inventory
@@ -20,7 +22,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             SqliteTransaction transaction,
             int characterId,
             int itemTemplateId,
-            int count)
+            int count,
+            ItemGrantOptions options = null)
         {
             var result = new ItemGrantResult
             {
@@ -56,28 +59,60 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             if (!ItemGrantExpirationResolver.TryResolve(itemTemplateId, metadata, out var expireTime, out var expirationError))
                 return Fail(result, expirationError);
 
-            var isAvatar = IsAvatarReward(metadata);
-            var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata);
+            var manualGrantType = NormalizeManualGrantType(options?.ManualGrantType);
+            var requiresManualGrantType = ItemMetadataResolver.RequiresManualGrantType(metadata);
+            if (!requiresManualGrantType && manualGrantType != null)
+                return Fail(result, "PVF 绫诲瀷宸插彲纭锛屼笉允许运用手动发放分类");
+            if (requiresManualGrantType)
+            {
+                if (manualGrantType == null)
+                    return Fail(result, "PVF 鐗╁搧绫诲瀷涓嶆槑纭紝璇峰湪鍙戞斁鍗＄墖涓墜鍔ㄦ寚瀹氬垎绫?");
+                if (!IsManualGrantTypeAllowed(metadata, manualGrantType))
+                    return Fail(result, "鎵嬪姩鍙戞斁鍒嗙被涓嶉€傜敤浜庤 PVF 鐗╁搧");
+            }
+
+            var isAvatar = ItemMetadataResolver.IsAvatarMetadata(metadata)
+                || manualGrantType == "avatar";
+            var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata)
+                || manualGrantType == "pet-consumable";
             var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal)
-                && ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId);
-            var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
-            var isPetArtifactEquipment = isPetEquipment && !isCreature;
+                && (ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId)
+                    || manualGrantType == "pet"
+                    || manualGrantType == "pet-equipment");
+            var isCreature = (isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId))
+                || manualGrantType == "pet";
+            var isPetArtifactEquipment = (isPetEquipment && !isCreature)
+                || manualGrantType == "pet-equipment";
 
             var listType = InventoryListType.Main;
             var itemKind = metadata.ItemKind;
             var marker16 = metadata.IsStackable ? 0 : -1;
             var durability = metadata.Durability;
             var extraJson = "{}";
+            byte optionValue = 0;
+            var qualityMode = ItemQualityMode.Top;
             int slotStart;
             int slotEnd;
 
             if (isAvatar)
             {
+                if (!TryResolveAvatarGrant(
+                        connection,
+                        transaction,
+                        characterId,
+                        itemTemplateId,
+                        options,
+                        out optionValue,
+                        out expireTime,
+                        out var avatarError))
+                {
+                    return Fail(result, avatarError);
+                }
+
                 listType = InventoryListType.Avatar;
                 itemKind = "avatar";
                 slotStart = 0;
                 slotEnd = 500;
-                expireTime = 0;
                 marker16 = SqliteInventoryStore.DefaultAvatarUnknownFixed30;
                 durability = 0;
                 extraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson();
@@ -114,9 +149,45 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             }
             else
             {
-                metadata.GetSlotRange(out slotStart, out slotEnd);
+                if (options?.ExpirationDays != null
+                    && !TryResolveExpirationOverride(metadata, expireTime, options.ExpirationDays.Value, out expireTime, out var overrideError))
+                {
+                    return Fail(result, overrideError);
+                }
+
+                if (requiresManualGrantType)
+                {
+                    ResolveManualMainSlotRange(manualGrantType, out slotStart, out slotEnd);
+                }
+                else
+                {
+                    metadata.GetSlotRange(out slotStart, out slotEnd);
+                }
                 if (metadata.IsStackable && expireTime > 0)
                     itemKind = "special";
+            }
+
+            if (!isAvatar && string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal))
+            {
+                var equipmentCapability = EquipmentGrantPolicy.Describe(metadata);
+                if (options != null)
+                {
+                    qualityMode = options.QualityMode;
+                    if (equipmentCapability.CanUpgrade || equipmentCapability.CanAmplify || equipmentCapability.CanForge)
+                    {
+                        if (!EquipmentGrantPolicy.TryBuildExtraJson(
+                                metadata,
+                                options,
+                                AmplifyInitialValueResolver.Resolve,
+                                out extraJson,
+                                out var equipmentError))
+                            return Fail(result, equipmentError);
+                    }
+                    else if (options.UpgradeLevel != 0 || options.AmplifyType != 0 || options.ForgingLevel != 0)
+                    {
+                        return Fail(result, "该物品不支持强化、增幅或锻造属性");
+                    }
+                }
             }
 
             result.ExpireTime = expireTime;
@@ -156,7 +227,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     : 0;
                 var qualitySeed = listType == InventoryListType.Pet || listType == InventoryListType.Avatar
                     ? 0
-                    : InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
+                    : (int)ItemQuality.ResolveSeed(qualityMode);
                 var storedStackCount = listType == InventoryListType.Pet || listType == InventoryListType.Avatar
                     ? 0
                     : qualitySeed;
@@ -174,7 +245,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     qualitySeed,
                     durability,
                     sealFlag,
-                    0,
+                    optionValue,
                     expireTime,
                     marker16,
                     petSerialOrHandle,
@@ -183,6 +254,200 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             }
 
             return CompleteGrant(connection, transaction, characterId, result);
+        }
+
+        private static bool TryResolveAvatarGrant(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int itemTemplateId,
+            ItemGrantOptions options,
+            out byte optionValue,
+            out int expireTime,
+            out string error)
+        {
+            optionValue = 0;
+            expireTime = 0;
+            error = null;
+            if (!ItemMetadataResolver.TryLoadEquipmentFile(itemTemplateId, out var equipment))
+            {
+                error = "装扮模板无法从 PVF 读取";
+                return false;
+            }
+            if (!TryLoadCharacterGrantContext(connection, transaction, characterId, out var job, out var growType, out var level))
+            {
+                error = "角色不存在";
+                return false;
+            }
+            if (!AvatarGrantPolicy.IsUsableByJob(equipment.UsableJob, job))
+            {
+                error = "该装扮不适用于当前角色职业";
+                return false;
+            }
+
+            var legalOptions = AvatarGrantPolicy.ResolveOptions(
+                equipment.EquipmentType,
+                equipment.Grade,
+                equipment.AvatarSelectAbilities,
+                job,
+                equipment.AbilityCaseIndex);
+            var requestedOption = options?.AvatarOptionValue ?? 0;
+            if (requestedOption < 0 || requestedOption > byte.MaxValue
+                || !AvatarGrantPolicy.ContainsValue(legalOptions, requestedOption))
+            {
+                error = "装扮属性不属于当前模板、品级和职业的合法选项";
+                return false;
+            }
+            optionValue = (byte)requestedOption;
+
+            if (options?.ExpirationDays != null)
+            {
+                var requestedDays = options.ExpirationDays.Value;
+                var durationOptions = AvatarDurationResolver.Resolve(itemTemplateId);
+                if (!AvatarDurationResolver.ContainsDuration(durationOptions, requestedDays))
+                {
+                    error = "装扮期限不属于该模板的 PVF 支持档位";
+                    return false;
+                }
+                if (requestedDays > 0)
+                {
+                    var value = DateTimeOffset.Now.ToUnixTimeSeconds() + requestedDays * 86400L;
+                    if (value > int.MaxValue)
+                    {
+                        error = "装扮期限超出服务端可存储范围";
+                        return false;
+                    }
+                    expireTime = (int)value;
+                }
+            }
+            return true;
+        }
+
+        private static bool TryResolveExpirationOverride(
+            ItemMetadata metadata,
+            int defaultExpireTime,
+            int days,
+            out int expireTime,
+            out string error)
+        {
+            var capability = new ItemGrantExpirationCapability
+            {
+                IsLimited = defaultExpireTime > 0,
+                CanOverride = defaultExpireTime > 0,
+                DefaultExpireTime = defaultExpireTime,
+            };
+            if (metadata?.IsStackable == true
+                && StackableExpirationPolicyResolver.TryResolve(metadata.StackableFile, out var policy))
+            {
+                capability.IsLimited = policy.RequiresInstanceExpiration
+                    || policy.AbsoluteExpirationUnixTime > 0
+                    || policy.DailyDeleteItem;
+                capability.CanOverride = policy.RequiresInstanceExpiration
+                    || policy.AbsoluteExpirationUnixTime > 0;
+            }
+            return ItemGrantExpirationOverride.TryResolve(
+                capability,
+                days,
+                DateTimeOffset.Now.ToUnixTimeSeconds(),
+                out expireTime,
+                out error);
+        }
+
+        private static string NormalizeManualGrantType(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+            return value.Trim().ToLowerInvariant();
+        }
+
+        private static bool IsManualGrantTypeAllowed(ItemMetadata metadata, string manualGrantType)
+        {
+            if (metadata == null || string.IsNullOrWhiteSpace(manualGrantType))
+                return false;
+
+            if (string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal))
+            {
+                return manualGrantType == "equipment"
+                    || manualGrantType == "avatar"
+                    || manualGrantType == "pet"
+                    || manualGrantType == "pet-equipment";
+            }
+
+            if (metadata.IsStackable)
+            {
+                return manualGrantType == "consumable"
+                    || manualGrantType == "material"
+                    || manualGrantType == "quest"
+                    || manualGrantType == "expert-material"
+                    || manualGrantType == "avatar-emblem"
+                    || manualGrantType == "special-material"
+                    || manualGrantType == "pet-consumable";
+            }
+
+            return false;
+        }
+
+        private static void ResolveManualMainSlotRange(string manualGrantType, out int slotStart, out int slotEnd)
+        {
+            switch (manualGrantType)
+            {
+                case "equipment":
+                    slotStart = 9;
+                    slotEnd = 64;
+                    return;
+                case "material":
+                    slotStart = 121;
+                    slotEnd = 176;
+                    return;
+                case "quest":
+                    slotStart = 177;
+                    slotEnd = 232;
+                    return;
+                case "expert-material":
+                    slotStart = 233;
+                    slotEnd = 288;
+                    return;
+                case "avatar-emblem":
+                    slotStart = 289;
+                    slotEnd = 344;
+                    return;
+                case "special-material":
+                    slotStart = 345;
+                    slotEnd = 359;
+                    return;
+                default:
+                    slotStart = 65;
+                    slotEnd = 120;
+                    return;
+            }
+        }
+
+        private static bool TryLoadCharacterGrantContext(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            out int job,
+            out int growType,
+            out int level)
+        {
+            job = 0;
+            growType = 0;
+            level = 0;
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "SELECT job, grow_type, level FROM characters WHERE character_id = @cid;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return false;
+                    job = reader.GetInt32(0);
+                    growType = reader.GetInt32(1);
+                    level = reader.GetInt32(2);
+                    return true;
+                }
+            }
         }
 
         private bool TryGrantStackable(
@@ -316,17 +581,6 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             }
 
             return remaining;
-        }
-
-        private static bool IsAvatarReward(ItemMetadata metadata)
-        {
-            var path = metadata?.PvfFilePath;
-            if (string.IsNullOrWhiteSpace(path))
-                return false;
-
-            var normalizedPath = "/" + path.Replace('\\', '/').Trim('/');
-            return normalizedPath.IndexOf("/avatar/", StringComparison.OrdinalIgnoreCase) >= 0
-                || normalizedPath.IndexOf("/at_avatar/", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static bool IsAccountContract(ItemMetadata metadata)
