@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Linq;
 using DfoGmTool.ServerCore.Game.TitleBook;
 using DfoGmTool.ServerCore.Game.Characters;
@@ -22,12 +23,12 @@ namespace DfoGmTool.Services
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
-SELECT c.character_id, c.name, c.level, c.exp, c.job, c.grow_type,
+SELECT c.character_id, CAST(c.name AS BLOB), c.level, c.exp, c.job, c.grow_type,
        c.bonus_sp, c.bonus_tp, c.account_id, a.m_id
 FROM characters c
 JOIN accounts a ON a.account_id = c.account_id
 WHERE (@aid < 0 OR c.account_id = @aid) AND c.delete_flag = 0
-ORDER BY c.character_id;";
+ORDER BY c.account_id, c.slot_index, c.character_id;";
                     cmd.Parameters.AddWithValue("@aid", accountId);
                     using (var reader = cmd.ExecuteReader())
                     {
@@ -38,7 +39,7 @@ ORDER BY c.character_id;";
                             result.Add(new
                             {
                                 characterId = reader.GetInt32(0),
-                                name = reader.GetString(1),
+                                name = ReadCharacterName(reader, 1),
                                 level = reader.GetInt32(2),
                                 exp = reader.GetInt64(3),
                                 job,
@@ -74,7 +75,7 @@ ORDER BY c.character_id;";
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
-SELECT name, level, exp, job, grow_type, bonus_sp, bonus_tp
+SELECT CAST(name AS BLOB), level, exp, job, grow_type, bonus_sp, bonus_tp, ex_equip_slot_stat
 FROM characters WHERE character_id = @cid;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -88,7 +89,7 @@ FROM characters WHERE character_id = @cid;";
                         {
                             characterId,
                             accountId,
-                            name = reader.GetString(0),
+                            name = ReadCharacterName(reader, 0),
                             level = reader.GetInt32(1),
                             exp = reader.GetInt64(2),
                             job,
@@ -96,6 +97,8 @@ FROM characters WHERE character_id = @cid;";
                             growType,
                             bonusSp = reader.GetInt32(5),
                             bonusTp = reader.GetInt32(6),
+                            exEquipSlotStat = reader.GetInt32(7),
+                            extraEquipmentSlotsUnlocked = reader.GetInt32(7) == 3,
                             maxLevel = ExpTableProvider.MaxLevel,
                             wallet = new
                             {
@@ -255,6 +258,120 @@ ON CONFLICT(character_id, list_type) DO UPDATE SET list_param16 = excluded.list_
             };
         }
 
+        private static readonly int[] ExtraEquipmentSlotQuestIds = { 674, 649, 676, 675, 650, 677 };
+
+        public object UnlockExtraEquipmentSlots(int characterId)
+        {
+            var completedQuestIds = new List<int>();
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    int level = -1, job = -1, growType = -1, exEquipSlotStat = 0;
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = @"
+SELECT level, job, grow_type, ex_equip_slot_stat
+FROM characters
+WHERE character_id = @cid;";
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                level = reader.GetInt32(0);
+                                job = reader.GetInt32(1);
+                                growType = reader.GetInt32(2);
+                                exEquipSlotStat = reader.GetInt32(3);
+                            }
+                        }
+                    }
+
+                    if (level < 0)
+                    {
+                        tx.Rollback();
+                        return Error("角色不存在 " + characterId);
+                    }
+                    if (level < 70)
+                    {
+                        tx.Rollback();
+                        return Error("角色等级达到 70 级后才能开启左右槽");
+                    }
+                    if (exEquipSlotStat == 3)
+                    {
+                        tx.Rollback();
+                        return Error("左右槽已经开启");
+                    }
+
+                    var cleared = QuestRepository.LoadClearedFlags(conn, tx, characterId);
+                    var clearedSet = new HashSet<int>(cleared.Keys);
+                    foreach (var questId in ExtraEquipmentSlotQuestIds)
+                    {
+                        var meta = _pvfIndex.GetQuestMeta(questId);
+                        if (meta == null
+                            || !QuestMatchesCharacter(meta, job, growType)
+                            || !IsAcceptableQuestLikeServer(meta, level, clearedSet, cleared)
+                            || questId <= 0
+                            || questId > ushort.MaxValue)
+                            continue;
+
+                        QuestRepository.MarkQuestCleared(conn, tx, characterId, (ushort)questId, 1);
+                        using (var delete = conn.CreateCommand())
+                        {
+                            delete.Transaction = tx;
+                            delete.CommandText = "DELETE FROM character_active_quests WHERE character_id = @cid AND quest_id = @qid;";
+                            delete.Parameters.AddWithValue("@cid", characterId);
+                            delete.Parameters.AddWithValue("@qid", questId);
+                            delete.ExecuteNonQuery();
+                        }
+                        cleared[questId] = 1;
+                        clearedSet.Add(questId);
+                        completedQuestIds.Add(questId);
+                    }
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = @"
+UPDATE characters
+SET ex_equip_slot_stat = 3
+WHERE character_id = @cid;";
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        if (cmd.ExecuteNonQuery() == 0)
+                        {
+                            tx.Rollback();
+                            return Error("开启左右槽失败");
+                        }
+                    }
+
+                    tx.Commit();
+                }
+            }
+
+            if (completedQuestIds != null)
+                return new { success = true, characterId, exEquipSlotStat = 3, completedQuestIds };
+
+            if (!TryGetAccountId(characterId, out _))
+                return Error("角色不存在: " + characterId);
+
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            using (var cmd = conn.CreateCommand())
+            {
+                conn.Open();
+                cmd.CommandText = @"
+UPDATE characters
+SET ex_equip_slot_stat = 3
+WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                if (cmd.ExecuteNonQuery() == 0)
+                    return Error("开启左右槽失败");
+            }
+
+            return new { success = true, characterId, exEquipSlotStat = 3 };
+        }
+
         public object UnlockDungeonPermissions(int characterId, PvfIndexService pvfIndex)
         {
             const int MaxClearState = 4;
@@ -336,7 +453,7 @@ VALUES (@cid, @sort, @dungeon, @state);";
                     {
                         cmd.Transaction = tx;
                         cmd.CommandText = @"
-SELECT CAST(name AS BLOB), name, account_id
+SELECT CAST(name AS BLOB), account_id
 FROM characters
 WHERE character_id = @cid;";
                         cmd.Parameters.AddWithValue("@cid", characterId);
@@ -345,8 +462,8 @@ WHERE character_id = @cid;";
                             if (!reader.Read())
                                 return Error("角色不存在: " + characterId);
                             nameBlob = (byte[])reader.GetValue(0);
-                            name = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-                            accountId = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+                            name = DecodeCharacterName(nameBlob);
+                            accountId = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
                         }
                     }
 
@@ -377,9 +494,25 @@ WHERE character_id = @cid
                             ("@cid", characterId));
 
                     if (TableExists(conn, tx, "account_character_entries"))
-                        deletedAccountEntryRows = ExecuteNonQuery(conn, tx,
-                            "DELETE FROM account_character_entries WHERE CAST(name AS BLOB) = @name;",
-                            ("@name", nameBlob));
+                    {
+                        if (ColumnExists(conn, tx, "account_character_entries", "character_id"))
+                        {
+                            deletedAccountEntryRows = ExecuteNonQuery(conn, tx,
+                                "DELETE FROM account_character_entries WHERE character_id = @cid;",
+                                ("@cid", characterId));
+                        }
+                        else
+                        {
+                            deletedAccountEntryRows = ExecuteNonQuery(conn, tx, @"
+DELETE FROM account_character_entries
+WHERE name = @nameText
+   OR name = @nameBytes
+   OR name_bytes = @nameBytes
+   OR CAST(name AS BLOB) = @nameBytes;",
+                                ("@nameText", name),
+                                ("@nameBytes", nameBlob));
+                        }
+                    }
 
                     if (TableExists(conn, tx, "get_userinfo_template")
                         && ColumnExists(conn, tx, "get_userinfo_template", "seed_character_id"))
@@ -518,18 +651,40 @@ LIMIT 1;",
             }
         }
 
+        private static string ReadCharacterName(IDataRecord reader, int ordinal)
+        {
+            if (reader == null || reader.IsDBNull(ordinal))
+                return string.Empty;
+            var value = reader.GetValue(ordinal);
+            if (value is byte[] bytes)
+                return DecodeCharacterName(bytes);
+            return Convert.ToString(value) ?? string.Empty;
+        }
+
+        private static string DecodeCharacterName(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0)
+                return string.Empty;
+            return System.Text.Encoding.UTF8.GetString(bytes);
+        }
+
         // 玩家实际看到的 SP/TP: 总点数(等级表+加成) 与 剩余点数(扣除已学技能),
         // 用服务端 SkillStateService.LoadAndSync 同一条链计算
         public object GetSpTp(int characterId)
         {
-            byte job, level;
-            int bonusSp, bonusTp;
+            byte job, level, growType;
+            int bonusSp, bonusTp, skillTreeIndex;
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT job, level, bonus_sp, bonus_tp FROM characters WHERE character_id = @cid;";
+                    cmd.CommandText = @"
+SELECT c.job, c.level, c.grow_type, c.bonus_sp, c.bonus_tp,
+       COALESCE(s.skill_tree_index, -1)
+FROM characters c
+LEFT JOIN character_subtype1_fields s ON s.character_id = c.character_id
+WHERE c.character_id = @cid;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
                     {
@@ -537,8 +692,10 @@ LIMIT 1;",
                             return Error("角色不存在: " + characterId);
                         job = (byte)reader.GetInt32(0);
                         level = (byte)reader.GetInt32(1);
-                        bonusSp = reader.GetInt32(2);
-                        bonusTp = reader.GetInt32(3);
+                        growType = (byte)reader.GetInt32(2);
+                        bonusSp = reader.GetInt32(3);
+                        bonusTp = reader.GetInt32(4);
+                        skillTreeIndex = reader.GetInt32(5);
                     }
                 }
             }
@@ -547,18 +704,30 @@ LIMIT 1;",
             {
                 var repository = new DfoGmTool.ServerCore.Game.CharacterData.SqliteCharacterProgressRepository(
                     _config.DatabasePath, _config.SchemaPath);
+                DfoGmTool.ServerCore.Game.Characters.CharacterStatComputer.DecodeGrowType(growType, out var firstGrow, out var secondGrow);
                 var synced = DfoGmTool.ServerCore.Game.Skills.SkillStateService.LoadAndSync(
-                    repository, characterId, job, level, bonusSp, bonusTp, persist: false);
+                    repository, characterId, job, level, bonusSp, bonusTp, persist: false, firstGrow, secondGrow);
                 if (synced.Points == null)
                     return Error("技能点状态加载失败");
 
+                var currentPage = ResolveCurrentSkillPage(skillTreeIndex);
                 return new
                 {
+                    success = true,
                     characterId,
+                    skillTreeIndex = skillTreeIndex < 0 ? 255 : skillTreeIndex,
+                    skillTreeUnlocked = skillTreeIndex >= 0,
+                    currentSkillPage = currentPage,
                     totalSp = synced.Points.TotalSp,
                     remainingSp = synced.Points.RemainingSp,
+                    remainingSpPage0 = synced.Points.RemainingSp,
+                    remainingSpPage1 = synced.Points.RemainingSpPage1,
+                    currentRemainingSp = GetRemainingSpForPage(synced.Points, currentPage),
                     totalTp = synced.Points.TotalTp,
                     remainingTp = synced.Points.RemainingTp,
+                    remainingTpPage0 = synced.Points.RemainingTp,
+                    remainingTpPage1 = synced.Points.RemainingTpPage1,
+                    currentRemainingTp = GetRemainingTpForPage(synced.Points, currentPage),
                     bonusSp,
                     bonusTp,
                 };
@@ -650,13 +819,7 @@ WHERE character_id = @cid;";
         // 任务奖励里的转职链: jcq=1 授转职(GrowNumber), jcq=2 授觉醒
         private bool ApplyGrowTypeFromQuest(int characterId, PvfIndexService.QuestMeta meta)
         {
-            if (meta == null || meta.GrowNumber <= 0)
-                return false;
-            if (meta.JobChangeQuestValue == 1)
-                return ApplyGrowType(characterId, null, meta.GrowNumber, null);
-            if (meta.JobChangeQuestValue == 2)
-                return ApplyGrowType(characterId, null, null, meta.GrowNumber);
-            return false;
+            return ApplyGrowTypeDeltaFromQuest(characterId, meta);
         }
 
         public object GetGrowOptions(int characterId, int? selectedJob)

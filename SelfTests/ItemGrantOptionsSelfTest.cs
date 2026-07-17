@@ -182,8 +182,10 @@ namespace DfoGmTool.SelfTests
                 AvatarGrantPolicy.IsUsableByJob("[all]", 12));
             Check("multi-job avatar accepts later at-swordman token",
                 AvatarGrantPolicy.IsUsableByJob("[swordman]` `[demonic swordman]` `[at swordman]", 11));
-            Check("male swordman avatar accepts demonic swordman category",
-                AvatarGrantPolicy.IsUsableByJob("[swordman]", 9));
+            Check("dark knight avatar accepts demonic swordman category",
+                AvatarGrantPolicy.IsUsableByJob("[demonic swordman]", 9));
+            Check("male swordman avatar rejects dark knight",
+                !AvatarGrantPolicy.IsUsableByJob("[swordman]", 9));
             Check("male swordman avatar rejects female swordman",
                 !AvatarGrantPolicy.IsUsableByJob("[swordman]", 11));
 

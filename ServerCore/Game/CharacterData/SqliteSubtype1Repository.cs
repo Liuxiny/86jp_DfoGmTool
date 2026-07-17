@@ -79,7 +79,7 @@ namespace DfoGmTool.ServerCore.Game.CharacterData
                         snap.StatLevel = (byte)r.GetInt32(19);
                         snap.NameTagItemId = (uint)r.GetInt64(20);
                         snap.NameTagExpireTime = (uint)r.GetInt64(21);
-                        snap.SkillTreeIndex = NormalizeSkillTreeIndex(r.GetInt32(22));
+                        snap.SkillTreeIndex = NormalizeSkillTreeIndexForClient(r.GetInt32(22));
                         snap.EquippedCreatureLevel = (byte)r.GetInt32(23);
                         snap.ManageLevel = (byte)r.GetInt32(25);
                         snap.FlagByte = (byte)r.GetInt32(26);
@@ -182,7 +182,7 @@ ORDER BY slot", conn))
 
         public int UpdateSkillTreeIndex(int characterId, byte skillTreeIndex)
         {
-            skillTreeIndex = NormalizeSkillTreeIndex(skillTreeIndex);
+            var storedSkillTreeIndex = NormalizeSkillTreeIndexForStorage(skillTreeIndex);
             using (var conn = Open())
             using (var cmd = new SqliteCommand(@"
 INSERT INTO character_subtype1_fields(character_id, skill_tree_index)
@@ -190,7 +190,7 @@ VALUES(@cid, @idx)
 ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", conn))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@idx", (int)skillTreeIndex);
+                cmd.Parameters.AddWithValue("@idx", storedSkillTreeIndex);
                 return cmd.ExecuteNonQuery();
             }
         }
@@ -206,7 +206,7 @@ ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", conn))
                 if (value == null || value == DBNull.Value)
                     return null;
 
-                return NormalizeSkillTreeIndex(Convert.ToInt32(value));
+                return NormalizeSkillTreeIndexForClient(Convert.ToInt32(value));
             }
         }
 
@@ -356,9 +356,18 @@ JOIN characters c ON c.character_id = s.character_id;", conn))
             return repaired;
         }
 
-        private static byte NormalizeSkillTreeIndex(int skillTreeIndex)
+        private static byte NormalizeSkillTreeIndexForClient(int skillTreeIndex)
         {
-            return skillTreeIndex <= 0 ? (byte)0 : (byte)1;
+            if (skillTreeIndex < 0)
+                return 0xFF;
+            return skillTreeIndex == 0 ? (byte)0 : (byte)1;
+        }
+
+        private static int NormalizeSkillTreeIndexForStorage(byte skillTreeIndex)
+        {
+            if (skillTreeIndex == 0xFF)
+                return -1;
+            return skillTreeIndex == 0 ? 0 : 1;
         }
 
         private SqliteConnection Open()

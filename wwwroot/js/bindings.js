@@ -4,6 +4,8 @@
 
 if (window.DfoTheme) window.DfoTheme.bind();
 bindRuntimeEnvironment();
+bindGivePageSize();
+bindInventoryPageSize();
 
 document.querySelectorAll('.tab[data-tab]').forEach((tab) => {
   tab.onclick = () => {
@@ -25,6 +27,7 @@ $('#btn-search').onclick = () => searchItems(0);
 $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchItems(0); });
 $('#give-rarity').onchange = () => searchItems(0);
 $('#give-expiration').onchange = () => searchItems(0);
+$('#give-usable-job').onchange = () => searchItems(0);
 // 等级区间与品质下拉行为一致: 改完即生效, 回车也生效
 for (const sel of ['#give-minlv', '#give-maxlv']) {
   $(sel).addEventListener('change', () => searchItems(0));
@@ -36,8 +39,11 @@ $('#inventory-expiration').onchange = () => { invPage = 0; renderItemTable(); };
 $('#btn-account-panel').onclick = showAccountPanel;
 $('#btn-set-level').onclick = setLevel;
 $('#btn-max-personal-cargo').onclick = maxPersonalCargo;
+$('#btn-unlock-equipment-slots').onclick = unlockExtraEquipmentSlots;
 $('#btn-unlock-dungeon-permissions').onclick = unlockDungeonPermissions;
 $('#btn-delete-character').onclick = deleteCurrentCharacter;
+$('#btn-jump-character-currency').onclick = jumpToCharacterCurrency;
+$('#btn-jump-account-currency').onclick = jumpToAccountCurrency;
 $('#btn-open-character-clone').onclick = openCharacterClonePanel;
 $('#btn-cancel-character-clone').onclick = closeCharacterClonePanel;
 $('#clone-target-account').onchange = updateCloneAccountLimit;
@@ -64,6 +70,7 @@ document.querySelectorAll('.quest-tab').forEach((tab) => {
     document.querySelectorAll('.quest-tab-page').forEach((p) => p.classList.add('hidden'));
     tab.classList.add('active');
     $('#quest-tab-' + tab.dataset.questTab).classList.remove('hidden');
+    if (tab.dataset.questTab === 'lib') searchQuestLib();
   };
 });
 
@@ -86,13 +93,27 @@ document.querySelectorAll('.acc-tab').forEach((tab) => {
 });
 
 $('#btn-refresh-quests').onclick = loadQuests;
+$('#btn-refresh-all-quests').onclick = loadAllVisibleQuests;
+$('#all-quest-display-mode').onchange = setAllQuestDisplayMode;
+$('#btn-complete-current-main-all').onclick = completeCurrentLevelMainQuestsFromAll;
+$('#btn-complete-current-side-all').onclick = completeCurrentLevelSideQuestsFromAll;
+$('#btn-complete-current-system').onclick = completeCurrentLevelSystemQuests;
+$('#btn-complete-current-achievement-no-item').onclick = completeCurrentLevelNoItemAchievementQuests;
+$('#btn-complete-profession-quests').onclick = completeProfessionQuestsButton;
+$('#btn-complete-equipment-slot-quests').onclick = completeEquipmentSlotQuests;
+$('#btn-cancel-profession-quest').onclick = closeProfessionQuestPanel;
+$('#btn-confirm-profession-quest').onclick = confirmProfessionQuestChoice;
+$('#btn-reset-daily-quests').onclick = resetDailyQuests;
 $('#btn-refresh-main').onclick = loadMainQuests;
 $('#btn-complete-current-main').onclick = completeCurrentLevelMainQuests;
+$('#btn-complete-current-side').onclick = completeCurrentLevelSideQuests;
 $('#btn-refresh-achieve').onclick = loadAchieveQuests;
 $('#btn-titlebook-all').onclick = completeAllTitleBook;
 $('#btn-titlebook-unclear-page').onclick = unclearCurrentTitleBookPage;
 $('#btn-refresh-cleared').onclick = loadClearedQuests;
 $('#btn-quest-search').onclick = searchQuestLib;
+$('#quest-grade-filter').onchange = searchQuestLib;
+$('#quest-region-filter').onchange = searchQuestLib;
 $('#quest-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchQuestLib(); });
 
 initializeRuntimeEnvironment().catch((e) => toast(e.message, true));

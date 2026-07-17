@@ -1,5 +1,5 @@
-using DfoGmTool.ServerCore.Game.SelectCharacter;
 using DfoGmTool.ServerCore.Game.CharacterData;
+using DfoGmTool.ServerCore.Game.SelectCharacter;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.ServerCore.Game.Skills
@@ -10,16 +10,25 @@ namespace DfoGmTool.ServerCore.Game.Skills
 
         public int RemainingSp { get; set; }
 
+        public int RemainingSpPage1 { get; set; }
+
+        public int SpentSp { get; set; }
+
+        public int SpentSpPage1 { get; set; }
+
         public int TotalTp { get; set; }
 
         public int RemainingTp { get; set; }
 
-        public byte SyncedLevel { get; set; }
+        public int RemainingTpPage1 { get; set; }
 
-        public bool HasPersistedState { get; set; }
+        public int SpentTp { get; set; }
+
+        public int SpentTpPage1 { get; set; }
+
+        public byte SyncedLevel { get; set; }
     }
 
-    // NOTI 0x0025 中连续四个 u16 的绝对状态快照。
     public struct SkillPointProtocolState
     {
         public ushort Page0Sp { get; set; }
@@ -35,36 +44,30 @@ namespace DfoGmTool.ServerCore.Game.Skills
     {
         public static SkillPointState ResolvePointState(
             SkillInfoSnapshot skills,
-            SkillPointState persisted,
             byte job,
             byte level,
             int bonusSp,
-            int bonusTp)
+            int bonusTp,
+            int growType = 0,
+            int secondGrowType = 0)
         {
-            var calculated = SkillPointCalculator.Calculate(job, level, bonusSp, bonusTp, skills);
+            var page0 = SkillPointLedger.Compute(job, level, bonusSp, bonusTp, skills, 0, growType, secondGrowType);
+            var page1 = SkillPointLedger.Compute(job, level, bonusSp, bonusTp, skills, 1, growType, secondGrowType);
 
-            var state = new SkillPointState
+            return new SkillPointState
             {
-                TotalSp = calculated.TotalSp,
-                TotalTp = calculated.TotalTp,
+                TotalSp = page0.TotalSp,
+                RemainingSp = page0.RemainingSp,
+                RemainingSpPage1 = page1.RemainingSp,
+                SpentSp = page0.SpentSp,
+                SpentSpPage1 = page1.SpentSp,
+                TotalTp = page0.TotalTp,
+                RemainingTp = page0.RemainingTp,
+                RemainingTpPage1 = page1.RemainingTp,
+                SpentTp = page0.SpentTp,
+                SpentTpPage1 = page1.SpentTp,
                 SyncedLevel = level,
-                HasPersistedState = persisted != null && persisted.HasPersistedState
             };
-
-            if (persisted != null && persisted.HasPersistedState)
-            {
-                var gainedSp = calculated.TotalSp - persisted.TotalSp;
-                var gainedTp = calculated.TotalTp - persisted.TotalTp;
-                state.RemainingSp = Clamp(persisted.RemainingSp + gainedSp, 0, calculated.TotalSp);
-                state.RemainingTp = Clamp(persisted.RemainingTp + gainedTp, 0, calculated.TotalTp);
-            }
-            else
-            {
-                state.RemainingSp = calculated.RemainingSp;
-                state.RemainingTp = calculated.RemainingTp;
-            }
-
-            return state;
         }
 
         public static void ApplyProtocolMirrors(SkillInfoSnapshot skills, SkillPointState state)
@@ -74,8 +77,9 @@ namespace DfoGmTool.ServerCore.Game.Skills
                 skills.Pages.Add(new SkillInfoPageSnapshot());
 
             skills.Pages[0].HeaderValue = ToUInt16(state.RemainingSp);
+            skills.Pages[1].HeaderValue = ToUInt16(state.RemainingSpPage1);
             skills.Tail0 = ToUInt16(state.RemainingTp);
-            skills.Tail1 = 0;
+            skills.Tail1 = ToUInt16(state.RemainingTpPage1);
             skills.HasTailValues = true;
         }
 
@@ -83,16 +87,12 @@ namespace DfoGmTool.ServerCore.Game.Skills
             SkillInfoSnapshot skills,
             SkillPointState points)
         {
-            var fallbackSp = ToUInt16(points != null ? points.RemainingSp : 0);
-            var sharedTp = ToUInt16(points != null ? points.RemainingTp : 0);
             return new SkillPointProtocolState
             {
-                Page0Sp = GetProtocolPageSp(skills, 0, fallbackSp),
-                Page1Sp = GetProtocolPageSp(skills, 1, 0),
-                // 当前业务模型的 TP 在两套技能页之间共享，因此两个协议槽写同一绝对值。
-                // 历史 Tail1 曾被旧代码写入 SP，不能作为任何 TP 状态来源。
-                Page0Tp = sharedTp,
-                Page1Tp = sharedTp,
+                Page0Sp = ToUInt16(points != null ? points.RemainingSp : 0),
+                Page1Sp = ToUInt16(points != null ? points.RemainingSpPage1 : 0),
+                Page0Tp = ToUInt16(points != null ? points.RemainingTp : 0),
+                Page1Tp = ToUInt16(points != null ? points.RemainingTpPage1 : 0),
             };
         }
 
@@ -103,7 +103,9 @@ namespace DfoGmTool.ServerCore.Game.Skills
             byte level,
             int bonusSp,
             int bonusTp,
-            bool persist)
+            bool persist,
+            int growType = 0,
+            int secondGrowType = 0)
         {
             if (repository == null)
                 throw new System.ArgumentNullException(nameof(repository));
@@ -115,24 +117,10 @@ namespace DfoGmTool.ServerCore.Game.Skills
                 level,
                 bonusSp,
                 bonusTp,
-                persist);
+                persist,
+                growType,
+                secondGrowType);
             return GetProtocolState(synced.Skills, synced.Points);
-        }
-
-        private static ushort GetProtocolPageSp(
-            SkillInfoSnapshot skills,
-            int pageIndex,
-            ushort fallback)
-        {
-            if (skills != null
-                && pageIndex >= 0
-                && pageIndex < skills.Pages.Count
-                && skills.Pages[pageIndex] != null)
-            {
-                return skills.Pages[pageIndex].HeaderValue;
-            }
-
-            return fallback;
         }
 
         public static void Persist(
@@ -146,6 +134,21 @@ namespace DfoGmTool.ServerCore.Game.Skills
             repository.SaveSkillProgress(characterId, skills, state);
         }
 
+        public static void ResolveAndPersist(
+            SqliteCharacterProgressRepository repository,
+            int characterId,
+            SkillInfoSnapshot skills,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp,
+            int growType = 0,
+            int secondGrowType = 0)
+        {
+            var points = ResolvePointState(skills, job, level, bonusSp, bonusTp, growType, secondGrowType);
+            Persist(repository, characterId, skills, points);
+        }
+
         public static (SkillInfoSnapshot Skills, SkillPointState Points) ResetToInitial(
             SqliteCharacterProgressRepository repository,
             int characterId,
@@ -157,7 +160,7 @@ namespace DfoGmTool.ServerCore.Game.Skills
         {
             var skills = InitialCharacterSkills.Build(job);
             AwakeningSkillGrantProvider.Apply(job, growType, skills);
-            return PersistInitial(repository, null, null, characterId, skills, job, level, bonusSp, bonusTp);
+            return PersistInitial(repository, null, null, characterId, skills, job, growType, level, bonusSp, bonusTp);
         }
 
         public static (SkillInfoSnapshot Skills, SkillPointState Points) ResetToInitial(
@@ -188,7 +191,7 @@ namespace DfoGmTool.ServerCore.Game.Skills
 
             var skills = InitialCharacterSkills.Build(job);
             AwakeningSkillGrantProvider.Apply(job, growType, skills);
-            return PersistInitial(repository, connection, transaction, characterId, skills, job, level, bonusSp, bonusTp);
+            return PersistInitial(repository, connection, transaction, characterId, skills, job, growType, level, bonusSp, bonusTp);
         }
 
         public static (SkillInfoSnapshot Skills, SkillPointState Points) LoadAndSync(
@@ -198,12 +201,12 @@ namespace DfoGmTool.ServerCore.Game.Skills
             byte level,
             int bonusSp,
             int bonusTp,
-            bool persist)
+            bool persist,
+            int growType = 0,
+            int secondGrowType = 0)
         {
             var skills = repository.LoadSkills(characterId);
-            var persisted = repository.LoadSkillPointState(characterId);
-            var synced = Synchronize(
-                skills, persisted, job, level, bonusSp, bonusTp);
+            var synced = Synchronize(skills, job, level, bonusSp, bonusTp, growType, secondGrowType);
             if (persist)
                 repository.SaveSkillProgress(characterId, synced.Skills, synced.Points);
             return synced;
@@ -218,35 +221,31 @@ namespace DfoGmTool.ServerCore.Game.Skills
             byte level,
             int bonusSp,
             int bonusTp,
-            bool persist)
+            bool persist,
+            int growType = 0,
+            int secondGrowType = 0)
         {
             if (repository == null) throw new System.ArgumentNullException(nameof(repository));
             if (connection == null) throw new System.ArgumentNullException(nameof(connection));
             if (transaction == null) throw new System.ArgumentNullException(nameof(transaction));
 
             var skills = repository.LoadSkills(connection, transaction, characterId);
-            var persisted = repository.LoadSkillPointState(connection, transaction, characterId);
-            var synced = Synchronize(
-                skills, persisted, job, level, bonusSp, bonusTp);
+            var synced = Synchronize(skills, job, level, bonusSp, bonusTp, growType, secondGrowType);
             if (persist)
-            {
-                repository.SaveSkillProgress(
-                    connection, transaction, characterId, synced.Skills, synced.Points);
-            }
+                repository.SaveSkillProgress(connection, transaction, characterId, synced.Skills, synced.Points);
             return synced;
         }
 
         private static (SkillInfoSnapshot Skills, SkillPointState Points) Synchronize(
             SkillInfoSnapshot skills,
-            SkillPointState persisted,
             byte job,
             byte level,
             int bonusSp,
-            int bonusTp)
+            int bonusTp,
+            int growType = 0,
+            int secondGrowType = 0)
         {
-            var oldTotalSp = ResolvePreviousTotalSp(skills, persisted, job, level, bonusSp, bonusTp);
-            var points = ResolvePointState(skills, persisted, job, level, bonusSp, bonusTp);
-            SyncSkillPageRemainingSp(skills, job, level, bonusSp, oldTotalSp, points.TotalSp);
+            var points = ResolvePointState(skills, job, level, bonusSp, bonusTp, growType, secondGrowType);
             ApplyProtocolMirrors(skills, points);
             return (skills, points);
         }
@@ -258,13 +257,13 @@ namespace DfoGmTool.ServerCore.Game.Skills
             int characterId,
             SkillInfoSnapshot skills,
             byte job,
+            byte growType,
             byte level,
             int bonusSp,
             int bonusTp)
         {
-            var points = ResolvePointState(skills, null, job, level, bonusSp, bonusTp);
-            points.RemainingSp = points.TotalSp;
-            points.RemainingTp = points.TotalTp;
+            Characters.CharacterStatComputer.DecodeGrowType(growType, out var firstGrow, out var secondGrow);
+            var points = ResolvePointState(skills, job, level, bonusSp, bonusTp, firstGrow, secondGrow);
             ApplyProtocolMirrors(skills, points);
 
             if (connection != null && transaction != null)
@@ -275,64 +274,10 @@ namespace DfoGmTool.ServerCore.Game.Skills
             return (skills, points);
         }
 
-        private static int ResolvePreviousTotalSp(
-            SkillInfoSnapshot skills,
-            SkillPointState persisted,
-            byte job,
-            byte level,
-            int bonusSp,
-            int bonusTp)
-        {
-            if (persisted != null && persisted.HasPersistedState)
-                return persisted.TotalSp;
-
-            return SkillPointCalculator.Calculate(job, level, bonusSp, bonusTp, skills, 0).TotalSp;
-        }
-
-        private static void SyncSkillPageRemainingSp(
-            SkillInfoSnapshot skills,
-            byte job,
-            byte level,
-            int bonusSp,
-            int oldTotalSp,
-            int newTotalSp)
-        {
-            if (skills == null || skills.Pages.Count == 0)
-                return;
-
-            var gainedSp = newTotalSp - oldTotalSp;
-            if (gainedSp == 0)
-                return;
-
-            for (var i = 1; i < skills.Pages.Count; i++)
-            {
-                var page = skills.Pages[i];
-                if (page == null)
-                    continue;
-
-                var calculated = SkillPointCalculator.Calculate(job, level, bonusSp, 0, skills, i);
-                var remaining = page.HeaderValue > 0
-                    ? page.HeaderValue + gainedSp
-                    : calculated.RemainingSp;
-                page.HeaderValue = ToUInt16(remaining);
-            }
-        }
-
         private static ushort ToUInt16(int value)
         {
-            return (ushort)Clamp(value, 0, ushort.MaxValue);
-        }
-
-        private static int Clamp(int value, int min, int max)
-        {
-            if (value < min) return min;
-            if (value > max) return max;
-            return value;
-        }
-
-        private static int Max(int a, int b)
-        {
-            return a > b ? a : b;
+            if (value < 0) return 0;
+            return value > ushort.MaxValue ? ushort.MaxValue : (ushort)value;
         }
     }
 }

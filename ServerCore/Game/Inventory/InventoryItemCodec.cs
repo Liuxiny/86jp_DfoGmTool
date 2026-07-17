@@ -104,11 +104,16 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         internal static PetInventoryItem ReadPetItem(SqliteDataReader reader, string extraJson)
         {
+            var slot = reader.GetInt32(1);
+            var serialOrInstanceValue = slot >= SqliteInventoryStore.PetEquipmentSlotStart
+                && slot <= SqliteInventoryStore.PetEquipmentSlotEnd
+                ? reader.GetInt32(5)
+                : reader.GetInt32(11);
             return new PetInventoryItem
             {
-                SlotIndex = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture),
+                SlotIndex = Convert.ToInt16(slot, CultureInfo.InvariantCulture),
                 CreatureItemId = reader.GetInt32(2),
-                CreatureSerialOrHandle = reader.GetInt32(11),
+                CreatureSerialOrHandle = serialOrInstanceValue,
                 ExpireTime = reader.GetInt32(9),
                 TailData0A = ReadHexValue(extraJson, "tailData0A", 74),
             };

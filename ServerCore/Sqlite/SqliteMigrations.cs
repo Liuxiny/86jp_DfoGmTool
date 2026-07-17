@@ -494,7 +494,83 @@ DROP TABLE account_settings;
 ALTER TABLE account_settings_new RENAME TO account_settings;");
                 }
             }),
+
+            (23, "skill points derived from learned skills", MigrateSkillPointDerivation),
+
+            (24, "characters slot_index column", conn =>
+            {
+                SqliteSchemaMigrator.EnsureColumns(conn, "characters", new[]
+                {
+                    ("slot_index", "INTEGER NOT NULL DEFAULT 0"),
+                });
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE characters SET slot_index = (
+    SELECT cnt FROM (
+        SELECT c1.character_id,
+               (SELECT COUNT(*) FROM characters c2
+                WHERE c2.account_id = c1.account_id
+                  AND c2.delete_flag = 0
+                  AND c2.character_id <= c1.character_id) - 1 AS cnt
+        FROM characters c1
+        WHERE c1.character_id = characters.character_id
+    )
+) WHERE delete_flag = 0;";
+                    cmd.ExecuteNonQuery();
+                }
+            }),
+
+            (25, "skill tree extension locked state", conn =>
+            {
+                SqliteSchemaMigrator.EnsureColumns(conn, "character_subtype1_fields", new[]
+                {
+                    ("skill_tree_index", "INTEGER NOT NULL DEFAULT -1"),
+                });
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE character_subtype1_fields
+SET skill_tree_index = -1
+WHERE skill_tree_index NOT IN (-1, 0, 1);";
+                    cmd.ExecuteNonQuery();
+                }
+            }),
         };
+
+        private static void MigrateSkillPointDerivation(SqliteConnection connection)
+        {
+            bool foreignKeysEnabled;
+            using (var cmd = new SqliteCommand("PRAGMA foreign_keys;", connection))
+                foreignKeysEnabled = Convert.ToInt32(cmd.ExecuteScalar()) != 0;
+            if (foreignKeysEnabled)
+                ExecuteBatch(connection, "PRAGMA foreign_keys=OFF;");
+
+            try
+            {
+                ExecuteBatch(connection, @"
+DROP TABLE IF EXISTS character_skill_points;
+DROP TABLE IF EXISTS character_skill_tail;
+DROP TABLE IF EXISTS character_skills;
+CREATE TABLE character_skills (
+    character_id INTEGER NOT NULL,
+    page_index INTEGER NOT NULL DEFAULT 0,
+    slot INTEGER NOT NULL DEFAULT -1,
+    skill_id INTEGER NOT NULL DEFAULT 0,
+    level INTEGER NOT NULL DEFAULT 0,
+    extra_values BLOB,
+    PRIMARY KEY (character_id, page_index, slot),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);");
+            }
+            finally
+            {
+                if (foreignKeysEnabled)
+                    ExecuteBatch(connection, "PRAGMA foreign_keys=ON;");
+            }
+        }
 
         private static bool TableExists(SqliteConnection connection, string tableName)
         {

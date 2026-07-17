@@ -1,6 +1,7 @@
 # 构建产物 (含 dotnet publish 的 bin/publish)
 bin/
 obj/
+dist/
 
 # IDE / 编辑器
 .vs/
@@ -17,6 +18,21 @@ Data/
 # 打包临时物
 *.zip
 *.7z
+*.tar
+*.tar.gz
+*.tgz
+*_SHA256SUMS.txt
+
+# Codex / 本地规划记录
+task_plan.md
+progress.md
+findings.md
+memory/
+my-DfoGmTool.xml
 
 # 本地维护脚本(发布流程, 不入库)
 push-release.ps1
+.dockerignore
+Dockerfile
+DOCKER-README.md
+docker-entrypoint.sh

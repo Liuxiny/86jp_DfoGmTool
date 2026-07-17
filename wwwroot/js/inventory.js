@@ -65,7 +65,7 @@ const esc = (v) => escapeHtml(v || '');
 
 let inventoryItems = [];
 let activeCategory = '全部';
-const INV_PAGE_SIZE = 10;
+let inventoryPageSize = ItemPageSize.get();
 let invPage = 0; // 切分类归零; 数据刷新后越界自动回退末页
 let inventoryConfiguration = null;
 let inventoryConfigurationEpoch = 0;
@@ -76,7 +76,7 @@ function clearInventoryConfiguration() {
   const card = $('#inventory-config-card');
   if (card) {
     card.innerHTML = '';
-    card.classList.add('hidden');
+    FloatingConfigPanel.hide(card);
   }
   document.querySelectorAll('#item-table tr.config-selected')
     .forEach((row) => row.classList.remove('config-selected'));
@@ -195,11 +195,26 @@ async function clearCurrentCategory() {
 
 function renderInventoryActionCell(item) {
   const buttons = [];
-  if (item.configurable)
+  if (needsInventoryConfiguration(item))
     buttons.push('<button class="mini" data-act="config">配置</button>');
   if (item.deletable)
     buttons.push('<button class="mini danger" data-act="delete">删除</button>');
   return `<td>${buttons.join(' ')}</td>`;
+}
+
+function hasConfigurableInventoryExpiration(item) {
+  if (!item) return false;
+  if (item.templateExpiration && item.templateExpiration.dailyDeleteItem === true) return false;
+  if (inventoryExpirationState(item).kind === 'none') return false;
+  if (item.expirationConfigurable === true) return true;
+  if (positiveEpochSeconds(item.expireTime) > 0) return true;
+  const expiry = item.templateExpiration;
+  return !!(expiry && expiry.known === true && !expiry.invalid
+    && (positiveEpochSeconds(expiry.absoluteExpireTime) > 0 || positiveDays(expiry.usablePeriodDays) > 0));
+}
+
+function needsInventoryConfiguration(item) {
+  return !!(item && (item.configurable || hasConfigurableInventoryExpiration(item)));
 }
 
 async function configureInventoryItem(item, row) {
@@ -213,7 +228,6 @@ async function configureInventoryItem(item, row) {
       .forEach((candidate) => candidate.classList.remove('config-selected'));
     if (row) row.classList.add('config-selected');
     renderInventoryConfiguration();
-    $('#inventory-config-card').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   } catch (e) {
     toast(e.message, true);
   }
@@ -231,12 +245,12 @@ function renderInventoryConfiguration() {
   let submitDisabled = false;
   if (capability.type === 'avatar' && capability.avatar) {
     const avatar = capability.avatar;
-    fields.push(`<div class="give-config-field"><span>装扮部位</span><div class="give-config-value">${escapeHtml(tagLabel((avatar.part || '').replace(/[\[\]`]/g, '').trim()))}</div></div>`);
+    fields.push(`<div class="give-config-field"><span>装扮部位</span><div class="give-config-value">${escapeHtml(equipmentTypeLabel(avatar.part))}</div></div>`);
     if (!avatar.options || avatar.options.length === 0) {
       fields.push('<div class="give-config-field"><span>可选属性</span><div class="give-config-value">无可用属性</div></div>');
       submitDisabled = true;
     } else {
-      fields.push(`<label class="give-config-field"><span>可选属性</span><select id="inventory-config-avatar-option">${optionHtml(avatar.options, avatar.currentOptionValue)}</select></label>`);
+      fields.push(`<label class="give-config-field"><span>可选属性</span>${avatarOptionControlHtml('inventory-config-avatar-option', avatar.options, avatar.currentOptionValue)}</label>`);
     }
   } else if (capability.type === 'equipment' && capability.equipment) {
     const equipment = capability.equipment;
@@ -247,17 +261,45 @@ function renderInventoryConfiguration() {
     }
     if (equipment.canForge)
       fields.push(`<label class="give-config-field"><span>锻造</span><input id="inventory-config-forging" type="number" min="0" max="${equipment.maxForgingLevel}" value="${equipment.currentForgingLevel || 0}"></label>`);
-  } else {
+  }
+
+  if (capability.expiration && capability.expiration.canOverride && inventoryExpirationState(item).kind !== 'none') {
+    const expiration = capability.expiration;
+    submitDisabled = false;
+    fields.push(`<div class="give-config-field"><span>当前期限</span><div class="give-config-value">${inventoryExpirationLabel(item)}</div></div>`);
+    if (expiration.durations && expiration.durations.length > 0) {
+      const durationOptions = expiration.durations.map((value) => ({ value: value.days, label: value.label }));
+      const defaultDays = expiration.defaultDays != null ? expiration.defaultDays : durationOptions[0]?.value;
+      fields.push(`<label class="give-config-field"><span>期限修改</span><select id="inventory-config-expiration-mode"><option value="keep" selected>保持当前期限</option><option value="change">改为指定期限</option></select></label>`);
+      fields.push(`<label id="inventory-config-expiration-days-field" class="give-config-field hidden"><span>使用期限</span><select id="inventory-config-expiration-days">${optionHtml(durationOptions, defaultDays)}</select></label>`);
+    } else {
+      const remainingDays = expiration.currentRemainingDays || 30;
+      fields.push(`<label class="give-config-field"><span>期限修改</span><select id="inventory-config-expiration-mode"><option value="keep" selected>保持当前期限</option><option value="change">改为自定义天数</option></select></label>`);
+      fields.push(`<label id="inventory-config-expiration-days-field" class="give-config-field hidden"><span>期限天数</span><input id="inventory-config-expiration-days" type="number" min="1" max="${expiration.maxDays || 3650}" value="${remainingDays}"></label>`);
+    }
+  }
+
+  if (fields.length === 0) {
     fields.push('<div class="give-config-field"><span>配置</span><div class="give-config-value">该物品没有可配置项</div></div>');
     submitDisabled = true;
   }
 
   card.innerHTML = `<div class="give-config-head"><div class="give-config-title rarity-${item.rarity >= 0 && item.rarity <= 6 ? item.rarity : 0}">${escapeHtml(item.name)}</div><div class="give-config-meta">ID ${item.templateId} · 槽位 ${item.slot}</div></div>` +
     `<div class="give-config-grid">${fields.join('')}</div>` +
-    `<div class="give-config-actions"><button id="inventory-config-cancel" class="mini" type="button">取消</button><button id="inventory-config-submit" type="button" ${submitDisabled ? 'disabled' : ''}>保存配置</button></div>`;
-  card.classList.remove('hidden');
+    `<div class="give-config-actions"><button id="inventory-config-cancel" type="button">取消</button><button id="inventory-config-submit" type="button" ${submitDisabled ? 'disabled' : ''}>保存配置</button></div>`;
+  FloatingConfigPanel.show(card, {
+    avoidSelector: '#item-table thead th:last-child',
+  });
 
   $('#inventory-config-cancel').onclick = clearInventoryConfiguration;
+  bindAvatarOptionSearch('inventory-config-avatar-option');
+  const expirationMode = $('#inventory-config-expiration-mode');
+  if (expirationMode) {
+    expirationMode.onchange = () => {
+      $('#inventory-config-expiration-days-field')?.classList.toggle('hidden', expirationMode.value !== 'change');
+      FloatingConfigPanel.refresh(card);
+    };
+  }
   $('#inventory-config-submit').onclick = submitInventoryConfiguration;
 }
 
@@ -267,14 +309,24 @@ async function submitInventoryConfiguration() {
   const options = {};
   if (capability.type === 'avatar') {
     const avatarOption = $('#inventory-config-avatar-option');
-    if (!avatarOption) return toast('没有可保存的时装属性', true);
-    options.avatarOptionValue = parseInt(avatarOption.value, 10);
+    if (avatarOption) {
+      const avatarValue = readAvatarOptionValue('inventory-config-avatar-option');
+      if (!avatarValue.ok) return toast(avatarValue.error, true);
+      options.avatarOptionValue = avatarValue.value;
+    }
   } else if (capability.type === 'equipment') {
     options.qualityMode = parseInt($('#inventory-config-quality')?.value || '1', 10);
     options.upgradeLevel = parseInt($('#inventory-config-upgrade')?.value || '0', 10);
     options.amplifyType = parseInt($('#inventory-config-amplify')?.value || '0', 10);
     options.forgingLevel = parseInt($('#inventory-config-forging')?.value || '0', 10);
-  } else {
+  }
+  const expirationMode = $('#inventory-config-expiration-mode');
+  if (expirationMode && expirationMode.value === 'change') {
+    const days = parseInt($('#inventory-config-expiration-days')?.value || '0', 10);
+    if (!Number.isFinite(days) || days < 0) return toast('期限设置无效', true);
+    options.expirationDays = days;
+  }
+  if (Object.keys(options).length === 0) {
     return toast('该物品没有可配置项', true);
   }
 
@@ -318,21 +370,25 @@ function renderItemTable() {
   }
 
   // 每页 10 条; 删除后数据变少时越界页自动回退末页
-  const pageCount = Math.max(1, Math.ceil(filtered.length / INV_PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(filtered.length / inventoryPageSize));
   if (invPage >= pageCount) invPage = pageCount - 1;
-  const pageItems = filtered.slice(invPage * INV_PAGE_SIZE, (invPage + 1) * INV_PAGE_SIZE);
+  const pageItems = filtered.slice(invPage * inventoryPageSize, (invPage + 1) * inventoryPageSize);
 
   for (const item of pageItems) {
     const cells = template.row(item);
     const tr = document.createElement('tr');
-    // null 单元格 = 操作列, 按 deletable 渲染删除按钮
+    // null 单元格 = 操作列, 按 configurable/deletable 渲染按钮
     tr.innerHTML = cells.map((cell) => cell === null
       ? renderInventoryActionCell(item)
       : `<td>${cell}</td>`).join('');
     const configBtn = tr.querySelector('button[data-act="config"]');
-    if (configBtn) configBtn.onclick = () => configureInventoryItem(item, tr);
+    if (configBtn) configBtn.onclick = (event) => {
+      event.stopPropagation();
+      configureInventoryItem(item, tr);
+    };
     const deleteBtn = tr.querySelector('button[data-act="delete"]');
-    if (deleteBtn) deleteBtn.onclick = async () => {
+    if (deleteBtn) deleteBtn.onclick = async (event) => {
+      event.stopPropagation();
       try {
         // count=0 整删, 单件删除直接生效
         await post(`/api/characters/${currentChar.characterId}/items/delete-at`,
@@ -344,13 +400,14 @@ function renderItemTable() {
         toast(e.message, true);
       }
     };
+    tr.onclick = () => needsInventoryConfiguration(item) ? configureInventoryItem(item, tr) : clearInventoryConfiguration();
     tbody.appendChild(tr);
   }
 
   if (filtered.length === 0)
     tbody.innerHTML = `<tr><td colspan="${template.cols.length}" class="hint">当前筛选下没有物品</td></tr>`;
 
-  if (filtered.length > INV_PAGE_SIZE) {
+  if (filtered.length > inventoryPageSize) {
     const prev = document.createElement('button');
     prev.className = 'mini';
     prev.textContent = '上一页';
@@ -366,4 +423,20 @@ function renderItemTable() {
     info.textContent = `共 ${filtered.length} 件 · 第 ${invPage + 1} / ${pageCount} 页`;
     pager.append(prev, info, next);
   }
+}
+
+function bindInventoryPageSize() {
+  const select = $('#inventory-page-size');
+  if (!select) return;
+  select.value = String(inventoryPageSize);
+  select.onchange = () => {
+    ItemPageSize.set(select.value);
+  };
+  ItemPageSize.subscribe((value) => {
+    if (value === inventoryPageSize && select.value === String(value)) return;
+    inventoryPageSize = value;
+    select.value = String(value);
+    invPage = 0;
+    renderItemTable();
+  });
 }

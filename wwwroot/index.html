@@ -212,18 +212,20 @@
             <option value="daily">每日清除</option>
             <option value="expired">固定期限已过期</option>
           </select>
+          <label>使用职业 <select id="give-usable-job"><option value="-1">全部职业</option></select></label>
           <button id="btn-search">搜索</button>
           <span id="give-total" class="hint"></span>
+          <label>每页 <select id="give-page-size"><option value="10">10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option></select></label>
         </div>
         <div class="inventory-layout">
           <nav id="give-category-nav" class="category-nav"></nav>
           <div class="inventory-table-wrap">
+            <section id="give-config-card" class="give-config-card hidden" aria-live="polite"></section>
             <table id="search-results">
-              <thead><tr><th>ID</th><th>名称</th><th>Lv</th><th>品质</th><th>类型</th><th>期限</th><th>数量</th><th></th></tr></thead>
+              <thead><tr><th>ID</th><th>名称</th><th>Lv</th><th>品质</th><th>类型</th><th>使用职业</th><th>期限</th><th>数量</th><th></th></tr></thead>
               <tbody></tbody>
             </table>
             <div id="give-pager" class="row" style="margin-top:10px"></div>
-            <section id="give-config-card" class="give-config-card hidden" aria-live="polite"></section>
           </div>
         </div>
       </div>
@@ -239,6 +241,7 @@
             <option value="missing">期限缺失</option>
             <option value="none">无期限</option>
           </select></label>
+          <label>每页 <select id="inventory-page-size"><option value="10">10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option></select></label>
           <span class="hint">单件删除立即生效；清空需确认；货币行受保护，晶块/金库在"账号数据管理"</span>
           <div class="inventory-toolbar-actions">
             <button id="btn-refresh-items" class="mini">刷新背包</button>
@@ -248,9 +251,9 @@
         <div class="inventory-layout">
           <nav id="category-nav" class="category-nav"></nav>
           <div class="inventory-table-wrap">
+            <section id="inventory-config-card" class="give-config-card hidden" aria-live="polite"></section>
             <table id="item-table"><thead></thead><tbody></tbody></table>
             <div id="inv-pager" class="row" style="margin-top:10px"></div>
-            <section id="inventory-config-card" class="give-config-card hidden" aria-live="polite"></section>
           </div>
         </div>
       </div>
@@ -263,14 +266,31 @@
         </nav>
 
         <div id="char-tab-level" class="char-tab-page">
-          <div class="card">
+          <div class="character-card-grid character-card-grid-three">
+          <div class="card character-quick-card">
             <div class="card-title">等级</div>
             <div class="row">
               <input id="level-input" type="number" min="1" max="86">
               <button id="btn-set-level">设置等级</button>
+              <button id="btn-unlock-equipment-slots">开启左右槽</button>
               <span id="level-now" class="hint"></span>
             </div>
             <div class="row"><span class="hint">经验按阈值表写入，战斗属性同事务重算并反映到下方基础属性表</span></div>
+          </div>
+          <div class="card character-quick-card">
+            <div class="card-title">角色仓库</div>
+            <div class="row">
+              <button id="btn-max-personal-cargo">仓库满级</button>
+              <span class="hint">仅修改当前角色的个人仓库容量，不影响账号金库</span>
+            </div>
+          </div>
+          <div class="card character-quick-card">
+            <div class="card-title">地图难度</div>
+            <div class="row">
+              <button id="btn-unlock-dungeon-permissions">开启最高难度</button>
+              <span class="hint">按 PVF 常规副本列表为当前角色开启最高难度</span>
+            </div>
+          </div>
           </div>
           <div class="card">
             <div class="card-title">转职 / 觉醒</div>
@@ -282,26 +302,21 @@
               <span class="hint">改完按服务端同一套算法重算战斗属性；GM 完成转职/觉醒任务时也会自动应用</span>
             </div>
           </div>
-          <div class="card">
-            <div class="card-title">角色仓库</div>
-            <div class="row">
-              <button id="btn-max-personal-cargo">仓库满级</button>
-              <span class="hint">仅修改当前角色的个人仓库容量，不影响账号金库</span>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-title">地图难度</div>
-            <div class="row">
-              <button id="btn-unlock-dungeon-permissions">一键开启地图难度</button>
-              <span class="hint">按 PVF 常规副本列表为当前角色开启最高难度</span>
-            </div>
-          </div>
-          <div class="card">
+          <div class="character-card-grid character-card-grid-two">
+          <div class="card character-action-card">
             <div class="card-title">复制角色</div>
             <div class="row">
               <button id="btn-open-character-clone">复制角色</button>
               <span class="hint">复制到当前或其他账号；账号金库、晶块、点券等账号数据不会复制</span>
             </div>
+          </div>
+          <div class="card character-action-card">
+            <div class="card-title">删除角色</div>
+            <div class="row">
+              <button id="btn-delete-character" class="danger">彻底删除角色</button>
+              <span class="hint">物理删除当前角色及关联数据，操作后不可恢复</span>
+            </div>
+          </div>
           </div>
           <div id="character-clone-panel" class="card hidden">
             <div class="card-title">复制角色设置</div>
@@ -323,22 +338,19 @@
             </div>
           </div>
           <div class="card">
-            <div class="card-title">危险操作</div>
-            <div class="row">
-              <button id="btn-delete-character" class="danger">彻底删除角色</button>
-              <span class="hint">物理删除当前角色及关联数据，操作后不可恢复</span>
-            </div>
-          </div>
-          <div class="card">
             <div class="card-title">货币入口</div>
-            <div class="row"><span class="hint">金币/复活币/技能点在"背包 → 常用 → 货币"里直接覆写；点券/代币券在"账号数据管理"</span></div>
+            <div class="row">
+              <button id="btn-jump-character-currency" type="button">角色货币</button>
+              <button id="btn-jump-account-currency" type="button">账号货币</button>
+              <span class="hint">金币/复活币/技能点在"背包 → 常用 → 货币"里直接覆写；点券/代币券在"账号数据管理"</span>
+            </div>
           </div>
         </div>
 
         <div id="char-tab-sp" class="char-tab-page hidden">
           <div class="card">
             <div class="card-title">技能点状态</div>
-            <div id="sptp-view" class="row hint">加载中…</div>
+            <div id="sptp-view" class="sptp-panel">加载中…</div>
           </div>
           <div class="card">
             <div class="card-title">调整附加点（计入总点数，剩余点随之增减）</div>
@@ -346,7 +358,7 @@
               <label>SP <input id="sp-input" type="number" value="0"></label>
               <label>TP <input id="tp-input" type="number" value="0"></label>
               <button id="btn-sp">调整</button>
-              <button id="btn-zero-sptp" class="mini">剩余 SP/TP 归 0</button>
+              <button id="btn-zero-sptp">剩余 SP/TP 归 0</button>
               <span id="sp-now" class="hint"></span>
             </div>
           </div>
@@ -365,14 +377,15 @@
 
       <div id="tab-quests" class="tab-page hidden">
         <nav class="tabs">
-          <button class="quest-tab tab active" data-quest-tab="active">进行中</button>
+          <button class="quest-tab tab active" data-quest-tab="all">全部任务</button>
+          <button class="quest-tab tab" data-quest-tab="active">进行中</button>
           <button class="quest-tab tab" data-quest-tab="main">主线</button>
           <button class="quest-tab tab" data-quest-tab="achieve">成就</button>
           <button class="quest-tab tab" data-quest-tab="cleared">已完成</button>
           <button class="quest-tab tab" data-quest-tab="lib">任务库</button>
         </nav>
 
-        <div id="quest-tab-active" class="quest-tab-page">
+        <div id="quest-tab-active" class="quest-tab-page hidden">
           <div class="row">
             <button id="btn-refresh-quests" class="mini">刷新</button>
             <span class="hint">标记可交=清零触发计数走正常交付拿奖励；强制完成=直接写完成位图不发奖励</span>
@@ -383,11 +396,57 @@
           </table>
         </div>
 
+        <div id="quest-tab-all" class="quest-tab-page">
+          <div class="row">
+            <button id="btn-refresh-all-quests" class="mini">刷新</button>
+            <select id="all-quest-display-mode" class="compact-select">
+              <option value="region">按地区</option>
+              <option value="type">按类型</option>
+            </select>
+            <button id="btn-complete-current-main-all" class="mini primary">当前主线</button>
+            <button id="btn-complete-current-side-all" class="mini primary">当前外传</button>
+            <button id="btn-complete-current-system" class="mini primary">当前系统</button>
+            <button id="btn-complete-current-achievement-no-item" class="mini primary">当前成就</button>
+            <button id="btn-complete-profession-quests" class="mini primary">转职觉醒</button>
+            <button id="btn-complete-equipment-slot-quests" class="mini primary" disabled>左右槽任务</button>
+            <button id="btn-reset-daily-quests" class="mini primary hidden">还原每日</button>
+            <span id="all-quest-count" class="hint"></span>
+          </div>
+          <div class="inventory-layout">
+            <nav id="all-quest-region-nav" class="category-nav"></nav>
+            <div class="inventory-table-wrap">
+              <table id="all-quest-table">
+                <thead><tr><th>状态</th><th>Lv</th><th>ID</th><th>名称</th><th>前置</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+              <div id="all-quest-pager" class="row" style="margin-top:10px"
+                role="navigation" aria-label="全部任务分页" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="profession-quest-panel" class="runtime-source-panel hidden" role="dialog" aria-modal="true">
+          <div class="runtime-source-dialog">
+            <div class="runtime-source-title-row">
+              <h2>选择转职</h2>
+              <button id="btn-cancel-profession-quest" class="mini">关闭</button>
+            </div>
+            <label class="runtime-source-field">目标转职
+              <select id="profession-quest-first"></select>
+            </label>
+            <div class="runtime-source-actions">
+              <button id="btn-confirm-profession-quest">完成转职和觉醒任务</button>
+              <span id="profession-quest-state" class="hint"></span>
+            </div>
+          </div>
+        </div>
+
         <div id="quest-tab-main" class="quest-tab-page hidden">
           <div class="row">
             <button id="btn-refresh-main" class="mini">刷新</button>
-            <button id="btn-complete-current-main" class="mini danger">一键完成当前等级主线</button>
-            <span class="hint">剧情主线按区域分组(活动/决斗场/远古任务不在此列，去任务库查)；"连前置完成"会把该任务及全部前置链一并标记完成(不发奖励)</span>
+            <button id="btn-complete-current-main" class="mini primary">当前主线</button>
+            <button id="btn-complete-current-side" class="mini primary">当前外传</button>
+            <span class="hint">主线与外传按区域分组(活动/决斗场/远古任务不在此列，去任务库查)；"连前置完成"会把该任务及全部前置链一并标记完成(不发奖励)</span>
           </div>
           <div class="inventory-layout">
             <nav id="main-region-nav" class="category-nav"></nav>
@@ -403,8 +462,8 @@
         <div id="quest-tab-achieve" class="quest-tab-page hidden">
           <div class="row">
             <button id="btn-refresh-achieve" class="mini">刷新</button>
-            <button id="btn-titlebook-all" class="mini danger">一键称号簿</button>
-            <button id="btn-titlebook-unclear-page" class="mini danger">一键取消称号簿</button>
+            <button id="btn-titlebook-all" class="mini primary">完成称号簿</button>
+            <button id="btn-titlebook-unclear-page" class="mini danger">取消本页称号</button>
           </div>
           <div class="inventory-layout">
             <nav id="achieve-region-nav" class="category-nav"></nav>
@@ -436,15 +495,14 @@
         <div id="quest-tab-lib" class="quest-tab-page hidden">
           <div class="row">
             <input id="quest-search-input" type="text" placeholder="搜索任务名或输入任务 ID (回车搜索)">
+            <select id="quest-region-filter">
+              <option value="">全部区域</option>
+            </select>
             <select id="quest-grade-filter">
               <option value="">全部类型</option>
-              <option value="epic">主线</option>
-              <option value="normal">普通</option>
-              <option value="daily">每日</option>
-              <option value="repeat">重复</option>
-              <option value="achievement">成就</option>
             </select>
             <button id="btn-quest-search">搜索</button>
+            <span id="quest-lib-count" class="hint"></span>
           </div>
           <table id="quest-lib-table" class="hidden">
             <thead><tr><th>类型</th><th>区域</th><th>Lv</th><th>任务 ID</th><th>名称</th><th>状态</th><th></th></tr></thead>
@@ -460,6 +518,8 @@
   <script src="js/core.js"></script>
   <script src="js/sidebar.js"></script>
   <script src="js/environment.js"></script>
+  <script src="js/floating-config.js"></script>
+  <script src="js/item-page-size.js"></script>
   <script src="js/give.js"></script>
   <script src="js/inventory.js"></script>
   <script src="js/character.js"></script>

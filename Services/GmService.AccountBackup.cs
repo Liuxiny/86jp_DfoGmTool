@@ -26,8 +26,6 @@ namespace DfoGmTool.Services
             "characters",
             "character_subtype1_fields",
             "character_subtype0_fields",
-            "character_skill_tail",
-            "character_skill_points",
             "character_skills",
             "character_dark_knight_combo_skill_pages",
             "character_init_bodies",
@@ -73,6 +71,12 @@ namespace DfoGmTool.Services
                 ["character_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
                 ["account_cargo_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
                 ["item_audit_log"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id", "log_id" },
+            };
+
+        private static readonly HashSet<string> AccountBackupDeprecatedOptionalTables =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "account_character_entries",
             };
 
         public object ExportAccountBackup(int accountId)
@@ -150,16 +154,24 @@ namespace DfoGmTool.Services
 
                     var schemaTables = LoadAccountBackupTableInfos(conn, tx)
                         .ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
+                    var restorableDumps = new List<AccountBackupTableDump>();
                     foreach (var dump in file.Tables)
                     {
                         if (!schemaTables.TryGetValue(dump.Name, out var targetTable))
+                        {
+                            if (AccountBackupDeprecatedOptionalTables.Contains(dump.Name))
+                                continue;
                             return Error("目标数据库缺少表: " + dump.Name);
+                        }
+
+                        NormalizeAccountBackupDumpForTargetSchema(dump, targetTable);
 
                         foreach (var column in dump.Columns)
                         {
                             if (!targetTable.Columns.ContainsKey(column))
                                 return Error("目标数据库表 " + dump.Name + " 缺少列: " + column);
                         }
+                        restorableDumps.Add(dump);
                     }
 
                     var existingCharacterIds = LoadAccountCharacterIds(conn, tx, file.AccountID, includeDeleted: true);
@@ -176,7 +188,7 @@ namespace DfoGmTool.Services
                     if (petConflicts.Count > 0)
                         return Error("备份中的宠物句柄已被当前数据库占用: " + string.Join(", ", petConflicts));
 
-                    foreach (var dump in SortAccountBackupDumps(file.Tables))
+                    foreach (var dump in SortAccountBackupDumps(restorableDumps))
                     {
                         RestoreAccountBackupTable(conn, tx, dump);
                     }
@@ -211,6 +223,59 @@ namespace DfoGmTool.Services
             if (file.Tables.GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
                 return "备份文件存在重复表";
             return null;
+        }
+
+        private static void NormalizeAccountBackupDumpForTargetSchema(AccountBackupTableDump dump, AccountBackupTableInfo targetTable)
+        {
+            if (dump == null || targetTable == null)
+                return;
+            if (!dump.Name.Equals("characters", StringComparison.OrdinalIgnoreCase))
+                return;
+            if (!targetTable.Columns.ContainsKey("slot_index"))
+                return;
+
+            var slotIndex = dump.Columns.FindIndex(c => c.Equals("slot_index", StringComparison.OrdinalIgnoreCase));
+            if (slotIndex < 0)
+            {
+                dump.Columns.Add("slot_index");
+                foreach (var row in dump.Rows)
+                    row.Add(new AccountBackupValue { Type = "integer", Integer = 0 });
+                slotIndex = dump.Columns.Count - 1;
+            }
+
+            NormalizeCharacterBackupSlotIndexes(dump, slotIndex);
+        }
+
+        private static void NormalizeCharacterBackupSlotIndexes(AccountBackupTableDump dump, int slotIndex)
+        {
+            var activeRows = new List<(List<AccountBackupValue> Row, long CharacterId, long Slot)>();
+            var characterIdIndex = dump.Columns.FindIndex(c => c.Equals("character_id", StringComparison.OrdinalIgnoreCase));
+            var deleteFlagIndex = dump.Columns.FindIndex(c => c.Equals("delete_flag", StringComparison.OrdinalIgnoreCase));
+            if (characterIdIndex < 0 || slotIndex < 0)
+                return;
+
+            foreach (var row in dump.Rows)
+            {
+                if (row.Count != dump.Columns.Count)
+                    continue;
+                var deleted = deleteFlagIndex >= 0 && row[deleteFlagIndex].ToInt64() != 0;
+                if (deleted)
+                    continue;
+
+                activeRows.Add((row, row[characterIdIndex].ToInt64(), row[slotIndex].ToInt64()));
+            }
+
+            var seen = new HashSet<long>();
+            var needsRebuild = activeRows.Any(entry => entry.Slot < 0 || !seen.Add(entry.Slot));
+            if (!needsRebuild)
+                return;
+
+            var nextSlot = 0L;
+            foreach (var entry in activeRows.OrderBy(e => e.CharacterId))
+            {
+                entry.Row[slotIndex] = new AccountBackupValue { Type = "integer", Integer = nextSlot };
+                nextSlot++;
+            }
         }
 
         private static void EnsureAccountBackupSupported(SqliteConnection conn, SqliteTransaction tx)

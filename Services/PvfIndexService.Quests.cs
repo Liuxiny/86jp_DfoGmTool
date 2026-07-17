@@ -17,19 +17,32 @@ namespace DfoGmTool.Services
             public string Name;
             public string Grade;      // epic/normal/daily/... (去壳)
             public int MinLevel;
+            public int MaxLevel;
             public int[] PreRequired;     // 所有前置组的并集(反向索引/展示回退用)
             public int[][] PreGroups;     // 前置组: 组间 OR, 组内 AND (与服务端可接判定一致)
+            public int[] PreRequiredQuestAnswer;
+            public int[] CollisionQuest;
             public string Region;     // 目录名(小写)
             public string Job;        // [all]/[swordman]/... (去反引号, 小写)
             public int GrowType;
             public int JobChangeQuestValue;
             public int GrowNumber;    // jcq=1/2 时要授予的转职/觉醒编号
+            public int RewardChainType;
             public string TargetCharacter;
+            public int ExposedByNpc;
+            public bool IsEvent;
+            public int CreatureKind;
+            public int ExpertJobType;
+            public int ExpertJobLevel;
             public int TargetDungeonId; // [condition under clear]/[hunt monster] 的 int data 首位, 无/任意为 -1
             public int TargetMapId;     // [clear map] 的 int data 首位, 无为 -1
             public int TargetQuestId;   // [clear quest] 的 int data 首位(称号壳任务→成就本体), 无为 -1
             public int TargetLevel;     // [level up] 的 int data 首位(达到该等级自动完成), 无为 -1
             public int LinkedDungeonId; // [dungeon info] 首个副本ID, 否则怪物奖励表首个副本ID, 无为 -1
+            public int RewardTitleItemId; // [reward type] [title] 的奖励称号ID, 无为 -1
+            public int[] RewardItemIds;
+            public int[] RewardSelectionItemIds;
+            public string ExceptionQuest;
         }
 
         public string ResolveQuestName(int questId)
@@ -158,6 +171,8 @@ namespace DfoGmTool.Services
                 case 6: return "[thief]";
                 case 7: return "[at fighter]";
                 case 8: return "[at mage]";
+                case 9: return null;
+                case 10: return null;
                 case 11: return "[at swordman]";
                 case 12: return "[knight]";
                 default: return null;
@@ -265,25 +280,60 @@ namespace DfoGmTool.Services
                             linkedDungeon = reward.DungeonId;
                     }
 
+                    var rewardTitleItemId = -1;
+                    var rewardChainType = MapQuestRewardChainType(model.RewardType);
+                    var rewardGrowNumber = ParseFirstInt(model.RewardIntData);
+                    var rewardItemIds = ParseRewardItemIds(model.RewardIntData);
+                    var rewardSelectionItemIds = ParseRewardItemIds(model.RewardSelectionIntData);
+                    var rewardType = (model.RewardType ?? string.Empty)
+                        .Replace("`", string.Empty)
+                        .Trim()
+                        .TrimStart('[')
+                        .TrimEnd(']');
+                    if (string.Equals(rewardType, "title", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(model.RewardIntData))
+                    {
+                        var rewardMatch = IntPattern.Match(model.RewardIntData);
+                        if (rewardMatch.Success
+                            && int.TryParse(rewardMatch.Value, out var rewardItemId)
+                            && rewardItemId > 0)
+                        {
+                            rewardTitleItemId = rewardItemId;
+                        }
+                    }
+
                     metas[i] = new QuestMeta
                     {
                         Id = entries[i].Key,
                         Name = model.Name,
                         Grade = NormalizeGrade(model.Grade),
                         MinLevel = model.Level != null && model.Level.Length > 0 ? model.Level[0] : 0,
+                        MaxLevel = model.Level != null && model.Level.Length > 1 ? model.Level[1] : 99,
                         PreRequired = preRequired.ToArray(),
                         PreGroups = preGroups.ToArray(),
+                        PreRequiredQuestAnswer = ParseIntArray(model.PreRequiredQuestAnswer),
+                        CollisionQuest = ParseIntArray(model.CollisionQuest),
                         Region = region,
                         Job = (model.Job ?? "").Replace("`", "").Trim().ToLowerInvariant(),
                         GrowType = model.GrowType,
                         JobChangeQuestValue = model.JobChangeQuestValue,
-                        GrowNumber = model.GrowNumber,
+                        GrowNumber = rewardGrowNumber > 0 ? rewardGrowNumber : model.GrowNumber,
+                        RewardChainType = rewardChainType,
                         TargetCharacter = (model.TargetCharacter ?? "").Replace("`", "").Trim().ToLowerInvariant(),
+                        ExposedByNpc = ParseExposedValue(model.ExposedByNpc),
+                        IsEvent = model.IsEvent,
+                        CreatureKind = model.CreatureKind,
+                        ExpertJobType = model.ExpertJobType,
+                        ExpertJobLevel = model.ExpertJobLevel,
                         TargetDungeonId = targetDungeon,
                         TargetMapId = targetMap,
                         TargetQuestId = targetQuest,
                         TargetLevel = targetLevel,
                         LinkedDungeonId = linkedDungeon,
+                        RewardTitleItemId = rewardTitleItemId,
+                        RewardItemIds = rewardItemIds,
+                        RewardSelectionItemIds = rewardSelectionItemIds,
+                        ExceptionQuest = NormalizeTagList(model.ExceptionQuest),
                     };
                 }
                 catch
@@ -300,11 +350,80 @@ namespace DfoGmTool.Services
             return result;
         }
 
+        private static int[] ParseIntArray(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return Array.Empty<int>();
+
+            var values = new List<int>();
+            foreach (Match match in IntPattern.Matches(text))
+            {
+                int value;
+                if (int.TryParse(match.Value, out value))
+                    values.Add(value);
+            }
+            return values.ToArray();
+        }
+
+        private static int ParseFirstInt(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return -1;
+            var match = IntPattern.Match(text);
+            int value;
+            return match.Success && int.TryParse(match.Value, out value) ? value : -1;
+        }
+
+        private static int[] ParseRewardItemIds(string text)
+        {
+            var values = ParseIntArray(text);
+            if (values.Length == 0)
+                return Array.Empty<int>();
+
+            var result = new List<int>();
+            for (var i = 0; i < values.Length; i += 2)
+            {
+                var itemId = values[i];
+                if (itemId > 0)
+                    result.Add(itemId);
+            }
+            return result.Distinct().ToArray();
+        }
+
+        private static int MapQuestRewardChainType(string rewardType)
+        {
+            if (string.IsNullOrWhiteSpace(rewardType))
+                return 0;
+            switch (rewardType.Replace("`", string.Empty).Trim().TrimStart('[').TrimEnd(']').ToLowerInvariant())
+            {
+                case "grow type": return 1;
+                case "awakening type": return 2;
+                case "expert job": return 20;
+                case "slot expansion": return 21;
+                default: return 0;
+            }
+        }
+
+        private static int ParseExposedValue(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return -1;
+            int value;
+            return int.TryParse(text.Trim(), out value) ? value : -1;
+        }
+
         private static string NormalizeGrade(string grade)
         {
             if (string.IsNullOrWhiteSpace(grade))
                 return "";
             return grade.Replace("`", "").Trim().TrimStart('[').TrimEnd(']').ToLowerInvariant();
+        }
+
+        private static string NormalizeTagList(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return "";
+            return text.Replace("`", "").Trim().ToLowerInvariant();
         }
     }
 }

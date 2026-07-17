@@ -44,8 +44,8 @@ namespace DfoGmTool.Services
         private static readonly Dictionary<string, string[]> CharacterCloneTableGroups =
             new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
             {
-                ["basic"] = new[] { "character_subtype0_fields", "character_subtype1_fields", "character_init_flags", "character_init_bodies", "character_invisible_falgs" },
-                ["skills"] = new[] { "character_skills", "character_skill_tail", "character_skill_points", "character_dark_knight_combo_skill_pages", "character_hotkey_slots" },
+                ["basic"] = new[] { "character_subtype0_fields", "character_subtype1_fields", "character_init_flags", "character_init_bodies" },
+                ["skills"] = new[] { "character_skills", "character_dark_knight_combo_skill_pages", "character_hotkey_slots" },
                 ["quests"] = new[] { "character_active_quests", "character_invisible_falgs" },
                 ["titlebook"] = new[] { "character_achievement_complete", "character_titlebook", "character_achievement_chunks" },
                 ["dungeon"] = new[] { "character_dungeon_permissions", "character_dimensions", "character_dimension_flags", "character_growth_weapon_stages", "character_pvp_missions" },
@@ -117,7 +117,11 @@ ORDER BY a.account_id;";
             using (var cmd = conn.CreateCommand())
             {
                 conn.Open();
-                cmd.CommandText = "SELECT COUNT(1) FROM characters WHERE (name = @name OR name = @nameBytes) AND delete_flag = 0;";
+                cmd.CommandText = @"
+SELECT COUNT(1)
+FROM characters
+WHERE delete_flag = 0
+  AND (name = @name OR name = @nameBytes OR name_bytes = @nameBytes);";
                 cmd.Parameters.AddWithValue("@name", normalized);
                 cmd.Parameters.AddWithValue("@nameBytes", Encoding.UTF8.GetBytes(normalized));
                 var exists = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
@@ -191,7 +195,11 @@ SELECT last_insert_rowid();";
                     if (targetCount >= slotLimit)
                         return Error($"目标账号角色数量已达上限 {slotLimit}");
 
-                    var newCharacterId = CloneCharacterRow(conn, tx, sourceCharacterId, request.TargetAccountId, newName);
+                    var targetSlotIndex = ResolveFreeCharacterSlotIndex(conn, tx, request.TargetAccountId, slotLimit);
+                    if (targetSlotIndex < 0)
+                        return Error("目标账号没有可用角色槽位");
+
+                    var newCharacterId = CloneCharacterRow(conn, tx, sourceCharacterId, request.TargetAccountId, newName, targetSlotIndex);
                     var petHandleMap = new Dictionary<long, long>();
                     var nextPetHandle = ResolveNextPetHandle(conn, tx);
 
@@ -221,6 +229,7 @@ SELECT last_insert_rowid();";
                         targetAccountId = request.TargetAccountId,
                         sourceAccountId,
                         name = newName,
+                        slotIndex = targetSlotIndex,
                         copiedOptions = selected.OrderBy(v => v).ToList(),
                     };
                 }
@@ -251,7 +260,7 @@ SELECT last_insert_rowid();";
             return tables;
         }
 
-        private static int CloneCharacterRow(SqliteConnection conn, SqliteTransaction tx, int sourceCharacterId, int targetAccountId, string newName)
+        private static int CloneCharacterRow(SqliteConnection conn, SqliteTransaction tx, int sourceCharacterId, int targetAccountId, string newName, int targetSlotIndex)
         {
             var columns = LoadAccountBackupColumns(conn, tx, "characters").Values.Select(c => c.Name).ToList();
             var source = LoadSingleRow(conn, tx, "characters", "character_id = @cid", ("@cid", sourceCharacterId));
@@ -271,11 +280,13 @@ SELECT last_insert_rowid();";
                     if (column.Equals("account_id", StringComparison.OrdinalIgnoreCase))
                         value = targetAccountId;
                     else if (column.Equals("name", StringComparison.OrdinalIgnoreCase))
-                        value = newName;
+                        value = Encoding.UTF8.GetBytes(newName);
                     else if (column.Equals("name_bytes", StringComparison.OrdinalIgnoreCase))
                         value = Encoding.UTF8.GetBytes(newName);
                     else if (column.Equals("delete_flag", StringComparison.OrdinalIgnoreCase))
                         value = 0;
+                    else if (column.Equals("slot_index", StringComparison.OrdinalIgnoreCase))
+                        value = targetSlotIndex;
                     else if (column.Equals("created_at", StringComparison.OrdinalIgnoreCase) || column.Equals("updated_at", StringComparison.OrdinalIgnoreCase))
                         value = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
                     cmd.Parameters.AddWithValue("@p" + i.ToString(CultureInfo.InvariantCulture), value ?? DBNull.Value);
@@ -573,11 +584,50 @@ SELECT last_insert_rowid();";
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT COUNT(1) FROM characters WHERE (name = @name OR name = @nameBytes) AND delete_flag = 0;";
+                cmd.CommandText = @"
+SELECT COUNT(1)
+FROM characters
+WHERE delete_flag = 0
+  AND (name = @name OR name = @nameBytes OR name_bytes = @nameBytes);";
                 cmd.Parameters.AddWithValue("@name", name);
                 cmd.Parameters.AddWithValue("@nameBytes", Encoding.UTF8.GetBytes(name));
                 return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
             }
+        }
+
+        private static int ResolveFreeCharacterSlotIndex(SqliteConnection conn, SqliteTransaction tx, int accountId, int slotLimit)
+        {
+            if (slotLimit <= 0)
+                return -1;
+            if (!ColumnExists(conn, tx, "characters", "slot_index"))
+                return 0;
+
+            var used = new HashSet<int>();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+SELECT slot_index
+FROM characters
+WHERE account_id = @aid
+  AND delete_flag = 0;";
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        if (!reader.IsDBNull(0))
+                            used.Add(reader.GetInt32(0));
+                    }
+                }
+            }
+
+            for (var slot = 0; slot < slotLimit; slot++)
+            {
+                if (!used.Contains(slot))
+                    return slot;
+            }
+            return -1;
         }
 
         private static int CountCharactersByAccount(SqliteConnection conn, SqliteTransaction tx, int accountId)

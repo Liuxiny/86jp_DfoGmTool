@@ -13,10 +13,11 @@ namespace DfoGmTool.Services
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
-                    if (!TryLoadSpTpBase(conn, tx, characterId, out var job, out var level, out var bonusSp, out var bonusTp))
+                    if (!TryLoadSpTpBase(conn, tx, characterId, out var job, out var level, out var growType, out var bonusSp, out var bonusTp, out var skillTreeIndex))
                         return Error("角色不存在: " + characterId);
 
-                    var validation = ValidateBonusPointDelta(spDelta, tpDelta, bonusSp, bonusTp);
+                    var current = SyncSkillPoints(conn, tx, characterId, job, level, growType, bonusSp, bonusTp);
+                    var validation = ValidatePointDelta(spDelta, tpDelta, current.Points);
                     if (validation != null)
                         return Error(validation);
 
@@ -24,9 +25,9 @@ namespace DfoGmTool.Services
                     bonusSp += spDelta;
                     bonusTp += tpDelta;
 
-                    var synced = SyncSkillPoints(conn, tx, characterId, job, level, bonusSp, bonusTp);
+                    var synced = SyncSkillPoints(conn, tx, characterId, job, level, growType, bonusSp, bonusTp);
                     tx.Commit();
-                    return SpTpResult(characterId, bonusSp, bonusTp, synced);
+                    return SpTpResult(characterId, bonusSp, bonusTp, skillTreeIndex, synced);
                 }
             }
         }
@@ -38,40 +39,54 @@ namespace DfoGmTool.Services
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
-                    if (!TryLoadSpTpBase(conn, tx, characterId, out var job, out var level, out var bonusSp, out var bonusTp))
+                    if (!TryLoadSpTpBase(conn, tx, characterId, out var job, out var level, out var growType, out var bonusSp, out var bonusTp, out var skillTreeIndex))
                         return Error("角色不存在: " + characterId);
 
-                    var current = SyncSkillPoints(conn, tx, characterId, job, level, bonusSp, bonusTp);
-                    if (current.Points.RemainingSp <= 0 && current.Points.RemainingTp <= 0)
+                    var current = SyncSkillPoints(conn, tx, characterId, job, level, growType, bonusSp, bonusTp);
+                    var targetRemainingSp = skillTreeIndex >= 0
+                        ? System.Math.Min(current.Points.RemainingSp, current.Points.RemainingSpPage1)
+                        : current.Points.RemainingSp;
+                    var targetRemainingTp = skillTreeIndex >= 0
+                        ? System.Math.Min(current.Points.RemainingTp, current.Points.RemainingTpPage1)
+                        : current.Points.RemainingTp;
+                    if (targetRemainingSp == 0 && targetRemainingTp == 0)
                         return Error("当前没有可归零的剩余 SP/TP");
-                    if (current.Points.RemainingSp > bonusSp)
-                        return Error("剩余 SP 大于附加 SP，归零会低于等级默认技能点，无法使用");
-                    if (current.Points.RemainingTp > bonusTp)
-                        return Error("剩余 TP 大于附加 TP，归零会低于等级默认技能点，无法使用");
 
-                    var spDelta = -current.Points.RemainingSp;
-                    var tpDelta = -current.Points.RemainingTp;
+                    var spDelta = -targetRemainingSp;
+                    var tpDelta = -targetRemainingTp;
+                    var validation = ValidatePointDelta(spDelta, tpDelta, current.Points);
+                    if (validation != null)
+                        return Error(validation);
                     ApplyBonusPointDelta(conn, tx, characterId, spDelta, tpDelta);
                     bonusSp += spDelta;
                     bonusTp += tpDelta;
 
-                    var synced = SyncSkillPoints(conn, tx, characterId, job, level, bonusSp, bonusTp);
+                    var synced = SyncSkillPoints(conn, tx, characterId, job, level, growType, bonusSp, bonusTp);
                     tx.Commit();
-                    return SpTpResult(characterId, bonusSp, bonusTp, synced);
+                    return SpTpResult(characterId, bonusSp, bonusTp, skillTreeIndex, synced);
                 }
             }
         }
 
-        private static string ValidateBonusPointDelta(int spDelta, int tpDelta, int bonusSp, int bonusTp)
+        internal static string ValidatePointDelta(int spDelta, int tpDelta, SkillPointState points)
         {
-            if (spDelta < 0 && bonusSp <= 0)
-                return "当前 SP 已经是等级默认值，不能继续减少附加 SP";
-            if (tpDelta < 0 && bonusTp <= 0)
-                return "当前 TP 已经是等级默认值，不能继续减少附加 TP";
-            if (spDelta < 0 && -spDelta > bonusSp)
-                return "减少 SP 不能低于当前等级默认技能点，可减少上限为 " + bonusSp;
-            if (tpDelta < 0 && -tpDelta > bonusTp)
-                return "减少 TP 不能低于当前等级默认技能点，可减少上限为 " + bonusTp;
+            if (points == null)
+                return "无法读取技能点状态";
+
+            if (spDelta < 0)
+            {
+                var page0 = points.TotalSp + spDelta - points.SpentSp;
+                var page1 = points.TotalSp + spDelta - points.SpentSpPage1;
+                if (page0 < 0 || page1 < 0)
+                    return $"减少 SP 会使技能方案剩余点数为负数（第一页 {page0}，第二页 {page1}）";
+            }
+            if (tpDelta < 0)
+            {
+                var page0 = points.TotalTp + tpDelta - points.SpentTp;
+                var page1 = points.TotalTp + tpDelta - points.SpentTpPage1;
+                if (page0 < 0 || page1 < 0)
+                    return $"减少 TP 会使技能方案剩余点数为负数（第一页 {page0}，第二页 {page1}）";
+            }
             return null;
         }
 
@@ -98,10 +113,12 @@ WHERE character_id = @cid;";
             int characterId,
             byte job,
             byte level,
+            byte growType,
             int bonusSp,
             int bonusTp)
         {
             var repository = SqliteCharacterProgressRepository.FromConnectionString(conn.ConnectionString);
+            DfoGmTool.ServerCore.Game.Characters.CharacterStatComputer.DecodeGrowType(growType, out var firstGrow, out var secondGrow);
             return SkillStateService.LoadAndSync(
                 repository,
                 conn,
@@ -111,26 +128,56 @@ WHERE character_id = @cid;";
                 level,
                 bonusSp,
                 bonusTp,
-                persist: true);
+                persist: true,
+                firstGrow,
+                secondGrow);
         }
 
         private static object SpTpResult(
             int characterId,
             int bonusSp,
             int bonusTp,
+            int skillTreeIndex,
             (DfoGmTool.ServerCore.Game.SelectCharacter.SkillInfoSnapshot Skills, SkillPointState Points) synced)
         {
+            var currentPage = ResolveCurrentSkillPage(skillTreeIndex);
             return new
             {
                 success = true,
                 characterId,
                 bonusSp,
                 bonusTp,
+                skillTreeIndex = skillTreeIndex < 0 ? 255 : skillTreeIndex,
+                skillTreeUnlocked = skillTreeIndex >= 0,
+                currentSkillPage = currentPage,
                 totalSp = synced.Points.TotalSp,
                 remainingSp = synced.Points.RemainingSp,
+                remainingSpPage0 = synced.Points.RemainingSp,
+                remainingSpPage1 = synced.Points.RemainingSpPage1,
+                currentRemainingSp = GetRemainingSpForPage(synced.Points, currentPage),
                 totalTp = synced.Points.TotalTp,
                 remainingTp = synced.Points.RemainingTp,
+                remainingTpPage0 = synced.Points.RemainingTp,
+                remainingTpPage1 = synced.Points.RemainingTpPage1,
+                currentRemainingTp = GetRemainingTpForPage(synced.Points, currentPage),
             };
+        }
+
+        private static int ResolveCurrentSkillPage(int skillTreeIndex)
+        {
+            return skillTreeIndex == 1 ? 1 : 0;
+        }
+
+        private static int GetRemainingSpForPage(SkillPointState points, int page)
+        {
+            if (points == null) return 0;
+            return page == 1 ? points.RemainingSpPage1 : points.RemainingSp;
+        }
+
+        private static int GetRemainingTpForPage(SkillPointState points, int page)
+        {
+            if (points == null) return 0;
+            return page == 1 ? points.RemainingTpPage1 : points.RemainingTp;
         }
 
         private static bool TryLoadSpTpBase(
@@ -139,17 +186,26 @@ WHERE character_id = @cid;";
             int characterId,
             out byte job,
             out byte level,
+            out byte growType,
             out int bonusSp,
-            out int bonusTp)
+            out int bonusTp,
+            out int skillTreeIndex)
         {
             job = 0;
             level = 0;
+            growType = 0;
             bonusSp = 0;
             bonusTp = 0;
+            skillTreeIndex = -1;
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT job, level, bonus_sp, bonus_tp FROM characters WHERE character_id = @cid;";
+                cmd.CommandText = @"
+SELECT c.job, c.level, c.grow_type, c.bonus_sp, c.bonus_tp,
+       COALESCE(s.skill_tree_index, -1)
+FROM characters c
+LEFT JOIN character_subtype1_fields s ON s.character_id = c.character_id
+WHERE c.character_id = @cid;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 using (var reader = cmd.ExecuteReader())
                 {
@@ -157,8 +213,10 @@ WHERE character_id = @cid;";
                         return false;
                     job = (byte)reader.GetInt32(0);
                     level = (byte)reader.GetInt32(1);
-                    bonusSp = reader.GetInt32(2);
-                    bonusTp = reader.GetInt32(3);
+                    growType = (byte)reader.GetInt32(2);
+                    bonusSp = reader.GetInt32(3);
+                    bonusTp = reader.GetInt32(4);
+                    skillTreeIndex = reader.GetInt32(5);
                     return true;
                 }
             }

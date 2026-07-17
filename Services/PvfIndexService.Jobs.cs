@@ -16,11 +16,49 @@ namespace DfoGmTool.Services
             public Dictionary<int, List<string>> AwakeningNames = new Dictionary<int, List<string>>();
         }
 
+        private static readonly string[] FrontJobLabels =
+        {
+            "鬼剑士",
+            "格斗家",
+            "神枪手",
+            "魔法师",
+            "圣职者",
+            "女神枪手",
+            "暗夜使者",
+            "男格斗家",
+            "男魔法师",
+            "黑暗武士",
+            "缔造者",
+            "女鬼剑士",
+            "守护者",
+        };
+
+        private static bool IsFixedFrontJob(int job)
+        {
+            return job >= 0 && job < FrontJobLabels.Length;
+        }
+
+        public static string GetFrontJobLabel(int job)
+        {
+            return IsFixedFrontJob(job) ? FrontJobLabels[job] : "职业" + job;
+        }
+
+        private static bool HasNoGrowType(int job)
+        {
+            return job == 9 || job == 10;
+        }
+
         public string ResolveJobName(int job, int growType)
         {
+            if (IsFixedFrontJob(job) && HasNoGrowType(job))
+                return GetFrontJobLabel(job);
+
             var jobs = _jobNames;
             if (jobs == null || !jobs.TryGetValue(job, out var info))
-                return null;
+                return IsFixedFrontJob(job) ? GetFrontJobLabel(job) : null;
+
+            if (growType == 0 && IsFixedFrontJob(job))
+                return GetFrontJobLabel(job);
 
             var first = growType & 0xF;
             var second = (growType >> 4) & 0xF;
@@ -37,17 +75,22 @@ namespace DfoGmTool.Services
 
         public object GetJobGrowOptions(int job)
         {
+            if (IsFixedFrontJob(job) && HasNoGrowType(job))
+                return new { baseName = GetFrontJobLabel(job), growTypes = new object[0] };
+
             var jobs = _jobNames;
             JobNameInfo info = null;
             if (jobs != null)
                 jobs.TryGetValue(job, out info);
             if (info == null)
-                return new { baseName = (string)null, growTypes = new object[0] };
+                return new { baseName = IsFixedFrontJob(job) ? GetFrontJobLabel(job) : (string)null, growTypes = new object[0] };
 
             var growTypes = new List<object>();
             for (var i = 0; i < info.GrowTypeNames.Count; i++)
             {
-                if (info.GrowTypeNames[i].StartsWith("//"))
+                if (IsPlaceholderGrowName(info.GrowTypeNames[i]))
+                    continue;
+                if (!HasGrowTypeQuestStage(job, i + 1, stage: 1))
                     continue;
 
                 List<string> awakenings;
@@ -56,11 +99,13 @@ namespace DfoGmTool.Services
                 {
                     value = i + 1,
                     label = info.GrowTypeNames[i],
-                    awakenings = awakenings != null ? awakenings.ToArray() : new string[0],
+                    awakenings = awakenings != null
+                        ? awakenings.Where(name => !IsPlaceholderGrowName(name)).ToArray()
+                        : new string[0],
                 });
             }
 
-            return new { baseName = info.BaseName, growTypes = growTypes.ToArray() };
+            return new { baseName = IsFixedFrontJob(job) ? GetFrontJobLabel(job) : info.BaseName, growTypes = growTypes.ToArray() };
         }
 
         public bool TryValidateJobGrowOption(int job, int first, int second, out string error)
@@ -82,6 +127,14 @@ namespace DfoGmTool.Services
                 return false;
             }
 
+            if (HasNoGrowType(job) && (first != 0 || second != 0))
+            {
+                error = GetFrontJobLabel(job) + "没有转职/觉醒分支";
+                return false;
+            }
+            if (IsFixedFrontJob(job) && first == 0 && second == 0)
+                return true;
+
             var jobs = _jobNames;
             JobNameInfo info = null;
             if (jobs == null || !jobs.TryGetValue(job, out info))
@@ -94,7 +147,8 @@ namespace DfoGmTool.Services
                 return true;
 
             if (first > info.GrowTypeNames.Count
-                || info.GrowTypeNames[first - 1].StartsWith("//", StringComparison.Ordinal))
+                || IsPlaceholderGrowName(info.GrowTypeNames[first - 1])
+                || !HasGrowTypeQuestStage(job, first, stage: 1))
             {
                 error = "PVF 中找不到该转职: job=" + job + ", first=" + first;
                 return false;
@@ -103,7 +157,8 @@ namespace DfoGmTool.Services
             List<string> awakenings;
             if (second > 0
                 && (!info.AwakeningNames.TryGetValue(first, out awakenings)
-                    || second > awakenings.Count))
+                    || second > awakenings.Count
+                    || IsPlaceholderGrowName(awakenings[second - 1])))
             {
                 error = "PVF 中找不到该觉醒: job=" + job + ", first=" + first + ", second=" + second;
                 return false;
@@ -112,18 +167,104 @@ namespace DfoGmTool.Services
             return true;
         }
 
+        private bool HasGrowTypeQuestStage(int job, int first, int stage)
+        {
+            var all = _questMeta;
+            if (all == null || first <= 0)
+                return true;
+
+            var rewardChainType = stage == 1 ? 1 : 2;
+            var growNumber = stage == 1 ? first : stage - 1;
+            var grow = first | ((stage >= 3 ? 2 : stage >= 2 ? 1 : 0) << 4);
+            return all.Values.Any(m => m != null
+                && QuestMatchesJobGrow(m, job, grow)
+                && (stage == 1 || m.GrowType == first)
+                && ((m.RewardChainType == rewardChainType && m.GrowNumber == growNumber)
+                    || (m.JobChangeQuestValue == stage
+                        && (stage == 1 ? m.GrowNumber == growNumber : m.GrowNumber <= 0 || m.GrowNumber == growNumber))));
+        }
+
+        private static bool IsPlaceholderGrowName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return true;
+            var normalized = name.Trim().Trim('`').Trim();
+            return normalized.StartsWith("//", StringComparison.Ordinal)
+                || normalized.StartsWith("growtype_name_", StringComparison.OrdinalIgnoreCase)
+                || normalized == "??"
+                || normalized == "？？";
+        }
+
+        private static bool QuestMatchesJobGrow(QuestMeta meta, int job, int growType)
+        {
+            if (!string.IsNullOrEmpty(meta.TargetCharacter) && !MatchesJobTag(meta.TargetCharacter, job))
+                return false;
+            if (!string.IsNullOrEmpty(meta.Job) && meta.Job != "[all]" && !MatchesJobTag(meta.Job, job))
+                return false;
+
+            var jcq = meta.JobChangeQuestValue;
+            if (jcq == 2 || jcq == 3)
+            {
+                var firstGrow = growType & 0xF;
+                if (meta.GrowType != -1 && meta.GrowType != firstGrow)
+                    return false;
+            }
+            else if (meta.GrowType != -1 && jcq != 1 && jcq != 10 && jcq != 20 && growType >= 0)
+            {
+                if (meta.GrowType != growType)
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool MatchesJobTag(string tagString, int job)
+        {
+            if (string.IsNullOrEmpty(tagString))
+                return false;
+            var normalized = tagString
+                .ToLowerInvariant()
+                .Replace("_", " ")
+                .Replace("\t", " ")
+                .Replace("\r", " ")
+                .Replace("\n", " ");
+            if (normalized.Contains("[all]", StringComparison.Ordinal))
+                return true;
+            foreach (var token in GetJobTags(job))
+            {
+                if (normalized.Contains(token, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
+        private static string[] GetJobTags(int job)
+        {
+            switch (job)
+            {
+                case 0: return new[] { "[swordman]" };
+                case 1: return new[] { "[fighter]" };
+                case 2: return new[] { "[gunner]" };
+                case 3: return new[] { "[mage]" };
+                case 4: return new[] { "[priest]" };
+                case 5: return new[] { "[at gunner]" };
+                case 6: return new[] { "[thief]" };
+                case 7: return new[] { "[at fighter]" };
+                case 8: return new[] { "[at mage]" };
+                case 9: return new[] { "[demonic swordman]", "[demonicswordman]" };
+                case 10: return new[] { "[creator mage]", "[creatormage]" };
+                case 11: return new[] { "[at swordman]" };
+                case 12: return new[] { "[knight]" };
+                default: return Array.Empty<string>();
+            }
+        }
+
         public object[] GetAllJobOptions()
         {
-            var jobs = _jobNames;
-            if (jobs == null)
-                return Array.Empty<object>();
-
-            return jobs
-                .OrderBy(pair => pair.Key)
-                .Select(pair => (object)new
+            return FrontJobLabels
+                .Select((label, value) => (object)new
                 {
-                    value = pair.Key,
-                    label = pair.Value.BaseName,
+                    value,
+                    label,
                 })
                 .ToArray();
         }

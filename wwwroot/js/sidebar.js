@@ -402,14 +402,19 @@ async function selectCharacter(id, li) {
       ` · SP+${c.bonusSp} TP+${c.bonusTp}</span>`;
     $('#level-input').value = c.level;
     $('#level-now').textContent = `当前 Lv.${c.level}, 经验 ${Number(c.exp).toLocaleString()}`;
+    updateExtraEquipmentSlotButton();
+    resetGiveUsableJobToCurrentCharacter();
     loadStats();
     loadSpTp();
     loadGrowOptions();
     loadItems();
     loadQuests();
+    loadAllVisibleQuests();
     loadMainQuests();
     loadAchieveQuests();
     loadClearedQuests();
+    if (document.querySelector('.quest-tab[data-quest-tab="lib"]')?.classList.contains('active'))
+      searchQuestLib();
     searchItems(0);
   } catch (e) {
     toast(e.message, true);

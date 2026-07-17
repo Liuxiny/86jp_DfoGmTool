@@ -28,7 +28,17 @@ const RARITY_LABELS = ['普通', '高级', '稀有', '神器', '史诗', '勇者
 // 领主神器=[item category] boss drop, 魔法封印=[random option]
 const SPECIAL_LABELS = { sealed: '魔法封印', legacy: '传承', boss: '领主神器' };
 
-const tagLabel = (tag) => TAG_LABELS[tag] || tag || '(无标签)';
+function normalizeEquipmentTag(tag) {
+  return String(tag || '')
+    .replace(/[\[\]`]/g, '')
+    .replace(/_/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+\d+$/, '');
+}
+
+const tagLabel = (tag) => TAG_LABELS[normalizeEquipmentTag(tag)] || tag || '(无标签)';
+const equipmentTypeLabel = (tag) => TAG_LABELS[normalizeEquipmentTag(tag)] || normalizeEquipmentTag(tag) || '(无标签)';
 
 const CONFIG_OPTION_LABELS = {
   'EQUIPMENT PHYSICAL DEFENSE': '物理防御',
@@ -88,7 +98,101 @@ const EQUIP_GROUPS = [
 // 堆叠物侧栏 = 背包同款六段(与服务端入格语义一致), 固定顺序
 const STACK_SEGMENTS = ['消耗品', '材料', '任务品', '副职业材料', '徽章', '特殊材料'];
 
-let giveCategory = null; // {kind:'equipment', tag} 或 {kind:'stackable', segment}
+let giveCategory = null; // {kind:'equipment', tag/tags} 或 {kind:'stackable', segment/segments}
+let giveJobLabelByValue = new Map();
+
+const USABLE_JOB_TOKEN_TO_JOB = {
+  swordman: 0,
+  fighter: 1,
+  gunner: 2,
+  mage: 3,
+  priest: 4,
+  'at gunner': 5,
+  thief: 6,
+  'at fighter': 7,
+  'at mage': 8,
+  demonicswordman: 9,
+  'demonic swordman': 9,
+  creatormage: 10,
+  'creator mage': 10,
+  'at swordman': 11,
+  atswordman: 11,
+  knight: 12,
+};
+
+const USABLE_JOB_FALLBACK_LABELS = {
+  0: '鬼剑士',
+  1: '格斗家',
+  2: '神枪手',
+  3: '魔法师',
+  4: '圣职者',
+  5: '女神枪手',
+  6: '暗夜使者',
+  7: '男格斗家',
+  8: '男魔法师',
+  9: '黑暗武士',
+  10: '缔造者',
+  11: '女鬼剑士',
+  12: '守护者',
+};
+
+function giveCategoryMatches(left, right) {
+  return JSON.stringify(left || null) === JSON.stringify(right || null);
+}
+
+function pipeValues(values) {
+  return (values || []).filter(Boolean).join('|');
+}
+
+function usableJobChipsHtml(item) {
+  const labels = usableJobDisplayLabels(item);
+  const cleanLabels = labels.map((label) => String(label || '').trim()).filter(Boolean);
+  const allLabels = cleanLabels.length ? cleanLabels : ['无限制'];
+  const visible = allLabels.length > 4 ? allLabels.slice(0, 3) : allLabels.slice(0, 4);
+  const hiddenCount = allLabels.length - visible.length;
+  const chips = visible.map((label) =>
+    `<span class="usable-job-chip" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`);
+  if (hiddenCount > 0)
+    chips.push(`<span class="usable-job-chip more" title="${escapeHtml(allLabels.join(' / '))}">+${hiddenCount}</span>`);
+  return `<div class="usable-job-chips" title="${escapeHtml(allLabels.join(' / '))}">${chips.join('')}</div>`;
+}
+
+function usableJobDisplayLabels(item) {
+  const raw = String(item?.usableJob || '').trim();
+  if (!raw || /\[all\]/i.test(raw)) return ['无限制'];
+
+  const parsed = [];
+  for (const match of raw.matchAll(/\[([^\]]+)\]/g)) {
+    const token = normalizeUsableJobToken(match[1]);
+    if (!token || token === 'all') continue;
+    const job = USABLE_JOB_TOKEN_TO_JOB[token];
+    const label = job != null ? giveJobLabelByValue.get(String(job)) : null;
+    parsed.push(label || usableJobFallbackLabel(job, token));
+  }
+
+  const unique = parsed.filter((label, index) => label && parsed.indexOf(label) === index);
+  if (unique.length) return unique;
+  if (Array.isArray(item?.usableJobLabels) && item.usableJobLabels.length) return item.usableJobLabels;
+  return [item?.usableJobLabel || '无限制'];
+}
+
+function normalizeUsableJobToken(token) {
+  return String(token || '')
+    .replace(/_/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function usableJobTokenFallbackLabel(token) {
+  return token || '无限制';
+}
+
+function usableJobFallbackLabel(job, token) {
+  if (job != null && USABLE_JOB_FALLBACK_LABELS[job])
+    return giveJobLabelWithGender(job, USABLE_JOB_FALLBACK_LABELS[job]);
+  return usableJobTokenFallbackLabel(token);
+}
 
 function giveCatEl(label, count, isActive, rawTitle, onClick) {
   const el = document.createElement('div');
@@ -122,19 +226,25 @@ async function loadGiveCategories(expectedRuntimeEpoch) {
     const segCounts = new Map(data.stackable.map((c) => [c.segment, c.count]));
     const listed = new Set();
 
+    syncGiveUsableJobOptions(data.jobs || []);
+
     // entries: [{label, rawTitle, count, active, cat}]
-    const addGroup = (title, entries) => {
+    const addGroup = (title, entries, groupCat) => {
       const present = entries.filter((e) => e.count != null);
       if (present.length === 0) return;
       const total = present.reduce((sum, e) => sum + e.count, 0);
       const expanded = giveNavExpanded.has(title);
       const head = document.createElement('div');
-      head.className = 'group-title group-toggle';
-      head.innerHTML = `<span><span class="toggle">${expanded ? '▾' : '▸'}</span>${escapeHtml(title)}</span><span class="cnt">${total}</span>`;
-      head.onclick = () => {
-        if (giveNavExpanded.has(title)) giveNavExpanded.delete(title);
-        else giveNavExpanded.add(title);
-        loadGiveCategories();
+      head.className = 'group-title group-toggle' + (giveCategoryMatches(giveCategory, groupCat) ? ' active' : '');
+      head.innerHTML = `<span><span class="toggle" role="button" title="展开/收起">${expanded ? '▾' : '▸'}</span><span class="group-label">${escapeHtml(title)}</span></span><span class="cnt">${total}</span>`;
+      head.onclick = (event) => {
+        if (event.target.classList.contains('toggle')) {
+          if (giveNavExpanded.has(title)) giveNavExpanded.delete(title);
+          else giveNavExpanded.add(title);
+          loadGiveCategories();
+          return;
+        }
+        pick(groupCat);
       };
       nav.appendChild(head);
       if (!expanded) return;
@@ -154,7 +264,7 @@ async function loadGiveCategories(expectedRuntimeEpoch) {
     };
 
     for (const group of EQUIP_GROUPS)
-      addGroup(group.title, group.tags.map(equipEntry));
+      addGroup(group.title, group.tags.map(equipEntry), { kind: 'equipment', tags: group.tags.slice() });
 
     addGroup('消耗品 / 材料', STACK_SEGMENTS.map((seg) => ({
       label: seg,
@@ -162,29 +272,104 @@ async function loadGiveCategories(expectedRuntimeEpoch) {
       count: segCounts.get(seg),
       active: !!(giveCategory && giveCategory.kind === 'stackable' && giveCategory.segment === seg),
       cat: { kind: 'stackable', segment: seg },
-    })));
+    })), { kind: 'stackable', segments: STACK_SEGMENTS.slice() });
 
     const leftovers = data.equipment.filter((c) => !listed.has(c.tag))
       .sort((a, b) => b.count - a.count);
-    addGroup('其他', leftovers.map((c) => equipEntry(c.tag)));
+    addGroup('其他', leftovers.map((c) => equipEntry(c.tag)), { kind: 'equipment', tags: leftovers.map((c) => c.tag) });
   } catch (e) {
     toast(e.message, true);
   }
 }
 
-const GIVE_PAGE_SIZE = 10;
+function syncGiveUsableJobOptions(jobs) {
+  const select = $('#give-usable-job');
+  if (!select) return;
+  const previous = select.value;
+  const defaultValue = currentChar ? String(currentChar.job) : '-1';
+  select.innerHTML = '<option value="-1">全部职业</option><option value="-2">无限制</option>';
+  giveJobLabelByValue = new Map();
+  for (const job of jobs || []) {
+    const option = document.createElement('option');
+    option.value = job.value;
+    option.textContent = giveJobLabelWithGender(job.value, job.label || `job ${job.value}`);
+    giveJobLabelByValue.set(String(job.value), option.textContent);
+    select.appendChild(option);
+  }
+  select.value = previous && [...select.options].some((option) => option.value === previous)
+    ? previous
+    : defaultValue;
+}
+
+function giveJobLabelWithGender(job, label) {
+  if (typeof jobLabelWithGender === 'function')
+    return jobLabelWithGender(job, label);
+  return label;
+}
+
+function giveJobGenderSuffix(job) {
+  return '';
+}
+
+function resetGiveUsableJobToCurrentCharacter() {
+  const select = $('#give-usable-job');
+  if (!select || !currentChar) return;
+  if ([...select.options].some((option) => option.value === String(currentChar.job)))
+    select.value = String(currentChar.job);
+}
+
+let givePageSize = ItemPageSize.get();
 let givePage = 0; // 从 0 计; 换筛选条件时归零
 let giveConfiguration = null;
 let giveConfigurationEpoch = 0;
 let giveSearchSignature = '';
+const giveConfigMemory = {
+  qualityMode: 1,
+  upgradeLevel: 0,
+  amplifyType: 0,
+  forgingLevel: 0,
+  manualGrantType: '',
+  expirationMode: 'default',
+  expirationDays: 30,
+  avatarOptionByPart: Object.create(null),
+  avatarDurationByPart: Object.create(null),
+};
+
+function legalRememberedValue(options, value, fallback) {
+  return (options || []).some((option) => String(option.value) === String(value)) ? value : fallback;
+}
+
+function rememberGiveConfiguration() {
+  if (!giveConfiguration) return;
+  const part = String(giveConfiguration.capability?.avatar?.part || '');
+  const readInt = (selector, fallback) => {
+    const element = $(selector);
+    const value = element ? parseInt(element.value, 10) : NaN;
+    return Number.isFinite(value) ? value : fallback;
+  };
+  giveConfigMemory.qualityMode = readInt('#give-config-quality', giveConfigMemory.qualityMode);
+  giveConfigMemory.upgradeLevel = readInt('#give-config-upgrade', giveConfigMemory.upgradeLevel);
+  giveConfigMemory.amplifyType = readInt('#give-config-amplify', giveConfigMemory.amplifyType);
+  giveConfigMemory.forgingLevel = readInt('#give-config-forging', giveConfigMemory.forgingLevel);
+  giveConfigMemory.expirationDays = readInt('#give-config-expiration-days', giveConfigMemory.expirationDays);
+  const manual = $('#give-config-manual-type');
+  if (manual) giveConfigMemory.manualGrantType = manual.value;
+  const expirationMode = $('#give-config-expiration-mode');
+  if (expirationMode) giveConfigMemory.expirationMode = expirationMode.value;
+  const avatarOption = $('#give-config-avatar-option');
+  if (avatarOption && part) giveConfigMemory.avatarOptionByPart[part] = parseInt(avatarOption.value, 10);
+  const avatarDuration = $('#give-config-avatar-duration');
+  if (avatarDuration && part) giveConfigMemory.avatarDurationByPart[part] = parseInt(avatarDuration.value, 10);
+}
 
 function clearGiveConfiguration() {
+  rememberGiveConfiguration();
   giveConfigurationEpoch++;
   giveConfiguration = null;
   const card = $('#give-config-card');
   if (card) {
     card.innerHTML = '';
-    card.classList.add('hidden');
+    FloatingConfigPanel.hide(card);
   }
   document.querySelectorAll('#search-results tr.config-selected')
     .forEach((row) => row.classList.remove('config-selected'));
@@ -192,11 +377,13 @@ function clearGiveConfiguration() {
 
 function isLimitedTemplate(item) {
   const expiry = item && item.templateExpiration;
-  return !!(expiry && (expiry.absoluteExpireTime > 0 || expiry.usablePeriodDays > 0 || expiry.dailyDeleteItem));
+  return !!(expiry && (expiry.absoluteExpireTime > 0 || expiry.usablePeriodDays > 0));
 }
 
 function needsGrantConfiguration(item) {
-  return item && (item.kind === 'equipment' || item.requiresManualGrantType || isLimitedTemplate(item));
+  if (!item) return false;
+  if (typeof item.requiresConfiguration === 'boolean') return item.requiresConfiguration;
+  return item.kind === 'equipment' || item.requiresManualGrantType || isLimitedTemplate(item);
 }
 
 function optionHtml(options, selectedValue) {
@@ -206,8 +393,50 @@ function optionHtml(options, selectedValue) {
   }).join('');
 }
 
+function avatarOptionControlHtml(id, options, selectedValue) {
+  const list = options || [];
+  const select = `<select id="${id}"${list.some((option) => option.isSkill) ? ' class="hidden"' : ''}>${optionHtml(list, selectedValue)}</select>`;
+  if (!list.some((option) => option.isSkill))
+    return select;
+
+  const selected = list.find((option) => String(option.value) === String(selectedValue)) || list[0];
+  const selectedLabel = selected ? localizeConfigOptionLabel(selected.label) : '';
+  const datalistId = `${id}-list`;
+  const datalist = list.map((option) =>
+    `<option value="${escapeHtml(localizeConfigOptionLabel(option.label))}"></option>`).join('');
+  return `<input id="${id}-search" type="text" list="${datalistId}" value="${escapeHtml(selectedLabel)}" autocomplete="off" spellcheck="false" placeholder="输入技能名快速定位">` +
+    `<datalist id="${datalistId}">${datalist}</datalist>${select}`;
+}
+
+function bindAvatarOptionSearch(id, onValidChange) {
+  const input = $(`#${id}-search`);
+  const select = $(`#${id}`);
+  if (!input || !select) return;
+  const sync = () => {
+    const match = Array.from(select.options).find((option) => option.textContent === input.value);
+    select.value = match ? match.value : '';
+    if (match && onValidChange) onValidChange();
+  };
+  input.addEventListener('input', sync);
+  input.addEventListener('change', sync);
+}
+
+function readAvatarOptionValue(id) {
+  const select = $(`#${id}`);
+  if (!select) return { ok: false, error: '没有可保存的时装属性' };
+  const input = $(`#${id}-search`);
+  if (input) {
+    const match = Array.from(select.options).find((option) => option.textContent === input.value);
+    if (!match)
+      return { ok: false, error: '请选择列表中的合法技能名，不支持自定义输入' };
+    return { ok: true, value: parseInt(match.value, 10) };
+  }
+  return { ok: true, value: parseInt(select.value, 10) };
+}
+
 async function configureGrantItem(item, row) {
   if (!currentChar) { toast('请先选择角色', true); return; }
+  rememberGiveConfiguration();
   const epoch = ++giveConfigurationEpoch;
   try {
     const capability = await api(`/api/characters/${currentChar.characterId}/items/${item.itemId}/grant-options`);
@@ -217,7 +446,6 @@ async function configureGrantItem(item, row) {
       .forEach((candidate) => candidate.classList.remove('config-selected'));
     if (row) row.classList.add('config-selected');
     renderGrantConfiguration();
-    $('#give-config-card').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   } catch (e) {
     toast(e.message, true);
   }
@@ -236,63 +464,80 @@ function renderGrantConfiguration() {
 
   if (capability.equipment) {
     const equipment = capability.equipment;
-    const supportsEquipmentAttributes = equipment.canUpgrade || equipment.canAmplify || equipment.canForge;
-    if (supportsEquipmentAttributes) {
-      fields.push(`<label class="give-config-field"><span>装备品级</span><select id="give-config-quality">${optionHtml(equipment.qualityOptions, 1)}</select></label>`);
-      fields.push(`<label class="give-config-field"><span>强化 / 增幅</span><input id="give-config-upgrade" type="number" min="0" max="${equipment.maxUpgradeLevel}" value="0" ${equipment.canUpgrade || equipment.canAmplify ? '' : 'disabled'}></label>`);
-      fields.push(`<label class="give-config-field"><span>红字属性</span><select id="give-config-amplify" ${equipment.canAmplify ? '' : 'disabled'}>${optionHtml(equipment.amplifyTypes, 0)}</select></label>`);
+    if (equipment.supportsQuality) {
+      const quality = legalRememberedValue(equipment.qualityOptions, giveConfigMemory.qualityMode, 1);
+      fields.push(`<label class="give-config-field"><span>装备品级</span><select id="give-config-quality">${optionHtml(equipment.qualityOptions, quality)}</select></label>`);
+    }
+    if (equipment.canUpgrade || equipment.canAmplify) {
+      fields.push(`<label class="give-config-field"><span>强化 / 增幅</span><input id="give-config-upgrade" type="number" min="0" max="${equipment.maxUpgradeLevel}" value="${giveConfigMemory.upgradeLevel}"></label>`);
+      const amplify = legalRememberedValue(equipment.amplifyTypes, giveConfigMemory.amplifyType, 0);
+      fields.push(`<label class="give-config-field"><span>红字属性</span><select id="give-config-amplify" ${equipment.canAmplify ? '' : 'disabled'}>${optionHtml(equipment.amplifyTypes, amplify)}</select></label>`);
     }
     if (equipment.canForge)
-      fields.push(`<label class="give-config-field"><span>锻造</span><input id="give-config-forging" type="number" min="0" max="${equipment.maxForgingLevel}" value="0"></label>`);
+      fields.push(`<label class="give-config-field"><span>锻造</span><input id="give-config-forging" type="number" min="0" max="${equipment.maxForgingLevel}" value="${giveConfigMemory.forgingLevel}"></label>`);
   }
 
   if (capability.manual && capability.manual.required) {
-    fields.push(`<label class="give-config-field"><span>手动分类</span><select id="give-config-manual-type">${optionHtml(capability.manual.choices, capability.manual.choices[0]?.value || '')}</select></label>`);
+    const selected = legalRememberedValue(capability.manual.choices, giveConfigMemory.manualGrantType, capability.manual.choices[0]?.value || '');
+    fields.push(`<label class="give-config-field"><span>手动分类</span><select id="give-config-manual-type">${optionHtml(capability.manual.choices, selected)}</select></label>`);
   }
 
   let grantDisabled = false;
   if (capability.avatar) {
     const avatar = capability.avatar;
-    fields.push(`<div class="give-config-field"><span>装扮部位</span><div class="give-config-value">${escapeHtml(tagLabel((avatar.part || '').replace(/[\[\]`]/g, '').trim()))}</div></div>`);
+    fields.push(`<div class="give-config-field"><span>装扮部位</span><div class="give-config-value">${escapeHtml(equipmentTypeLabel(avatar.part))}</div></div>`);
     if (!avatar.compatible || !avatar.options || avatar.options.length === 0) {
       fields.push('<div class="give-config-field"><span>可选属性</span><div class="give-config-value">当前职业不可用</div></div>');
       grantDisabled = true;
     } else {
-      fields.push(`<label class="give-config-field"><span>可选属性</span><select id="give-config-avatar-option">${optionHtml(avatar.options, avatar.options[0].value)}</select></label>`);
+      const selected = legalRememberedValue(avatar.options, giveConfigMemory.avatarOptionByPart[avatar.part], avatar.options[0].value);
+      fields.push(`<label class="give-config-field"><span>可选属性</span>${avatarOptionControlHtml('give-config-avatar-option', avatar.options, selected)}</label>`);
     }
     if (avatar.durations && avatar.durations.length > 0) {
       const permanent = avatar.durations.find((value) => value.days === 0);
-      const selectedDays = permanent ? 0 : avatar.durations[0].days;
+      const defaultDays = permanent ? 0 : avatar.durations[0].days;
       const durationOptions = avatar.durations.map((value) => ({ value: value.days, label: value.label }));
+      const selectedDays = legalRememberedValue(durationOptions, giveConfigMemory.avatarDurationByPart[avatar.part], defaultDays);
       fields.push(`<label class="give-config-field"><span>使用期限</span><select id="give-config-avatar-duration">${optionHtml(durationOptions, selectedDays)}</select></label>`);
     }
-  } else if (capability.expiration && capability.expiration.limited) {
-    if (capability.expiration.canOverride) {
-      fields.push('<label class="give-config-field"><span>期限方式</span><select id="give-config-expiration-mode"><option value="default">PVF 默认期限</option><option value="custom">自定义天数</option></select></label>');
-      fields.push(`<label id="give-config-expiration-days-field" class="give-config-field hidden"><span>期限天数</span><input id="give-config-expiration-days" type="number" min="1" max="${capability.expiration.maxDays}" value="30"></label>`);
-    } else {
-      fields.push('<div class="give-config-field"><span>使用期限</span><div class="give-config-value">PVF 固定规则</div></div>');
-    }
+  } else if (capability.expiration && capability.expiration.canOverride) {
+      const expired = capability.expiration.expired === true;
+      const mode = expired ? 'custom' : giveConfigMemory.expirationMode;
+      const modeOptions = expired
+        ? '<option value="custom" selected>自定义有效期</option>'
+        : `<option value="default"${mode === 'default' ? ' selected' : ''}>PVF 默认期限</option><option value="custom"${mode === 'custom' ? ' selected' : ''}>自定义天数</option>`;
+      fields.push(`<label class="give-config-field"><span>期限方式</span><select id="give-config-expiration-mode">${modeOptions}</select></label>`);
+      fields.push(`<label id="give-config-expiration-days-field" class="give-config-field${mode === 'custom' ? '' : ' hidden'}"><span>期限天数</span><input id="give-config-expiration-days" type="number" min="1" max="${capability.expiration.maxDays}" value="${giveConfigMemory.expirationDays || 30}"></label>`);
   }
 
   card.innerHTML = `<div class="give-config-head"><div class="give-config-title rarity-${item.rarity >= 0 && item.rarity <= 6 ? item.rarity : 0}">${escapeHtml(item.name)}</div><div class="give-config-meta">ID ${item.itemId} · ${escapeHtml(tagLabel(item.tag))}</div></div>` +
     `<div class="give-config-grid">${fields.join('')}</div>` +
-    `<div class="give-config-actions"><button id="give-config-cancel" class="mini" type="button">取消</button><button id="give-config-submit" type="button" ${grantDisabled ? 'disabled' : ''}>发放</button></div>`;
-  card.classList.remove('hidden');
+    `<div class="give-config-actions"><button id="give-config-cancel" type="button">取消</button><button id="give-config-submit" type="button" ${grantDisabled ? 'disabled' : ''}>发放</button></div>`;
+  FloatingConfigPanel.show(card, {
+    avoidSelector: '#search-results thead th:nth-last-child(2)',
+  });
 
   $('#give-config-cancel').onclick = clearGiveConfiguration;
+  bindAvatarOptionSearch('give-config-avatar-option', rememberGiveConfiguration);
   const expirationMode = $('#give-config-expiration-mode');
   if (expirationMode) {
     expirationMode.onchange = () => {
       $('#give-config-expiration-days-field').classList.toggle('hidden', expirationMode.value !== 'custom');
+      rememberGiveConfiguration();
+      FloatingConfigPanel.refresh(card);
     };
   }
+  card.querySelectorAll('input:not(#give-config-count), select').forEach((element) => {
+    if (element !== expirationMode)
+      element.addEventListener(element.tagName === 'INPUT' ? 'input' : 'change', rememberGiveConfiguration);
+  });
   $('#give-config-submit').onclick = submitConfiguredGrant;
 }
 
 async function submitConfiguredGrant() {
   if (!giveConfiguration) return;
   const { item, capability } = giveConfiguration;
+  rememberGiveConfiguration();
   const count = Math.max(1, parseInt($('#give-config-count').value, 10) || 1);
   const options = {
     qualityMode: parseInt($('#give-config-quality')?.value || '1', 10),
@@ -301,7 +546,11 @@ async function submitConfiguredGrant() {
     forgingLevel: parseInt($('#give-config-forging')?.value || '0', 10),
   };
   const avatarOption = $('#give-config-avatar-option');
-  if (avatarOption) options.avatarOptionValue = parseInt(avatarOption.value, 10);
+  if (avatarOption) {
+    const avatarValue = readAvatarOptionValue('give-config-avatar-option');
+    if (!avatarValue.ok) return toast(avatarValue.error, true);
+    options.avatarOptionValue = avatarValue.value;
+  }
   const avatarDuration = $('#give-config-avatar-duration');
   if (avatarDuration) options.expirationDays = parseInt(avatarDuration.value, 10);
   const manualType = $('#give-config-manual-type');
@@ -320,33 +569,35 @@ async function searchItems(page) {
   const maxLv = parseInt($('#give-maxlv').value, 10) || 0;
   const raritySel = $('#give-rarity').value;
   const expiration = $('#give-expiration').value;
+  const usableJob = parseInt($('#give-usable-job')?.value || '-1', 10);
   const special = SPECIAL_LABELS[raritySel] ? raritySel : '';
   const rarity = special ? -1 : parseInt(raritySel, 10);
-  const signature = JSON.stringify({ q, minLv, maxLv, raritySel, expiration, giveCategory, characterId: currentChar?.characterId });
+  const signature = JSON.stringify({ q, minLv, maxLv, raritySel, expiration, usableJob, giveCategory, characterId: currentChar?.characterId });
   if (signature !== giveSearchSignature) {
     giveSearchSignature = signature;
     clearGiveConfiguration();
   }
   if (!q && !giveCategory && minLv === 0 && maxLv === 0 && rarity < 0 && !special && expiration === 'all') {
     $('#search-results tbody').innerHTML =
-      '<tr><td colspan="8" class="hint">选择左侧分类或输入关键词开始浏览</td></tr>';
+      '<tr><td colspan="9" class="hint">选择左侧分类或输入关键词开始浏览</td></tr>';
     $('#give-total').textContent = '';
     $('#give-pager').innerHTML = '';
     return;
   }
   try {
-    let url = `/api/items/browse?limit=${GIVE_PAGE_SIZE}&offset=${givePage * GIVE_PAGE_SIZE}` +
+    let url = `/api/items/browse?limit=${givePageSize}&offset=${givePage * givePageSize}` +
       `&q=${encodeURIComponent(q)}&minLevel=${minLv}&maxLevel=${maxLv}&rarity=${rarity}` +
-      `&expiration=${encodeURIComponent(expiration)}`;
-    if (currentChar) url += `&job=${currentChar.job}`;
+      `&expiration=${encodeURIComponent(expiration)}&usableJob=${usableJob}`;
     if (special) url += `&special=${special}`;
     if (giveCategory) {
       url += `&kind=${encodeURIComponent(giveCategory.kind)}`;
       if (giveCategory.tag) url += `&tag=${encodeURIComponent(giveCategory.tag)}`;
+      if (giveCategory.tags) url += `&tag=${encodeURIComponent(pipeValues(giveCategory.tags))}`;
       if (giveCategory.segment) url += `&segment=${encodeURIComponent(giveCategory.segment)}`;
+      if (giveCategory.segments) url += `&segment=${encodeURIComponent(pipeValues(giveCategory.segments))}`;
     }
     const data = await api(url);
-    const pageCount = Math.max(1, Math.ceil(data.total / GIVE_PAGE_SIZE));
+    const pageCount = Math.max(1, Math.ceil(data.total / givePageSize));
     // 条件变化后可能停留在越界页, 自动回退到末页
     if (givePage >= pageCount && data.total > 0) {
       searchItems(pageCount - 1);
@@ -363,21 +614,33 @@ async function searchItems(page) {
         <td>${r.minLevel || ''}</td>
         <td>${r.special ? (SPECIAL_LABELS[r.special] || escapeHtml(r.special)) : (RARITY_LABELS[r.rarity] || r.rarity)}</td>
         <td title="${escapeHtml(r.tag || '')}">${escapeHtml(tagLabel(r.tag))}</td>
+        <td>${escapeHtml(r.usableJobLabel || '无限制')}</td>
         <td>${templateExpirationLabel(r)}</td>` +
         (configurable
           ? '<td class="hint">配置后发放</td><td><button class="mini">配置</button></td>'
           : '<td><input type="number" value="1" min="1"></td><td><button class="mini">发放</button></td>');
-      tr.querySelector('button').onclick = configurable
-        ? () => configureGrantItem(r, tr)
-        : () => giveItem(r.itemId, parseInt(tr.querySelector('input').value, 10) || 1);
+      const usableJobCell = tr.children[5];
+      if (usableJobCell) {
+        usableJobCell.className = 'usable-job-cell';
+        usableJobCell.innerHTML = usableJobChipsHtml(r);
+      }
+      const button = tr.querySelector('button');
+      button.onclick = (event) => {
+        event.stopPropagation();
+        if (configurable)
+          configureGrantItem(r, tr);
+        else
+          giveItem(r.itemId, parseInt(tr.querySelector('input').value, 10) || 1);
+      };
+      tr.onclick = () => configurable ? configureGrantItem(r, tr) : clearGiveConfiguration();
       tbody.appendChild(tr);
     }
     if (data.results.length === 0)
-      tbody.innerHTML = '<tr><td colspan="8" class="hint">没有匹配的物品</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="hint">没有匹配的物品</td></tr>';
 
     const pager = $('#give-pager');
     pager.innerHTML = '';
-    if (data.total > GIVE_PAGE_SIZE) {
+    if (data.total > givePageSize) {
       const prev = document.createElement('button');
       prev.className = 'mini';
       prev.textContent = '上一页';
@@ -396,6 +659,21 @@ async function searchItems(page) {
   } catch (e) {
     toast(e.message, true);
   }
+}
+
+function bindGivePageSize() {
+  const select = $('#give-page-size');
+  if (!select) return;
+  select.value = String(givePageSize);
+  select.onchange = () => {
+    ItemPageSize.set(select.value);
+  };
+  ItemPageSize.subscribe((value) => {
+    if (value === givePageSize && select.value === String(value)) return;
+    givePageSize = value;
+    select.value = String(value);
+    searchItems(0);
+  });
 }
 
 async function giveItem(templateId, count, options) {

@@ -233,8 +233,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 [6] = new[] { "thief" },
                 [7] = new[] { "atfighter" },
                 [8] = new[] { "atmage" },
-                [9] = new[] { "demonicswordman", "swordman" },
-                [10] = new[] { "creatormage", "mage" },
+                [9] = new[] { "demonicswordman" },
+                [10] = new[] { "creatormage" },
                 [11] = new[] { "atswordman" },
                 [12] = new[] { "knight" },
             };
@@ -343,6 +343,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public bool CanOverride { get; set; }
 
         public int DefaultExpireTime { get; set; }
+
+        public bool IsExpired { get; set; }
     }
 
     internal static class ItemGrantExpirationOverride

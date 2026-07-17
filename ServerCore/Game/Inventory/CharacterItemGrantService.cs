@@ -57,7 +57,11 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             }
 
             if (!ItemGrantExpirationResolver.TryResolve(itemTemplateId, metadata, out var expireTime, out var expirationError))
-                return Fail(result, expirationError);
+            {
+                if (options?.ExpirationDays == null || !IsExpiredExpirationError(expirationError))
+                    return Fail(result, expirationError);
+                expireTime = 0;
+            }
 
             var manualGrantType = NormalizeManualGrantType(options?.ManualGrantType);
             var requiresManualGrantType = ItemMetadataResolver.RequiresManualGrantType(metadata);
@@ -83,6 +87,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 || manualGrantType == "pet";
             var isPetArtifactEquipment = (isPetEquipment && !isCreature)
                 || manualGrantType == "pet-equipment";
+            var hasPetArtifactQuality = isPetArtifactEquipment && metadata.SupportsPetEquipmentQuality;
 
             var listType = InventoryListType.Main;
             var itemKind = metadata.ItemKind;
@@ -150,7 +155,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             else
             {
                 if (options?.ExpirationDays != null
-                    && !TryResolveExpirationOverride(metadata, expireTime, options.ExpirationDays.Value, out expireTime, out var overrideError))
+                    && !TryResolveExpirationOverride(itemTemplateId, metadata, expireTime, options.ExpirationDays.Value, out expireTime, out var overrideError))
                 {
                     return Fail(result, overrideError);
                 }
@@ -173,6 +178,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 if (options != null)
                 {
                     qualityMode = options.QualityMode;
+                    if (!Enum.IsDefined(typeof(ItemQualityMode), qualityMode))
+                        return Fail(result, "装备品级选项无效");
                     if (equipmentCapability.CanUpgrade || equipmentCapability.CanAmplify || equipmentCapability.CanForge)
                     {
                         if (!EquipmentGrantPolicy.TryBuildExtraJson(
@@ -225,12 +232,10 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 var petSerialOrHandle = isCreature
                     ? _db.NextPetSerialOrHandle(connection, transaction, characterId)
                     : 0;
-                var qualitySeed = listType == InventoryListType.Pet || listType == InventoryListType.Avatar
-                    ? 0
-                    : (int)ItemQuality.ResolveSeed(qualityMode);
-                var storedStackCount = listType == InventoryListType.Pet || listType == InventoryListType.Avatar
-                    ? 0
-                    : qualitySeed;
+                var carriesQuality = listType != InventoryListType.Avatar
+                    && (listType != InventoryListType.Pet || hasPetArtifactQuality);
+                var qualitySeed = carriesQuality ? (int)ItemQuality.ResolveSeed(qualityMode) : 0;
+                var storedStackCount = carriesQuality ? qualitySeed : 0;
                 var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
 
                 _db.InsertCharacterItem(
@@ -324,17 +329,29 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         }
 
         private static bool TryResolveExpirationOverride(
+            int itemTemplateId,
             ItemMetadata metadata,
             int defaultExpireTime,
             int days,
             out int expireTime,
             out string error)
         {
+            var expiredFixedExpiration = false;
+            if (defaultExpireTime <= 0
+                && !metadata.IsStackable
+                && string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal)
+                && !ItemGrantExpirationResolver.TryResolve(itemTemplateId, metadata, out _, out var resolveError)
+                && IsExpiredExpirationError(resolveError))
+            {
+                expiredFixedExpiration = true;
+            }
+
             var capability = new ItemGrantExpirationCapability
             {
-                IsLimited = defaultExpireTime > 0,
-                CanOverride = defaultExpireTime > 0,
+                IsLimited = defaultExpireTime > 0 || expiredFixedExpiration,
+                CanOverride = defaultExpireTime > 0 || expiredFixedExpiration,
                 DefaultExpireTime = defaultExpireTime,
+                IsExpired = expiredFixedExpiration,
             };
             if (metadata?.IsStackable == true
                 && StackableExpirationPolicyResolver.TryResolve(metadata.StackableFile, out var policy))
@@ -352,6 +369,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 out expireTime,
                 out error);
         }
+
+        private static bool IsExpiredExpirationError(string error)
+            => !string.IsNullOrWhiteSpace(error) && error.Contains("已过期");
 
         private static string NormalizeManualGrantType(string value)
         {

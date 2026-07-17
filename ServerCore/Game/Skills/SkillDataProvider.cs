@@ -29,6 +29,20 @@ namespace DfoGmTool.ServerCore.Game.Skills
         public int[] PreRequiredSkills;
         public int[] SpCostPerLevel;
         public int[] TpCostPerLevel;
+        public bool IsFixedLevelSkill;
+        public int FixedLevelBase;
+        public int FixedLevelInterval = 1;
+        public int FixedLevelAddPerInterval = 1;
+
+        public int GetFixedLevel(int charLevel)
+        {
+            if (!IsFixedLevelSkill) return 0;
+            if (charLevel < RequiredLevel) return 0;
+            var interval = FixedLevelInterval > 0 ? FixedLevelInterval : 1;
+            var level = FixedLevelBase + (charLevel - RequiredLevel) / interval * FixedLevelAddPerInterval;
+            var maxLv = MaxLevel > 0 ? MaxLevel : int.MaxValue;
+            return Math.Min(level, maxLv);
+        }
 
         public int SpCostFor(int fromLevel, int toLevel)
         {

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS characters (
     ex_equip_slot_stat INTEGER NOT NULL DEFAULT 0,
     bonus_sp INTEGER NOT NULL DEFAULT 0,
     bonus_tp INTEGER NOT NULL DEFAULT 0,
+    slot_index INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
@@ -161,9 +162,8 @@ CREATE INDEX IF NOT EXISTS idx_item_audit_log_char_time
 
 CREATE TABLE IF NOT EXISTS character_skills (
     character_id INTEGER NOT NULL,
-    page_index INTEGER NOT NULL,
-    page_header INTEGER NOT NULL DEFAULT 0,
-    slot INTEGER NOT NULL,
+    page_index INTEGER NOT NULL DEFAULT 0,
+    slot INTEGER NOT NULL DEFAULT -1,
     skill_id INTEGER NOT NULL,
     level INTEGER NOT NULL DEFAULT 0,
     extra_values BLOB,
@@ -171,32 +171,12 @@ CREATE TABLE IF NOT EXISTS character_skills (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS character_skill_tail (
-    character_id INTEGER PRIMARY KEY,
-    tail0 INTEGER NOT NULL DEFAULT 0,
-    tail1 INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
-
 CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
     character_id INTEGER NOT NULL,
     page_index INTEGER NOT NULL CHECK (page_index >= 0 AND page_index <= 1),
     body BLOB NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (character_id, page_index),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS character_skill_points (
-    character_id INTEGER PRIMARY KEY,
-    total_sp INTEGER NOT NULL DEFAULT 0,
-    remaining_sp INTEGER NOT NULL DEFAULT 0,
-    total_sfp INTEGER NOT NULL DEFAULT 0,
-    remaining_sfp INTEGER NOT NULL DEFAULT 0,
-    total_tp INTEGER NOT NULL DEFAULT 0,
-    remaining_tp INTEGER NOT NULL DEFAULT 0,
-    synced_level INTEGER NOT NULL DEFAULT 1,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -543,7 +523,7 @@ CREATE TABLE IF NOT EXISTS character_subtype1_fields (
     stat_level INTEGER NOT NULL DEFAULT 0,
     name_tag_item_id INTEGER NOT NULL DEFAULT 0,     -- 名称装饰卡 itemId (sub_F546B0 i64 low32 → slot 28; 旧误名 skill_tree_check)
     name_tag_expire_time INTEGER NOT NULL DEFAULT 0, -- 名称装饰卡到期时间 (i64 high32)
-    skill_tree_index INTEGER NOT NULL DEFAULT 0,
+    skill_tree_index INTEGER NOT NULL DEFAULT -1,
     equipped_creature_level INTEGER NOT NULL DEFAULT 0,
     equip_list_trailing INTEGER NOT NULL DEFAULT 0,
     manage_level INTEGER NOT NULL DEFAULT 0,

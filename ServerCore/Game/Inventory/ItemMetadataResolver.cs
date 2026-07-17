@@ -44,6 +44,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         public string AttachType { get; set; }
 
+        public bool SupportsPetEquipmentQuality { get; set; }
+
         public IReadOnlyList<string> ImpossibleContents { get; set; } = Array.Empty<string>();
 
         public bool IsSealed => string.Equals(AttachType?.Trim('[', ']', ' '), "sealing", StringComparison.OrdinalIgnoreCase);
@@ -171,6 +173,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     EquipmentType = NormalizeEquipmentType(equipment.EquipmentType),
                     ItemCategory = equipment.ItemCategory,
                     AttachType = equipment.AttachType,
+                    SupportsPetEquipmentQuality = HasPetEquipmentQuality(equipment),
                     ImpossibleContents = equipment.ImpossibleContentItems,
                 };
             }
@@ -302,6 +305,51 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             var normalizedPath = "/" + path.Replace('\\', '/').Trim('/');
             return normalizedPath.IndexOf("/avatar/", StringComparison.OrdinalIgnoreCase) >= 0
                 || normalizedPath.IndexOf("/at_avatar/", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        public static bool IsNameTagMetadata(ItemMetadata metadata)
+        {
+            return string.Equals(ResolvePvfTypeTag(metadata), "name tag", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static bool IsPetCreatureMetadata(ItemMetadata metadata)
+        {
+            return string.Equals(ResolvePvfTypeTag(metadata), "creature", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static bool IsPetArtifactMetadata(ItemMetadata metadata)
+        {
+            var tag = ResolvePvfTypeTag(metadata);
+            return string.Equals(tag, "artifact red", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tag, "artifact blue", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tag, "artifact green", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool HasPetEquipmentQuality(EquipmentFile equipment)
+        {
+            if (equipment == null)
+                return false;
+
+            return equipment.PhysicalAttack != 0
+                || equipment.MagicalAttack != 0
+                || equipment.PhysicalDefense != 0
+                || equipment.MagicalDefense != 0
+                || HasAnyValue(equipment.EquipmentPhysicalAttack)
+                || HasAnyValue(equipment.EquipmentMagicalAttack)
+                || HasAnyValue(equipment.EquipmentPhysicalDefense)
+                || HasAnyValue(equipment.EquipmentMagicalDefense);
+        }
+
+        private static bool HasAnyValue(int[] values)
+        {
+            if (values == null)
+                return false;
+            foreach (var value in values)
+            {
+                if (value != 0)
+                    return true;
+            }
+            return false;
         }
 
         public static bool RequiresManualGrantType(ItemMetadata metadata)

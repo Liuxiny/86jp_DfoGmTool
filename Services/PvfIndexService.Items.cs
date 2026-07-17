@@ -29,6 +29,8 @@ namespace DfoGmTool.Services
             public bool DailyDeleteItem;
             public bool HasInvalidExpirationDefinition;
             public bool RequiresManualGrantType;
+            public bool RequiresConfiguration;
+            public bool SupportsQuality;
         }
 
         public readonly struct ItemExpirationDefinition
@@ -158,10 +160,10 @@ namespace DfoGmTool.Services
                 .Select(g => (object)new { segment = g.Key, count = g.Count() })
                 .ToArray();
 
-            return new { ready = true, equipment, stackable };
+            return new { ready = true, equipment, stackable, jobs = GetAllJobOptions() };
         }
 
-        public object SearchItems(string query, string kind, string tag, string segment, string special, int minLevel, int maxLevel, int rarity, int limit, int offset, string expiration, int characterJob = -1)
+        public object SearchItems(string query, string kind, string tag, string segment, string special, int minLevel, int maxLevel, int rarity, int limit, int offset, string expiration, int usableJobFilter = -1)
         {
             var list = _searchList;
             if (list == null)
@@ -180,12 +182,20 @@ namespace DfoGmTool.Services
                 numericId = -1;
 
             expiration = (expiration ?? string.Empty).Trim().ToLowerInvariant();
+            var tagSet = SplitFilterValues(tag);
+            var segmentSet = SplitFilterValues(segment);
+            tag = null;
+            segment = null;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
             var filtered = new List<ItemEntry>();
             foreach (var entry in list)
             {
                 if (kind != null && entry.Kind != kind)
+                    continue;
+                if (tagSet != null && !tagSet.Contains(entry.TypeTag ?? string.Empty))
+                    continue;
+                if (segmentSet != null && !segmentSet.Contains(entry.Segment ?? string.Empty))
                     continue;
                 if (tag != null && (entry.TypeTag ?? "(无标签)") != tag)
                     continue;
@@ -201,10 +211,13 @@ namespace DfoGmTool.Services
                     continue;
                 if (!MatchesExpirationFilter(entry, expiration, now))
                     continue;
-                if (characterJob >= 0
-                    && IsAvatarType(entry.TypeTag)
-                    && !AvatarGrantPolicy.IsUsableByJob(entry.UsableJob, characterJob))
-                    continue;
+                if (entry.Kind == "equipment")
+                {
+                    if (usableJobFilter == -2 && !IsUnrestrictedUsableJob(entry.UsableJob))
+                        continue;
+                    if (usableJobFilter >= 0 && !AvatarGrantPolicy.IsUsableByJob(entry.UsableJob, usableJobFilter))
+                        continue;
+                }
                 if (query.Length > 0
                     && entry.Id != numericId
                     && (entry.Name == null || entry.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0))
@@ -225,7 +238,11 @@ namespace DfoGmTool.Services
                     minLevel = e.MinLevel,
                     grade = e.Grade,
                     usableJob = e.UsableJob,
+                    usableJobLabel = UsableJobLabel(e.UsableJob),
+                    usableJobLabels = UsableJobLabels(e.UsableJob),
                     requiresManualGrantType = e.RequiresManualGrantType,
+                    requiresConfiguration = e.RequiresConfiguration,
+                    supportsQuality = e.SupportsQuality,
                     templateExpiration = new
                     {
                         known = true,
@@ -238,6 +255,16 @@ namespace DfoGmTool.Services
                 .ToArray();
 
             return new { success = true, total = filtered.Count, offset, count = page.Length, results = page };
+        }
+
+        private static HashSet<string> SplitFilterValues(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+            return new HashSet<string>(
+                value.Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(part => part.Trim()),
+                StringComparer.Ordinal);
         }
 
         private static bool MatchesExpirationFilter(ItemEntry entry, string filter, long now)
@@ -268,10 +295,85 @@ namespace DfoGmTool.Services
             }
         }
 
-        private static bool IsAvatarType(string typeTag)
+        private static bool IsUnrestrictedUsableJob(string usableJob)
         {
-            return !string.IsNullOrWhiteSpace(typeTag)
-                && typeTag.EndsWith(" avatar", StringComparison.OrdinalIgnoreCase);
+            var normalized = NormalizeUsableJob(usableJob);
+            return string.IsNullOrEmpty(normalized) || normalized.Contains("[all]", StringComparison.Ordinal);
+        }
+
+        private static string NormalizeUsableJob(string usableJob)
+        {
+            return (usableJob ?? string.Empty)
+                .Trim()
+                .Trim('`')
+                .ToLowerInvariant()
+                .Replace("`", string.Empty)
+                .Replace("_", " ")
+                .Replace("\t", " ")
+                .Replace("\r", " ")
+                .Replace("\n", " ");
+        }
+
+        private static string UsableJobLabel(string usableJob)
+        {
+            var normalized = NormalizeUsableJob(usableJob);
+            if (string.IsNullOrWhiteSpace(normalized) || normalized.Contains("[all]", StringComparison.Ordinal))
+                return "无限制";
+
+            var labels = new List<string>();
+            foreach (Match match in Regex.Matches(normalized, @"\[([^\]]+)\]"))
+            {
+                var token = match.Groups[1].Value.Trim();
+                if (token.Length == 0 || token == "all")
+                    continue;
+                var label = UsableJobTokenLabel(token);
+                if (!labels.Contains(label))
+                    labels.Add(label);
+            }
+            return labels.Count == 0 ? "无限制" : string.Join("、", labels);
+        }
+
+        private static string[] UsableJobLabels(string usableJob)
+        {
+            var normalized = NormalizeUsableJob(usableJob);
+            if (string.IsNullOrWhiteSpace(normalized) || normalized.Contains("[all]", StringComparison.Ordinal))
+                return new[] { UsableJobLabel(usableJob) };
+
+            var labels = new List<string>();
+            foreach (Match match in Regex.Matches(normalized, @"\[([^\]]+)\]"))
+            {
+                var token = match.Groups[1].Value.Trim();
+                if (token.Length == 0 || token == "all")
+                    continue;
+                var label = UsableJobTokenLabel(token);
+                if (!labels.Contains(label))
+                    labels.Add(label);
+            }
+            return labels.Count == 0 ? new[] { UsableJobLabel(usableJob) } : labels.ToArray();
+        }
+
+        private static string UsableJobTokenLabel(string token)
+        {
+            switch ((token ?? string.Empty).Replace("_", " ").Trim().ToLowerInvariant())
+            {
+                case "swordman": return "鬼剑士";
+                case "fighter": return "格斗家";
+                case "gunner": return "神枪手";
+                case "mage": return "魔法师";
+                case "priest": return "圣职者";
+                case "thief": return "暗夜使者";
+                case "knight": return "守护者";
+                case "at gunner": return "女神枪手";
+                case "at fighter": return "男格斗家";
+                case "at mage": return "男魔法师";
+                case "at swordman": return "女鬼剑士";
+                case "atswordman": return "女鬼剑士";
+                case "demonic swordman": return "黑暗武士";
+                case "demonicswordman": return "黑暗武士";
+                case "creatormage": return "缔造者";
+                case "creator mage": return "缔造者";
+                default: return token;
+            }
         }
 
         public object Search(string query, int limit)
@@ -313,6 +415,10 @@ namespace DfoGmTool.Services
 
         private static ItemExpirationDefinition ResolveEquipmentExpiration(EquipmentFile equipment)
         {
+            var typeTag = FirstTag(equipment?.EquipmentType);
+            if (string.Equals(typeTag, "name tag", StringComparison.OrdinalIgnoreCase))
+                return new ItemExpirationDefinition(true, 0, 30, false, false);
+
             var rawExpiration = equipment.GetStringValue("expiration date");
             if (string.IsNullOrWhiteSpace(rawExpiration) || rawExpiration.Trim() == "0")
                 return new ItemExpirationDefinition(true, 0, 0, false, false);
@@ -375,6 +481,32 @@ namespace DfoGmTool.Services
                         if (string.IsNullOrEmpty(model.Name))
                             return;
                         var expiration = ResolveEquipmentExpiration(model);
+                        var metadata = new ItemMetadata
+                        {
+                            ItemKind = "equipment",
+                            EquipmentType = model.EquipmentType,
+                            ItemCategory = model.ItemCategory,
+                            MinimumLevel = model.MinimumLevel,
+                            Rarity = model.Rarity,
+                            SupportsPetEquipmentQuality = ItemMetadataResolver.HasPetEquipmentQuality(model),
+                            ImpossibleContents = model.ImpossibleContentItems,
+                        };
+                        var isAvatar = ItemMetadataResolver.IsAvatarMetadata(metadata);
+                        var isPetCreature = ItemMetadataResolver.IsPetCreatureMetadata(metadata);
+                        var isPetArtifact = ItemMetadataResolver.IsPetArtifactMetadata(metadata);
+                        var capability = EquipmentGrantPolicy.Describe(metadata);
+                        var isCoatAvatar = string.Equals(
+                            ItemMetadataResolver.ResolvePvfTypeTag(metadata),
+                            "coat avatar",
+                            StringComparison.OrdinalIgnoreCase);
+                        var hasAvatarOption = model.Grade > 0
+                            && ((isCoatAvatar && model.AbilityCaseIndex >= 0)
+                                || (model.AvatarSelectAbilities != null && model.AvatarSelectAbilities.Count > 1));
+                        var hasAvatarDuration = AvatarDurationResolver.Parse(text).Count > 0;
+                        var requiresManual = ItemMetadataResolver.RequiresManualGrantType(metadata);
+                        var supportsQuality = isPetArtifact && metadata.SupportsPetEquipmentQuality;
+                        var configurableExpiration = expiration.AbsoluteExpirationUnixTime > 0
+                            || expiration.UsablePeriodDays > 0;
                         results[i] = new ItemEntry
                         {
                             Id = entries[i].Key,
@@ -390,12 +522,14 @@ namespace DfoGmTool.Services
                             UsablePeriodDays = expiration.UsablePeriodDays,
                             DailyDeleteItem = expiration.DailyDeleteItem,
                             HasInvalidExpirationDefinition = expiration.HasInvalidDefinition,
-                            RequiresManualGrantType = ItemMetadataResolver.RequiresManualGrantType(new ItemMetadata
-                            {
-                                ItemKind = "equipment",
-                                EquipmentType = model.EquipmentType,
-                                ItemCategory = model.ItemCategory,
-                            }),
+                            RequiresManualGrantType = requiresManual,
+                            SupportsQuality = supportsQuality,
+                            RequiresConfiguration = !isPetCreature
+                                && (requiresManual
+                                    || (isAvatar && (hasAvatarOption || hasAvatarDuration || configurableExpiration))
+                                    || (isPetArtifact && supportsQuality)
+                                    || (!isAvatar && !isPetArtifact
+                                        && (configurableExpiration || capability.CanUpgrade || capability.CanAmplify || capability.CanForge))),
                         };
                     }
                     else
@@ -404,6 +538,11 @@ namespace DfoGmTool.Services
                         if (string.IsNullOrEmpty(model.Name))
                             return;
                         var expiration = ResolveStackableExpiration(model);
+                        var requiresManual = ItemMetadataResolver.RequiresManualGrantType(new ItemMetadata
+                        {
+                            ItemKind = "stackable",
+                            StackableType = model.StackableType,
+                        });
                         results[i] = new ItemEntry
                         {
                             Id = entries[i].Key,
@@ -419,11 +558,10 @@ namespace DfoGmTool.Services
                             UsablePeriodDays = expiration.UsablePeriodDays,
                             DailyDeleteItem = expiration.DailyDeleteItem,
                             HasInvalidExpirationDefinition = expiration.HasInvalidDefinition,
-                            RequiresManualGrantType = ItemMetadataResolver.RequiresManualGrantType(new ItemMetadata
-                            {
-                                ItemKind = "stackable",
-                                StackableType = model.StackableType,
-                            }),
+                            RequiresManualGrantType = requiresManual,
+                            RequiresConfiguration = requiresManual
+                                || expiration.AbsoluteExpirationUnixTime > 0
+                                || expiration.UsablePeriodDays > 0,
                         };
                     }
                 }

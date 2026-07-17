@@ -215,7 +215,7 @@ function inventoryExpirationMatchesFilter(item, filter) {
 
 // 破坏性操作所在的表格: 切角色瞬间立即清空, 消灭"旧角色的行还可点"的窗口
 const INTERACTIVE_TBODY_SELECTORS = [
-  '#item-table tbody', '#quest-table tbody', '#main-quest-table tbody',
+  '#item-table tbody', '#quest-table tbody', '#all-quest-table tbody', '#main-quest-table tbody',
   '#achieve-quest-table tbody', '#cleared-table tbody',
 ];
 

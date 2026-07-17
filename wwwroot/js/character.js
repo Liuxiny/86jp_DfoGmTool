@@ -23,6 +23,34 @@ async function maxPersonalCargo() {
   }
 }
 
+async function unlockExtraEquipmentSlots() {
+  if (!currentChar) return;
+  updateExtraEquipmentSlotButton();
+  const unlockBtn = $('#btn-unlock-equipment-slots');
+  if (unlockBtn && unlockBtn.disabled) return;
+  const unlockOldText = unlockBtn ? unlockBtn.textContent : '';
+  if (unlockBtn) {
+    unlockBtn.disabled = true;
+    unlockBtn.textContent = '正在开启...';
+  }
+  try {
+    const r = await post(`/api/characters/${currentChar.characterId}/equipment-slots/unlock`);
+    const completed = r.completedQuestIds?.length || 0;
+    toast(completed > 0 ? `左右槽已开启，已完成 ${completed} 个相关任务` : '左右槽已开启');
+    refreshHeader();
+    loadAllVisibleQuests();
+    loadAchieveQuests();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    if (unlockBtn) {
+      unlockBtn.textContent = unlockOldText;
+      updateExtraEquipmentSlotButton();
+    }
+  }
+  return;
+}
+
 async function unlockDungeonPermissions() {
   if (!currentChar) return;
   const btn = $('#btn-unlock-dungeon-permissions');
@@ -42,6 +70,19 @@ async function unlockDungeonPermissions() {
       btn.textContent = oldText;
     }
   }
+}
+
+function updateExtraEquipmentSlotButton() {
+  const btn = $('#btn-unlock-equipment-slots');
+  if (!btn || !currentChar) return;
+  const unlocked = currentChar.extraEquipmentSlotsUnlocked || currentChar.exEquipSlotStat === 3;
+  btn.disabled = currentChar.level < 70 || unlocked;
+  if (currentChar.level < 70)
+    btn.title = '角色达到 70 级后可开启';
+  else if (unlocked)
+    btn.title = '左右槽已经开启';
+  else
+    btn.title = '';
 }
 
 async function deleteCurrentCharacter() {
@@ -81,6 +122,23 @@ async function deleteCurrentCharacter() {
 
 let characterClonePlan = null;
 let cloneNameAvailable = false;
+const CLONE_OPTIONS_DEFAULT_OFF = new Set([
+  'quests',
+  'quest',
+  'clearedQuests',
+  'clearedQuest',
+  'titleBook',
+  'titlebook',
+  'dailyWeekly',
+  'dailyWeeklyState',
+  'characterState',
+  'characterStates',
+  'extraCharacterState',
+  'otherCharacterState',
+  'audit',
+  'itemAudit',
+  'itemAuditLog',
+]);
 
 async function openCharacterClonePanel() {
   if (!currentChar) return;
@@ -122,7 +180,8 @@ function renderCharacterClonePlan() {
   box.innerHTML = '';
   for (const option of characterClonePlan.options || []) {
     const label = document.createElement('label');
-    label.innerHTML = `<input type="checkbox" value="${escapeHtml(option.key)}" ${option.defaultChecked ? 'checked' : ''}> ${escapeHtml(option.label)}`;
+    const defaultChecked = option.defaultChecked && !isCloneOptionDefaultOff(option);
+    label.innerHTML = `<input type="checkbox" value="${escapeHtml(option.key)}" ${defaultChecked ? 'checked' : ''}> ${escapeHtml(option.label)}`;
     const input = label.querySelector('input');
     if (option.key === 'basic') {
       input.checked = true;
@@ -130,6 +189,59 @@ function renderCharacterClonePlan() {
     }
     box.appendChild(label);
   }
+}
+
+function isCloneOptionDefaultOff(option) {
+  const key = String(option?.key || '').replace(/[-_\s]/g, '').toLowerCase();
+  const label = String(option?.label || '').toLowerCase();
+  if ([...CLONE_OPTIONS_DEFAULT_OFF].some((item) => key === item.replace(/[-_\s]/g, '').toLowerCase()))
+    return true;
+  return label.includes('任务')
+    || label.includes('完成记录')
+    || label.includes('称号簿')
+    || label.includes('每日')
+    || label.includes('周常')
+    || label.includes('角色状态')
+    || label.includes('审计');
+}
+
+function activateMainTab(tabName) {
+  const tab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+  if (!tab) return;
+  document.querySelectorAll('.tab[data-tab]').forEach((t) => t.classList.remove('active'));
+  document.querySelectorAll('.tab-page').forEach((p) => p.classList.add('hidden'));
+  tab.classList.add('active');
+  $('#tab-' + tabName).classList.remove('hidden');
+}
+
+function activateAccountTab(tabName) {
+  const tab = document.querySelector(`.acc-tab[data-acc-tab="${tabName}"]`);
+  if (!tab) return;
+  document.querySelectorAll('.acc-tab').forEach((t) => t.classList.remove('active'));
+  document.querySelectorAll('.acc-tab-page').forEach((p) => p.classList.add('hidden'));
+  tab.classList.add('active');
+  $('#acc-tab-' + tabName).classList.remove('hidden');
+}
+
+async function jumpToCharacterCurrency() {
+  if (!currentChar) return toast('请先选择角色', true);
+  activateMainTab('inventory');
+  activeCategory = '货币';
+  invPage = 0;
+  clearInventoryConfiguration();
+  if (inventoryItems.length === 0)
+    await loadItems();
+  else {
+    renderCategoryNav();
+    renderItemTable();
+  }
+}
+
+async function jumpToAccountCurrency() {
+  const accountId = parseInt($('#account-select').value, 10);
+  if (!accountId) return toast('请先选择账号', true);
+  await showAccountPanel();
+  activateAccountTab('currency');
 }
 
 function updateCloneAccountLimit() {
@@ -262,15 +374,28 @@ function renderGrowOptions(fetched) {
     const jobs = Array.isArray(growOptions.jobs) && growOptions.jobs.length
       ? growOptions.jobs
       : [{ value: growOptions.job, label: growOptions.options.baseName || `job ${growOptions.job}` }];
-    for (const job of jobs)
-      jobSel.innerHTML += `<option value="${job.value}">${escapeHtml(job.label || `job ${job.value}`)}</option>`;
+    for (const job of jobs) {
+      const option = document.createElement('option');
+      option.value = job.value;
+      option.textContent = jobLabelWithGender(job.value, job.label || `job ${job.value}`);
+      jobSel.appendChild(option);
+    }
     jobSel.value = String(growOptions.job);
   }
 
   const firstSel = $('#grow-first');
-  firstSel.innerHTML = `<option value="0">${escapeHtml(growOptions.options.baseName || '未转职')}</option>`;
-  for (const g of growOptions.options.growTypes)
-    firstSel.innerHTML += `<option value="${g.value}">${escapeHtml(g.label)}</option>`;
+  firstSel.innerHTML = '';
+  const baseOption = document.createElement('option');
+  baseOption.value = '0';
+  baseOption.textContent = growOptions.options.baseName || '未转职';
+  firstSel.appendChild(baseOption);
+  for (const g of growOptions.options.growTypes) {
+    const option = document.createElement('option');
+    option.value = g.value;
+    option.textContent = g.label;
+    option.disabled = currentChar && currentChar.level < 15;
+    firstSel.appendChild(option);
+  }
   firstSel.value = String(growOptions.first);
   renderSecondOptions();
   $('#grow-second').value = String(growOptions.second);
@@ -279,13 +404,30 @@ function renderGrowOptions(fetched) {
 function renderSecondOptions() {
   const first = parseInt($('#grow-first').value, 10);
   const secondSel = $('#grow-second');
-  secondSel.innerHTML = '<option value="0">未觉醒</option>';
+  secondSel.innerHTML = '';
+  const baseOption = document.createElement('option');
+  baseOption.value = '0';
+  baseOption.textContent = '未觉醒';
+  secondSel.appendChild(baseOption);
   const grow = growOptions?.options.growTypes.find((g) => g.value === first);
   if (grow) {
     grow.awakenings.forEach((name, i) => {
-      secondSel.innerHTML += `<option value="${i + 1}">${escapeHtml(name)}</option>`;
+      const value = i + 1;
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = name;
+      option.disabled = currentChar && ((value === 1 && currentChar.level < 50) || (value >= 2 && currentChar.level < 75));
+      secondSel.appendChild(option);
     });
   }
+}
+
+function jobLabelWithGender(job, label) {
+  return label;
+}
+
+function jobGenderSuffix(job) {
+  return '';
 }
 
 async function setGrowType() {

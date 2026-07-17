@@ -617,6 +617,13 @@ button.mini {
 }
 
 button.mini:hover { background: var(--button-secondary-hover); }
+button.mini.primary {
+  background: var(--accent-strong);
+  color: var(--button-text);
+  font-size: 12px;
+}
+
+button.mini.primary:hover { background: var(--accent-hover); }
 button.danger {
   background: var(--danger-bg);
   color: var(--button-text);
@@ -718,6 +725,12 @@ td input.val-input {
   color: var(--text);
 }
 
+.category-nav .group-toggle.active {
+  border-color: var(--accent-border);
+  background: var(--surface-selected);
+  color: var(--text);
+}
+
 .category-nav .group-toggle .toggle {
   display: inline-block;
   width: 14px;
@@ -748,11 +761,24 @@ td input.val-input {
 }
 
 .give-config-card {
-  margin-top: 14px;
-  padding: 14px 16px;
+  padding: 12px 13px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.floating-config-panel {
+  position: fixed;
+  z-index: 19;
+  box-sizing: border-box;
+  width: fit-content;
+  min-width: min(286px, calc(100vw - 32px));
+  max-width: min(430px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  margin: 0;
+  overflow: auto;
+  box-shadow: 0 12px 34px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 16%);
+  overscroll-behavior: contain;
 }
 
 .give-config-head,
@@ -764,7 +790,29 @@ td input.val-input {
 }
 
 .give-config-head {
-  margin-bottom: 12px;
+  position: relative;
+  margin: -3px -4px 10px;
+  padding: 4px 4px 7px 15px;
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.give-config-head::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  width: 4px;
+  height: 18px;
+  border-left: 2px dotted var(--text-faint);
+  border-right: 2px dotted var(--text-faint);
+  opacity: .7;
+}
+
+.floating-config-panel.is-dragging .give-config-head {
+  cursor: grabbing;
 }
 
 .give-config-title {
@@ -777,13 +825,14 @@ td input.val-input {
 .give-config-meta {
   color: var(--text-faint);
   font-size: 12px;
-  white-space: nowrap;
+  text-align: right;
+  white-space: normal;
 }
 
 .give-config-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(142px, 100%), 1fr));
+  gap: 9px 10px;
 }
 
 .give-config-field {
@@ -816,8 +865,8 @@ td input.val-input {
 
 .give-config-actions {
   justify-content: flex-end;
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 
@@ -869,26 +918,80 @@ td input.val-input {
 /* 表格内的 hint 只降色不降字号: 状态列"可接取"和"已完成"混排时字号必须一致, 否则行高/布局发抖 */
 table .hint { font-size: inherit; }
 
+#search-results th:nth-child(6) {
+  width: 204px;
+}
+
+#search-results .usable-job-cell {
+  width: 204px;
+  min-width: 204px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.usable-job-chips {
+  display: grid;
+  grid-template-columns: repeat(2, 94px);
+  grid-auto-rows: 22px;
+  gap: 4px;
+  width: 192px;
+  min-height: 22px;
+  max-height: 48px;
+  overflow: hidden;
+}
+
+.usable-job-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 94px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usable-job-chip.more {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
 /* 任务树表用固定列宽: 展开/收起只增减行, 列宽不随内容重算, 避免布局跳动 */
+#all-quest-table,
 #main-quest-table,
 #achieve-quest-table {
   table-layout: fixed;
 }
 
+#all-quest-table th:nth-child(1),
 #main-quest-table th:nth-child(1),
 #achieve-quest-table th:nth-child(1) { width: 76px; }
+#all-quest-table th:nth-child(2),
 #main-quest-table th:nth-child(2),
 #achieve-quest-table th:nth-child(2) { width: 46px; }
+#all-quest-table th:nth-child(3),
 #main-quest-table th:nth-child(3),
 #achieve-quest-table th:nth-child(3) { width: 62px; }
 
 /* 状态列三字词(可接取/进行中)不许折行 */
+#all-quest-table td:first-child,
 #main-quest-table td:first-child,
 #achieve-quest-table td:first-child { white-space: nowrap; }
+#all-quest-table th:nth-child(4),
 #main-quest-table th:nth-child(4),
 #achieve-quest-table th:nth-child(4) { width: 30%; }
+#all-quest-table th:nth-child(6),
 #main-quest-table th:nth-child(6),
 #achieve-quest-table th:nth-child(6) { width: 178px; }
+#all-quest-table td,
 #main-quest-table td,
 #achieve-quest-table td { overflow-wrap: break-word; }
 
@@ -928,6 +1031,104 @@ table .hint { font-size: inherit; }
   margin-bottom: 10px;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.character-card-grid {
+  display: grid;
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 12px;
+}
+
+.character-card-grid .card {
+  margin-bottom: 0;
+}
+
+.character-card-grid-three {
+  grid-template-columns: repeat(3, minmax(190px, 1fr));
+}
+
+.character-card-grid-two {
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+}
+
+.character-quick-card,
+.character-action-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 112px;
+}
+
+.character-quick-card .row,
+.character-action-card .row {
+  align-items: flex-start;
+  margin-bottom: 0;
+}
+
+.character-quick-card .hint,
+.character-action-card .hint {
+  flex: 1 1 180px;
+  line-height: 1.45;
+}
+
+.sptp-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.sptp-note {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sptp-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.sptp-card {
+  min-height: 96px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+
+.sptp-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sptp-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.sptp-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.sptp-line b {
+  color: var(--text);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
 }
 
 .hint {
@@ -1055,6 +1256,15 @@ button,
 
   .tabs {
     overflow-x: auto;
+  }
+
+  .character-card-grid-three,
+  .character-card-grid-two {
+    grid-template-columns: 1fr;
+  }
+
+  .sptp-grid {
+    grid-template-columns: 1fr;
   }
 
   .tab {

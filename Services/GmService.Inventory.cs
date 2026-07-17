@@ -39,6 +39,7 @@ namespace DfoGmTool.Services
                     InventoryListType.Equipment,
                     job,
                     pvfIndex);
+                var expirationConfigurable = CanConfigureInventoryExpiration(item.AvatarItemId, "equipment", item.ExpireTime);
                 items.Add(new
                 {
                     container = "主背包",
@@ -55,7 +56,8 @@ namespace DfoGmTool.Services
                     supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.AvatarItemId, item.ExpireTime),
                     templateExpiration = CreateTemplateExpiration(pvfIndex, item.AvatarItemId),
                     deletable = true,
-                    configurable = configKind != null,
+                    configurable = configKind != null || expirationConfigurable,
+                    expirationConfigurable,
                     configKind,
                 });
             }
@@ -68,6 +70,7 @@ namespace DfoGmTool.Services
                     InventoryListType.Avatar,
                     job,
                     pvfIndex);
+                var expirationConfigurable = CanConfigureInventoryExpiration(item.AvatarItemId, "avatar", item.ExpireTime);
                 items.Add(new
                 {
                     container = "主背包",
@@ -84,13 +87,21 @@ namespace DfoGmTool.Services
                     supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.AvatarItemId, item.ExpireTime),
                     templateExpiration = CreateTemplateExpiration(pvfIndex, item.AvatarItemId),
                     deletable = true,
-                    configurable = configKind != null,
+                    configurable = configKind != null || expirationConfigurable,
+                    expirationConfigurable,
                     configKind,
                 });
             }
 
             foreach (var item in snapshot.PetItems)
             {
+                var configKind = ResolveInventoryConfigKind(
+                    item.CreatureItemId,
+                    "pet",
+                    InventoryListType.Pet,
+                    job,
+                    pvfIndex);
+                var expirationConfigurable = CanConfigureInventoryExpiration(item.CreatureItemId, "pet", item.ExpireTime);
                 items.Add(new
                 {
                     container = "宠物",
@@ -104,10 +115,14 @@ namespace DfoGmTool.Services
                     count = 1,
                     durability = 0,
                     serial = item.CreatureSerialOrHandle,
+                    instanceValue = item.CreatureSerialOrHandle,
                     expireTime = item.ExpireTime,
                     supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.CreatureItemId, item.ExpireTime),
                     templateExpiration = CreateTemplateExpiration(pvfIndex, item.CreatureItemId),
                     deletable = true,
+                    configurable = configKind != null || expirationConfigurable,
+                    expirationConfigurable,
+                    configKind,
                 });
             }
 
@@ -122,6 +137,7 @@ namespace DfoGmTool.Services
             {
                 var kind = pvfIndex.ResolveItemKind(item.ItemTemplateId);
                 var configKind = ResolveInventoryConfigKind(item.ItemTemplateId, kind, listType, job, pvfIndex);
+                var expirationConfigurable = CanConfigureInventoryExpiration(item.ItemTemplateId, kind, item.ExpireTime);
                 items.Add(new
                 {
                     container,
@@ -141,7 +157,8 @@ namespace DfoGmTool.Services
                     templateExpiration = CreateTemplateExpiration(pvfIndex, item.ItemTemplateId),
                     seal = (int)item.SealFlag,
                     deletable = IsDeletable(listType, item.SlotIndex),
-                    configurable = configKind != null,
+                    configurable = configKind != null || expirationConfigurable,
+                    expirationConfigurable,
                     configKind,
                 });
             }
@@ -208,10 +225,6 @@ namespace DfoGmTool.Services
             if (!_store.TryDeleteItem(characterId, accountId, list, (short)slot, (short)count, out result))
                 return Error("删除失败(槽位为空或该列表不支持删除)");
 
-            var sorted = result == null || result.RemainingStackCount == 0
-                ? SortInventorySegment(characterId, list, slot)
-                : false;
-
             return new
             {
                 success = true,
@@ -219,7 +232,7 @@ namespace DfoGmTool.Services
                 listType,
                 slot,
                 remaining = result != null ? result.RemainingStackCount : 0,
-                sorted,
+                sorted = false,
             };
         }
 
@@ -234,7 +247,6 @@ namespace DfoGmTool.Services
 
             var deleted = 0;
             var failed = new List<object>();
-            var sortTargets = new HashSet<string>();
             foreach (var entry in entries)
             {
                 var list = (InventoryListType)entry.ListType;
@@ -248,26 +260,12 @@ namespace DfoGmTool.Services
                 if (_store.TryDeleteItem(characterId, accountId, list, (short)entry.Slot, 0, out result))
                 {
                     deleted++;
-                    sortTargets.Add(((int)list) + ":" + entry.Slot);
                 }
                 else
                     failed.Add(new { entry.ListType, entry.Slot, reason = "删除失败" });
             }
 
-            var sorted = 0;
-            foreach (var key in sortTargets)
-            {
-                var parts = key.Split(':');
-                if (parts.Length == 2
-                    && int.TryParse(parts[0], out var listValue)
-                    && int.TryParse(parts[1], out var slotValue)
-                    && SortInventorySegment(characterId, (InventoryListType)listValue, slotValue))
-                {
-                    sorted++;
-                }
-            }
-
-            return new { success = true, characterId, deleted, sortedSegments = sorted, failedCount = failed.Count, failed };
+            return new { success = true, characterId, deleted, sortedSegments = 0, failedCount = failed.Count, failed };
         }
 
         // 主背包 slot 分段, 与服务端 ItemMetadataResolver.GetSlotRange / 各 Slot 常量一致
@@ -522,13 +520,15 @@ WHERE character_id = @cid
                 return Error(expirationError);
 
             object avatar = null;
+            List<AvatarGrantOption> avatarOptionValues = null;
+            IReadOnlyList<AvatarDurationOption> avatarDurationValues = Array.Empty<AvatarDurationOption>();
             if (isAvatar)
             {
                 if (!ItemMetadataResolver.TryLoadEquipmentFile(itemTemplateId, out var equipment))
                     return Error("装扮模板无法从 PVF 读取");
 
                 var compatible = AvatarGrantPolicy.IsUsableByJob(equipment.UsableJob, job);
-                var optionValues = compatible
+                avatarOptionValues = compatible
                     ? AvatarGrantPolicy.ResolveOptions(
                         equipment.EquipmentType,
                         equipment.Grade,
@@ -536,20 +536,20 @@ WHERE character_id = @cid
                         job,
                         equipment.AbilityCaseIndex)
                     : new List<AvatarGrantOption>();
-                var durationValues = AvatarDurationResolver.Resolve(itemTemplateId);
+                avatarDurationValues = AvatarDurationResolver.Resolve(itemTemplateId);
                 avatar = new
                 {
                     compatible,
                     part = metadata.EquipmentType,
                     grade = metadata.Grade,
                     usableJob = equipment.UsableJob,
-                    options = optionValues.Select(value => new
+                    options = avatarOptionValues.Select(value => new
                     {
                         value = value.Value,
                         label = value.Label,
                         isSkill = value.IsSkill,
                     }).ToArray(),
-                    durations = durationValues.Select(value => new
+                    durations = avatarDurationValues.Select(value => new
                     {
                         days = value.DurationDays,
                         label = value.DurationDays == 0 ? "永久" : value.DurationDays + " 天",
@@ -557,10 +557,22 @@ WHERE character_id = @cid
                 };
             }
 
+            var isPetArtifact = ItemMetadataResolver.IsPetArtifactMetadata(metadata);
+            var isPetCreature = ItemMetadataResolver.IsPetCreatureMetadata(metadata);
+            var isConfigurablePetEquipment = isPetArtifact && metadata.SupportsPetEquipmentQuality;
             var isConfigurableEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal)
                 && !requiresManualGrantType
                 && !isAvatar
-                && !ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId);
+                && !ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId)
+                && (equipmentCapability.CanUpgrade || equipmentCapability.CanAmplify || equipmentCapability.CanForge);
+            var requiresAvatarConfiguration = isAvatar
+                && ((avatarOptionValues?.Count ?? 0) > 1 || avatarDurationValues.Count > 0);
+            var requiresConfiguration = !isPetCreature
+                && (isConfigurableEquipment
+                    || isConfigurablePetEquipment
+                    || requiresAvatarConfiguration
+                    || (!isPetArtifact && expiration.CanOverride)
+                    || requiresManualGrantType);
             return new
             {
                 success = true,
@@ -568,9 +580,9 @@ WHERE character_id = @cid
                 itemTemplateId,
                 name,
                 kind = metadata.ItemKind,
-                requiresConfiguration = isConfigurableEquipment || isAvatar || expiration.IsLimited || requiresManualGrantType,
+                requiresConfiguration,
                 pvfTypeTag = ItemMetadataResolver.ResolvePvfTypeTag(metadata),
-                equipment = isConfigurableEquipment ? new
+                equipment = isConfigurableEquipment || isConfigurablePetEquipment ? new
                 {
                     type = metadata.EquipmentType,
                     rarity = metadata.Rarity,
@@ -578,6 +590,7 @@ WHERE character_id = @cid
                     canUpgrade = equipmentCapability.CanUpgrade,
                     canAmplify = equipmentCapability.CanAmplify,
                     canForge = equipmentCapability.CanForge,
+                    supportsQuality = isConfigurableEquipment || isConfigurablePetEquipment,
                     maxUpgradeLevel = equipmentCapability.MaxUpgradeLevel,
                     maxForgingLevel = equipmentCapability.MaxForgingLevel,
                     qualityOptions = new[]
@@ -604,6 +617,7 @@ WHERE character_id = @cid
                 {
                     limited = expiration.IsLimited,
                     canOverride = expiration.CanOverride,
+                    expired = expiration.IsExpired,
                     defaultExpireTime = expiration.DefaultExpireTime,
                     maxDays = ItemGrantExpirationOverride.MaximumDays,
                 },
@@ -687,7 +701,18 @@ WHERE character_id = @cid
             }
 
             if (!ItemGrantExpirationResolver.TryResolve(itemTemplateId, metadata, out var expireTime, out error))
-                return new ItemGrantExpirationCapability();
+            {
+                if (!IsExpiredGrantExpirationError(error))
+                    return new ItemGrantExpirationCapability();
+                error = null;
+                return new ItemGrantExpirationCapability
+                {
+                    IsLimited = true,
+                    CanOverride = true,
+                    DefaultExpireTime = 0,
+                    IsExpired = true,
+                };
+            }
             var capability = new ItemGrantExpirationCapability
             {
                 IsLimited = expireTime > 0,
@@ -705,6 +730,9 @@ WHERE character_id = @cid
             }
             return capability;
         }
+
+        private static bool IsExpiredGrantExpirationError(string error)
+            => !string.IsNullOrWhiteSpace(error) && error.Contains("已过期");
 
         public object RemoveItem(int characterId, int itemTemplateId, int count)
         {

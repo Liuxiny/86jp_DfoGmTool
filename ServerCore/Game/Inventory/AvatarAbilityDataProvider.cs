@@ -287,10 +287,6 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             if (tokenJob == job)
                 return true;
 
-            if (job == 9 && string.Equals(normalized, "swordman", StringComparison.OrdinalIgnoreCase))
-                return true;
-            if (job == 10 && string.Equals(normalized, "mage", StringComparison.OrdinalIgnoreCase))
-                return true;
             return false;
         }
 

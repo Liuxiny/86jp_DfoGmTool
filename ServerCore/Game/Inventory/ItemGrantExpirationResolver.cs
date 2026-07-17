@@ -55,6 +55,12 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 return true;
             }
 
+            if (ItemMetadataResolver.IsNameTagMetadata(metadata))
+            {
+                expireTime = AddDaysFromNow(30);
+                return true;
+            }
+
             var rawExpiration = equipment.GetStringValue("expiration date");
             if (string.IsNullOrWhiteSpace(rawExpiration) || rawExpiration.Trim() == "0")
             {

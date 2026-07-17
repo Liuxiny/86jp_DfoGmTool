@@ -205,6 +205,8 @@ namespace DfoGmTool
                 WithRuntime((gm, _) => gm.SetLevel(id, body.Level)));
             app.MapPost("/api/characters/{id:int}/personal-cargo/max", (int id) =>
                 WithRuntime((gm, _) => gm.MaxPersonalCargo(id)));
+            app.MapPost("/api/characters/{id:int}/equipment-slots/unlock", (int id) =>
+                WithRuntime((gm, _) => gm.UnlockExtraEquipmentSlots(id)));
             app.MapPost("/api/characters/{id:int}/dungeon-permissions/unlock", (int id) =>
                 WithRuntime((gm, pvfIndex) => gm.UnlockDungeonPermissions(id, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/delete", (int id, DeleteCharacterRequest body) =>
@@ -220,32 +222,54 @@ namespace DfoGmTool
                 WithRuntime((gm, _) => gm.SetGrowTypeFixed(id, body.Job, body.First, body.Second)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/ready", (int id, int questId) =>
                 WithRuntime((gm, _) => gm.MarkQuestReady(id, questId)));
+            app.MapPost("/api/characters/{id:int}/quests/{questId:int}/daily-ready", (int id, int questId) =>
+                WithRuntime((gm, pvfIndex) => gm.MarkVisibleDailyQuestReady(id, questId, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/complete", (int id, int questId) =>
                 WithRuntime((gm, _) => gm.ForceCompleteQuest(id, questId)));
             app.MapGet("/api/characters/{id:int}/quests/cleared", (int id) =>
                 WithRuntime((gm, pvfIndex) => gm.ListClearedQuests(id, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/unclear", (int id, int questId) =>
                 WithRuntime((gm, _) => gm.UnclearQuest(id, questId)));
-            app.MapGet("/api/characters/{id:int}/quests/search", (int id, string q, int? limit) =>
-                WithRuntime((gm, pvfIndex) => gm.SearchQuests(id, q, limit ?? 30, pvfIndex)));
+            app.MapGet("/api/characters/{id:int}/quests/search", (int id, string q, string grade, string region, int? limit) =>
+                WithRuntime((gm, pvfIndex) => gm.SearchQuests(id, q, grade, region, limit ?? 500, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/quests/main", (int id) =>
                 WithRuntime((gm, pvfIndex) => gm.MainQuestOverview(id, pvfIndex)));
+            app.MapGet("/api/characters/{id:int}/quests/all-visible", (int id) =>
+                WithRuntime((gm, pvfIndex) => gm.AllVisibleQuestOverview(id, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/quests/achievement", (int id) =>
                 WithRuntime((gm, pvfIndex) => gm.AchievementOverview(id, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/complete-chain", (int id, int questId) =>
                 WithRuntime((gm, pvfIndex) => gm.CompleteQuestChain(id, questId, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/complete-batch", (int id, QuestBatchRequest body) =>
                 WithRuntime((gm, _) => gm.CompleteQuestBatch(id, body.QuestIds)));
+            app.MapPost("/api/characters/{id:int}/quests/all-visible/complete-batch", (int id, QuestBatchRequest body) =>
+                WithRuntime((gm, pvfIndex) => gm.CompleteVisibleQuestBatch(id, body.QuestIds, pvfIndex)));
+            app.MapPost("/api/characters/{id:int}/quests/daily/reset", (int id) =>
+                WithRuntime((gm, pvfIndex) => gm.ResetVisibleDailyQuests(id, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/unclear-batch", (int id, QuestBatchRequest body) =>
                 WithRuntime((gm, _) => gm.UnclearQuestBatch(id, body.QuestIds)));
+            app.MapPost("/api/characters/{id:int}/quests/titlebook/complete-all", (int id) =>
+                WithRuntime((gm, _) => gm.CompleteAllTitleBook(id)));
             app.MapPost("/api/characters/{id:int}/quests/main/complete-current-level", (int id) =>
                 WithRuntime((gm, pvfIndex) => gm.CompleteCurrentLevelMainQuests(id, pvfIndex)));
+            app.MapPost("/api/characters/{id:int}/quests/side/complete-current-level", (int id) =>
+                WithRuntime((gm, pvfIndex) => gm.CompleteCurrentLevelSideQuests(id, pvfIndex)));
+            app.MapPost("/api/characters/{id:int}/quests/system/complete-current-level", (int id) =>
+                WithRuntime((gm, pvfIndex) => gm.CompleteCurrentLevelSystemQuests(id, pvfIndex)));
+            app.MapPost("/api/characters/{id:int}/quests/achievement-no-item/complete-current-level", (int id) =>
+                WithRuntime((gm, pvfIndex) => gm.CompleteCurrentLevelNoItemAchievementQuests(id, pvfIndex)));
+            app.MapPost("/api/characters/{id:int}/quests/profession/complete", (int id, ProfessionQuestRequest body) =>
+                WithRuntime((gm, pvfIndex) => gm.CompleteProfessionQuests(id, pvfIndex, body.First)));
+            app.MapGet("/api/characters/{id:int}/quests/equipment-slots/status", (int id) =>
+                WithRuntime((gm, _) => gm.GetExtraEquipmentSlotQuestStatus(id)));
+            app.MapPost("/api/characters/{id:int}/quests/equipment-slots/complete", (int id) =>
+                WithRuntime((gm, _) => gm.CompleteExtraEquipmentSlotQuests(id)));
 
             app.MapGet("/api/items/search", (string q, int? limit) =>
                 WithRuntime((_, pvfIndex) => pvfIndex.Search(q, limit ?? 30)));
             app.MapGet("/api/items/categories", () => WithRuntime((_, pvfIndex) => pvfIndex.GetItemCategories()));
-            app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset, int? job, string expiration = null) =>
-                WithRuntime((_, pvfIndex) => pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration, job ?? -1)));
+            app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset, int? usableJob, string expiration = null) =>
+                WithRuntime((_, pvfIndex) => pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration, usableJob ?? -1)));
 
             Console.WriteLine("GM Tool 监听: " + hostConfig.ListenUrl);
             Console.WriteLine("配置文件: " + hostConfig.ConfigPath);
@@ -399,6 +423,11 @@ namespace DfoGmTool
         public int? Job { get; set; }
         public int First { get; set; }
         public int Second { get; set; }
+    }
+
+    public sealed class ProfessionQuestRequest
+    {
+        public int? First { get; set; }
     }
 
     public sealed class DeleteCharacterRequest

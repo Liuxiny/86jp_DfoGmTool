@@ -43,39 +43,98 @@ namespace DfoGmTool.Services
                     if (metadata == null || metadata.ItemKind == "special")
                         return Error("物品模板不存在，无法配置");
 
+                    var options = request.Options ?? new ItemGrantOptions();
+                    var wantsExpiration = options.ExpirationDays != null;
+                    int? expireTime = null;
+                    if (wantsExpiration)
+                    {
+                        if (!TryResolveInventoryExpirationOverride(record, metadata, options.ExpirationDays.Value, out var resolvedExpireTime, out var expirationError))
+                            return Error(expirationError);
+                        expireTime = resolvedExpireTime;
+                    }
+
                     if (string.Equals(record.ItemKind, "avatar", StringComparison.Ordinal))
                     {
-                        if (!TryBuildInventoryAvatarOptions(record.ItemTemplateId, job, out var avatarOptions, out var avatarError))
-                            return Error(avatarError ?? "该时装没有可配置属性");
-
-                        var requested = request.Options?.AvatarOptionValue ?? record.OptionValue;
-                        if (requested < 0 || requested > byte.MaxValue
-                            || !AvatarGrantPolicy.ContainsValue(avatarOptions, requested))
+                        byte? requested = null;
+                        if (options.AvatarOptionValue != null)
                         {
-                            return Error("装扮属性不属于当前模板、品级和职业的合法选项");
+                            if (!TryBuildInventoryAvatarOptions(record.ItemTemplateId, job, out var avatarOptions, out var avatarError))
+                                return Error(avatarError ?? "该时装没有可配置属性");
+
+                            var requestedRaw = options.AvatarOptionValue.Value;
+                            if (requestedRaw < 0 || requestedRaw > byte.MaxValue
+                                || !AvatarGrantPolicy.ContainsValue(avatarOptions, requestedRaw))
+                            {
+                                return Error("装扮属性不属于当前模板、品级和职业的合法选项");
+                            }
+                            requested = (byte)requestedRaw;
                         }
+
+                        if (requested == null && expireTime == null)
+                            return Error("该时装没有可保存的配置项");
+
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.Transaction = transaction;
+                            if (expireTime != null && requested != null)
+                            {
+                                command.CommandText = @"
+UPDATE character_items
+SET option_value = @optionValue,
+    expire_time = @expireTime,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                                command.Parameters.AddWithValue("@optionValue", requested.Value);
+                                command.Parameters.AddWithValue("@expireTime", expireTime.Value);
+                            }
+                            else if (expireTime != null)
+                            {
+                                command.CommandText = @"
+UPDATE character_items
+SET expire_time = @expireTime,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                                command.Parameters.AddWithValue("@expireTime", expireTime.Value);
+                            }
+                            else
+                            {
+                                command.CommandText = @"
+UPDATE character_items
+SET option_value = @optionValue,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                                command.Parameters.AddWithValue("@optionValue", requested.Value);
+                            }
+                            command.Parameters.AddWithValue("@itemUid", record.ItemUid);
+                            command.ExecuteNonQuery();
+                        }
+
+                        transaction.Commit();
+                        return new { success = true, characterId, listType = request.ListType, slot = request.Slot, type = "avatar", optionValue = requested, expireTime };
+                    }
+
+                    if (!IsInventoryConfigurableEquipment(record.ItemTemplateId, record.ItemKind, list, pvfIndex, out var capability))
+                    {
+                        if (expireTime == null)
+                            return Error("该装备类型没有可配置属性");
 
                         using (var command = connection.CreateCommand())
                         {
                             command.Transaction = transaction;
                             command.CommandText = @"
 UPDATE character_items
-SET option_value = @optionValue,
+SET expire_time = @expireTime,
     updated_at = CURRENT_TIMESTAMP
 WHERE item_uid = @itemUid;";
-                            command.Parameters.AddWithValue("@optionValue", requested);
+                            command.Parameters.AddWithValue("@expireTime", expireTime.Value);
                             command.Parameters.AddWithValue("@itemUid", record.ItemUid);
                             command.ExecuteNonQuery();
                         }
 
                         transaction.Commit();
-                        return new { success = true, characterId, listType = request.ListType, slot = request.Slot, type = "avatar", optionValue = requested };
+                        return new { success = true, characterId, listType = request.ListType, slot = request.Slot, type = "expiration", expireTime };
                     }
 
-                    if (!IsInventoryConfigurableEquipment(record.ItemTemplateId, record.ItemKind, list, pvfIndex, out var capability))
-                        return Error("该装备类型没有可配置属性");
-
-                    var options = request.Options ?? new ItemGrantOptions();
                     var view = ItemExtraView.Parse(record.ExtraJson);
                     var builder = ItemExtraViewBuilder.FromView(view);
                     if (!EquipmentGrantPolicy.TryApplyToBuilder(
@@ -93,13 +152,28 @@ WHERE item_uid = @itemUid;";
                     using (var command = connection.CreateCommand())
                     {
                         command.Transaction = transaction;
-                        command.CommandText = @"
+                        if (expireTime != null)
+                        {
+                            command.CommandText = @"
+UPDATE character_items
+SET stack_count = @seed,
+    instance_value = @seed,
+    extra_json = @extraJson,
+    expire_time = @expireTime,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                            command.Parameters.AddWithValue("@expireTime", expireTime.Value);
+                        }
+                        else
+                        {
+                            command.CommandText = @"
 UPDATE character_items
 SET stack_count = @seed,
     instance_value = @seed,
     extra_json = @extraJson,
     updated_at = CURRENT_TIMESTAMP
 WHERE item_uid = @itemUid;";
+                        }
                         command.Parameters.AddWithValue("@seed", seed);
                         command.Parameters.AddWithValue("@extraJson", extraJson);
                         command.Parameters.AddWithValue("@itemUid", record.ItemUid);
@@ -118,6 +192,7 @@ WHERE item_uid = @itemUid;";
                         upgradeLevel = options.UpgradeLevel,
                         amplifyType = options.AmplifyType,
                         forgingLevel = options.ForgingLevel,
+                        expireTime,
                         canUpgrade = capability.CanUpgrade,
                         canAmplify = capability.CanAmplify,
                         canForge = capability.CanForge,
@@ -134,10 +209,24 @@ WHERE item_uid = @itemUid;";
             bool failWhenUnsupported)
         {
             var name = pvfIndex.ResolveItemName(record.ItemTemplateId);
+            var expiration = BuildInventoryExpirationConfig(record);
             if (string.Equals(record.ItemKind, "avatar", StringComparison.Ordinal))
             {
                 if (!TryBuildInventoryAvatarOptions(record.ItemTemplateId, job, out var options, out var error))
                 {
+                    if (expiration != null)
+                    {
+                        return new
+                        {
+                            success = true,
+                            type = "expiration",
+                            itemTemplateId = record.ItemTemplateId,
+                            name,
+                            listType = (int)list,
+                            slot = (int)record.SlotIndex,
+                            expiration,
+                        };
+                    }
                     return failWhenUnsupported
                         ? Error(error ?? "该时装没有可配置属性")
                         : null;
@@ -169,11 +258,25 @@ WHERE item_uid = @itemUid;";
                             isSkill = value.IsSkill,
                         }).ToArray(),
                     },
+                    expiration,
                 };
             }
 
             if (!IsInventoryConfigurableEquipment(record.ItemTemplateId, record.ItemKind, list, pvfIndex, out var capability))
             {
+                if (expiration != null)
+                {
+                    return new
+                    {
+                        success = true,
+                        type = "expiration",
+                        itemTemplateId = record.ItemTemplateId,
+                        name,
+                        listType = (int)list,
+                        slot = (int)record.SlotIndex,
+                        expiration,
+                    };
+                }
                 return failWhenUnsupported
                     ? Error("该装备类型没有可配置属性")
                     : null;
@@ -224,7 +327,155 @@ WHERE item_uid = @itemUid;";
                         new { value = 4, label = EquipmentGrantPolicy.GetAmplifyTypeLabel(4) },
                     },
                 },
+                expiration,
             };
+        }
+
+        private static bool CanConfigureInventoryExpiration(int itemTemplateId, string itemKind, int currentExpireTime)
+        {
+            if (IsDailyDeleteTemplate(itemTemplateId))
+                return false;
+            if (currentExpireTime > 0)
+                return true;
+
+            var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
+            if (metadata == null || metadata.ItemKind == "special")
+                return false;
+
+            var isAvatar = string.Equals(itemKind, "avatar", StringComparison.Ordinal)
+                || ItemMetadataResolver.IsAvatarMetadata(metadata);
+            if (isAvatar)
+                return currentExpireTime > 0 && AvatarDurationResolver.Resolve(itemTemplateId).Count > 0;
+
+            var capability = BuildGrantExpirationCapability(itemTemplateId, metadata, isAvatar: false, out var error);
+            return error == null && capability != null && capability.CanOverride;
+        }
+
+        private static bool IsDailyDeleteTemplate(int itemTemplateId)
+        {
+            var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
+            if (metadata?.IsStackable == true
+                && StackableExpirationPolicyResolver.TryResolve(metadata.StackableFile, out var policy))
+                return policy.DailyDeleteItem;
+            return false;
+        }
+
+        private static object BuildInventoryExpirationConfig(SqliteInventoryStore.ItemRecord record)
+        {
+            if (record == null || !CanConfigureInventoryExpiration(record.ItemTemplateId, record.ItemKind, record.ExpireTime))
+                return null;
+
+            var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+            var metadata = ItemMetadataResolver.Resolve(record.ItemTemplateId);
+            var isAvatar = string.Equals(record.ItemKind, "avatar", StringComparison.Ordinal)
+                || ItemMetadataResolver.IsAvatarMetadata(metadata);
+            if (isAvatar && record.ExpireTime <= 0)
+                return null;
+
+            var remainingDays = record.ExpireTime > now
+                ? (int)Math.Ceiling((record.ExpireTime - now) / 86400.0)
+                : 30;
+            if (remainingDays < 1)
+                remainingDays = 1;
+
+            var durations = isAvatar
+                ? AvatarDurationResolver.Resolve(record.ItemTemplateId)
+                    .Select(value => new
+                    {
+                        days = value.DurationDays,
+                        label = value.DurationDays == 0 ? "永久" : value.DurationDays + " 天",
+                    })
+                    .ToArray()
+                : null;
+
+            return new
+            {
+                canOverride = true,
+                currentExpireTime = record.ExpireTime,
+                currentRemainingDays = remainingDays,
+                maxDays = ItemGrantExpirationOverride.MaximumDays,
+                durations,
+                defaultDays = durations != null && durations.Length > 0
+                    ? durations[0].days
+                    : Math.Min(remainingDays, ItemGrantExpirationOverride.MaximumDays),
+            };
+        }
+
+        private static bool TryResolveInventoryExpirationOverride(
+            SqliteInventoryStore.ItemRecord record,
+            ItemMetadata metadata,
+            int days,
+            out int expireTime,
+            out string error)
+        {
+            expireTime = 0;
+            error = null;
+
+            var isAvatar = string.Equals(record.ItemKind, "avatar", StringComparison.Ordinal)
+                || ItemMetadataResolver.IsAvatarMetadata(metadata);
+            if (isAvatar)
+            {
+                var durationOptions = AvatarDurationResolver.Resolve(record.ItemTemplateId);
+                if (!AvatarDurationResolver.ContainsDuration(durationOptions, days))
+                {
+                    error = "装扮期限不属于该模板的 PVF 支持档位";
+                    return false;
+                }
+                if (days == 0)
+                    return true;
+
+                var avatarValue = DateTimeOffset.Now.ToUnixTimeSeconds() + days * 86400L;
+                if (avatarValue <= 0 || avatarValue > int.MaxValue)
+                {
+                    error = "装扮期限超出服务端可存储范围";
+                    return false;
+                }
+                expireTime = (int)avatarValue;
+                return true;
+            }
+
+            var defaultExpireTime = record.ExpireTime;
+            string resolveError = null;
+            if (defaultExpireTime <= 0
+                && ItemGrantExpirationResolver.TryResolve(record.ItemTemplateId, metadata, out var resolvedExpireTime, out resolveError))
+            {
+                defaultExpireTime = resolvedExpireTime;
+            }
+            else if (defaultExpireTime <= 0 && resolveError != null)
+            {
+                error = resolveError;
+                return false;
+            }
+
+            var capability = new ItemGrantExpirationCapability
+            {
+                IsLimited = defaultExpireTime > 0,
+                CanOverride = defaultExpireTime > 0,
+                DefaultExpireTime = defaultExpireTime,
+            };
+            if (metadata?.IsStackable == true
+                && StackableExpirationPolicyResolver.TryResolve(metadata.StackableFile, out var policy))
+            {
+                capability.IsLimited = policy.RequiresInstanceExpiration
+                    || policy.AbsoluteExpirationUnixTime > 0
+                    || policy.DailyDeleteItem;
+                capability.CanOverride = policy.RequiresInstanceExpiration
+                    || policy.AbsoluteExpirationUnixTime > 0
+                    || record.ExpireTime > 0;
+            }
+            if (record.ExpireTime > 0)
+            {
+                capability.IsLimited = true;
+                capability.CanOverride = true;
+                capability.DefaultExpireTime = record.ExpireTime;
+            }
+
+            return ItemGrantExpirationOverride.TryResolve(
+                capability,
+                days,
+                DateTimeOffset.Now.ToUnixTimeSeconds(),
+                out expireTime,
+                out error);
         }
 
         private static string ResolveInventoryConfigKind(
@@ -313,13 +564,23 @@ WHERE item_uid = @itemUid;";
             out EquipmentGrantCapability capability)
         {
             capability = null;
+            var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
+            if (metadata == null || metadata.ItemKind == "special")
+                return false;
+
+            var isPetQualityEquipment = listType == InventoryListType.Pet
+                && string.Equals(itemKind, "pet", StringComparison.Ordinal)
+                && ItemMetadataResolver.IsPetArtifactMetadata(metadata)
+                && metadata.SupportsPetEquipmentQuality;
+            if (isPetQualityEquipment)
+            {
+                capability = EquipmentGrantPolicy.Describe(metadata);
+                return true;
+            }
+
             if (!string.Equals(itemKind, "equipment", StringComparison.Ordinal))
                 return false;
             if (listType != InventoryListType.Main && listType != InventoryListType.Equipment)
-                return false;
-
-            var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
-            if (metadata == null || metadata.ItemKind == "special")
                 return false;
             if (ItemMetadataResolver.IsAvatarMetadata(metadata)
                 || ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId)
