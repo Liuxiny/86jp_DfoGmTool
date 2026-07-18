@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using DfoGmTool.ServerCore.Game.TitleBook;
 using DfoGmTool.ServerCore.Game.Characters;
 using DfoGmTool.ServerCore.Game.Currency;
 using DfoGmTool.ServerCore.Game.Dungeon;
 using DfoGmTool.ServerCore.Game.Inventory;
+using DfoGmTool.ServerCore.Game.Premium;
 using DfoGmTool.ServerCore.Game.Quests;
 using DfoGmTool.ServerCore.Game.ReviveCoin;
 using Microsoft.Data.Sqlite;
@@ -14,6 +16,10 @@ namespace DfoGmTool.Services
 {
     public sealed partial class GmService
     {
+        private const short NameTagEquippedSlot = 28;
+        private const int DefaultNameTagGrantDays = 30;
+        private const long SecondsPerDay = 86400L;
+
         // 读侧同样走服务端快照(覆盖全部容器和多态字段语义), 不裸读 character_items
         public object ListItems(int characterId, PvfIndexService pvfIndex)
         {
@@ -470,6 +476,60 @@ WHERE character_id = @cid
 
             using (var scope = _assetService.OpenScope(characterId, accountId))
             {
+                var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
+                if (ItemMetadataResolver.IsNameTagMetadata(metadata))
+                {
+                    var nameTagGrant = GrantNameTag(scope.Connection, scope.Transaction, characterId, itemTemplateId, count, options);
+                    if (!nameTagGrant.Success)
+                        return Error(nameTagGrant.Error ?? "名称装饰卡发放失败");
+
+                    scope.Commit();
+                    return new
+                    {
+                        success = true,
+                        characterId,
+                        itemTemplateId,
+                        name,
+                        count = nameTagGrant.GrantedCount,
+                        slot = (int)nameTagGrant.AssignedSlot,
+                        expireTime = nameTagGrant.ExpireTime,
+                        slots = nameTagGrant.AffectedSlots,
+                        nameTagEquipped = true,
+                    };
+                }
+
+                if (PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays)
+                    && premiumType > 0
+                    && durationDays > 0)
+                {
+                    var premiumGrant = GrantAccountPremium(
+                        scope.Connection,
+                        scope.Transaction,
+                        accountId,
+                        characterId,
+                        itemTemplateId,
+                        count,
+                        premiumType,
+                        durationDays);
+                    if (!premiumGrant.Success)
+                        return Error(premiumGrant.Error ?? "账号契约发放失败");
+
+                    scope.Commit();
+                    return new
+                    {
+                        success = true,
+                        characterId,
+                        accountId,
+                        itemTemplateId,
+                        name,
+                        count = premiumGrant.GrantedCount,
+                        premiumActivated = true,
+                        premiumType,
+                        durationDays,
+                        expireTime = premiumGrant.ExpireTime,
+                    };
+                }
+
                 // 账号/钱包类特殊资产沿用既有入口，不进入角色实例期限发放。
                 if (CurrencyService.IsCubeFragment(itemTemplateId)
                     || ReviveCoinService.IsReviveCoinReward(itemTemplateId))
@@ -498,6 +558,327 @@ WHERE character_id = @cid
                     slots = grant.AffectedSlots,
                 };
             }
+        }
+
+        private static ItemGrantResult GrantNameTag(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int itemTemplateId,
+            int count,
+            ItemGrantOptions options)
+        {
+            var result = new ItemGrantResult
+            {
+                Success = false,
+                ItemTemplateId = itemTemplateId,
+                RequestedCount = count,
+                ListType = InventoryListType.Equipment,
+                AssignedSlot = NameTagEquippedSlot,
+            };
+
+            if (count <= 0)
+                return FailNameTagGrant(result, "数量必须大于 0");
+
+            var days = options?.ExpirationDays ?? DefaultNameTagGrantDays;
+            if (days <= 0 || days > ItemGrantExpirationOverride.MaximumDays)
+                return FailNameTagGrant(result, "名称装饰卡期限必须在 1-3650 天之间");
+
+            LoadEquippedNameTag(connection, transaction, characterId, out var previousItemId, out var previousExpireTime);
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var maxExpireTime = now + ItemGrantExpirationOverride.MaximumDays * SecondsPerDay;
+            var baseExpireTime = previousItemId == itemTemplateId && previousExpireTime > now
+                ? previousExpireTime
+                : now;
+            var addSeconds = (long)days * count * SecondsPerDay;
+            var nextExpireTime = Math.Min(maxExpireTime, baseExpireTime + addSeconds);
+            if (nextExpireTime <= now || nextExpireTime > int.MaxValue)
+                return FailNameTagGrant(result, "名称装饰卡期限超出服务端可存储范围");
+
+            var expireTime = (int)nextExpireTime;
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO character_equipped_entries(character_id, slot, item_id, expire_time, equipment_lock_id, raw_entry)
+VALUES(@cid, @slot, @itemId, @expireTime, 0, @raw)
+ON CONFLICT(character_id, slot) DO UPDATE SET
+    item_id = excluded.item_id,
+    expire_time = excluded.expire_time,
+    equipment_lock_id = excluded.equipment_lock_id,
+    raw_entry = excluded.raw_entry;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@slot", (int)NameTagEquippedSlot);
+                command.Parameters.AddWithValue("@itemId", itemTemplateId);
+                command.Parameters.AddWithValue("@expireTime", expireTime);
+                command.Parameters.AddWithValue("@raw", BuildNameTagEquippedRaw(itemTemplateId));
+                command.ExecuteNonQuery();
+            }
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "INSERT OR IGNORE INTO character_subtype1_fields(character_id) VALUES(@cid);";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.ExecuteNonQuery();
+            }
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+UPDATE character_subtype1_fields
+SET name_tag_item_id = @itemId,
+    name_tag_expire_time = @expireTime
+WHERE character_id = @cid;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@itemId", itemTemplateId);
+                command.Parameters.AddWithValue("@expireTime", expireTime);
+                command.ExecuteNonQuery();
+            }
+
+            result.Success = true;
+            result.GrantedCount = count;
+            result.ExpireTime = expireTime;
+            result.AffectedSlots.Add(NameTagEquippedSlot);
+            WriteNameTagGrantAudit(
+                connection,
+                transaction,
+                characterId,
+                result,
+                days,
+                previousItemId,
+                previousExpireTime);
+            return result;
+        }
+
+        private static void LoadEquippedNameTag(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            out int itemId,
+            out int expireTime)
+        {
+            itemId = 0;
+            expireTime = 0;
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT item_id, expire_time
+FROM character_equipped_entries
+WHERE character_id = @cid AND slot = @slot
+LIMIT 1;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@slot", (int)NameTagEquippedSlot);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return;
+
+                    itemId = reader.GetInt32(0);
+                    expireTime = reader.GetInt32(1);
+                }
+            }
+        }
+
+        private static byte[] BuildNameTagEquippedRaw(int itemTemplateId)
+        {
+            return MakeEquipListCodec.BuildEntryFromDisplayFields(
+                NameTagEquippedSlot,
+                itemTemplateId,
+                new MakeEquipListCodec.DisplayFields
+                {
+                    InstanceValue = ItemQuality.TopQualitySeed,
+                    MagicSealTypes = new byte[3],
+                    MagicSealVal1s = new byte[3],
+                    MagicSealVal2s = new byte[3],
+                    MagicSealTail = Array.Empty<byte>(),
+                    Emblem = Array.Empty<byte>(),
+                    JewelSocket = Array.Empty<byte>(),
+                });
+        }
+
+        private static void WriteNameTagGrantAudit(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            ItemGrantResult grant,
+            int durationDays,
+            int previousItemTemplateId,
+            int previousExpireTime)
+        {
+            if (grant == null || !grant.Success)
+                return;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO item_audit_log (
+    owner_scope, owner_id, character_id, action_name, list_type, slot_index,
+    item_template_id, delta_stack_count, payload_json)
+VALUES (
+    'character', @ownerId, @characterId, 'gm_grant', @listType, @slotIndex,
+    @itemTemplateId, @deltaStackCount, @payloadJson);";
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@listType", (int)grant.ListType);
+                command.Parameters.AddWithValue("@slotIndex", grant.AssignedSlot);
+                command.Parameters.AddWithValue("@itemTemplateId", grant.ItemTemplateId);
+                command.Parameters.AddWithValue("@deltaStackCount", grant.GrantedCount);
+                command.Parameters.AddWithValue("@payloadJson",
+                    "{\"source\":\"gm_tool\",\"nameTagEquipped\":true"
+                    + ",\"requestedCount\":" + grant.RequestedCount.ToString(CultureInfo.InvariantCulture)
+                    + ",\"grantedCount\":" + grant.GrantedCount.ToString(CultureInfo.InvariantCulture)
+                    + ",\"durationDays\":" + durationDays.ToString(CultureInfo.InvariantCulture)
+                    + ",\"expireTime\":" + grant.ExpireTime.ToString(CultureInfo.InvariantCulture)
+                    + ",\"previousItemTemplateId\":" + previousItemTemplateId.ToString(CultureInfo.InvariantCulture)
+                    + ",\"previousExpireTime\":" + previousExpireTime.ToString(CultureInfo.InvariantCulture)
+                    + ",\"slots\":[" + string.Join(",", grant.AffectedSlots) + "]}");
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static ItemGrantResult FailNameTagGrant(ItemGrantResult result, string error)
+        {
+            result.Error = error;
+            return result;
+        }
+
+        private sealed class AccountPremiumGrantResult
+        {
+            public bool Success { get; set; }
+            public string Error { get; set; }
+            public int ItemTemplateId { get; set; }
+            public int RequestedCount { get; set; }
+            public int GrantedCount { get; set; }
+            public long ExpireTime { get; set; }
+            public long PreviousExpireTime { get; set; }
+        }
+
+        private static AccountPremiumGrantResult GrantAccountPremium(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int accountId,
+            int characterId,
+            int itemTemplateId,
+            int count,
+            int premiumType,
+            int durationDays)
+        {
+            var result = new AccountPremiumGrantResult
+            {
+                Success = false,
+                ItemTemplateId = itemTemplateId,
+                RequestedCount = count,
+            };
+
+            if (accountId <= 0)
+                return FailAccountPremiumGrant(result, "账号不存在");
+            if (count <= 0)
+                return FailAccountPremiumGrant(result, "数量必须大于 0");
+            if (premiumType <= 0 || durationDays <= 0)
+                return FailAccountPremiumGrant(result, "账号契约配置无效");
+
+            var effectiveCount = Math.Max(1, count);
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var duration = (long)durationDays * SecondsPerDay * effectiveCount;
+            var oldExpire = LoadAccountPremiumExpire(connection, transaction, accountId, premiumType);
+            var newExpire = Math.Max(now, oldExpire) + duration;
+            if (newExpire <= now)
+                return FailAccountPremiumGrant(result, "账号契约期限超出服务端可存储范围");
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO account_premiums (account_id, premium_type, end_time, updated_at)
+VALUES (@aid, @type, @expire, CURRENT_TIMESTAMP)
+ON CONFLICT(account_id, premium_type)
+DO UPDATE SET end_time = @expire, updated_at = CURRENT_TIMESTAMP;";
+                command.Parameters.AddWithValue("@aid", accountId);
+                command.Parameters.AddWithValue("@type", premiumType);
+                command.Parameters.AddWithValue("@expire", newExpire);
+                command.ExecuteNonQuery();
+            }
+
+            result.Success = true;
+            result.GrantedCount = effectiveCount;
+            result.ExpireTime = newExpire;
+            result.PreviousExpireTime = oldExpire;
+            WriteAccountPremiumGrantAudit(
+                connection,
+                transaction,
+                accountId,
+                characterId,
+                result,
+                premiumType,
+                durationDays);
+            return result;
+        }
+
+        private static long LoadAccountPremiumExpire(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int accountId,
+            int premiumType)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "SELECT end_time FROM account_premiums WHERE account_id=@aid AND premium_type=@type;";
+                command.Parameters.AddWithValue("@aid", accountId);
+                command.Parameters.AddWithValue("@type", premiumType);
+                var value = command.ExecuteScalar();
+                return value != null && value != DBNull.Value ? Convert.ToInt64(value) : 0L;
+            }
+        }
+
+        private static void WriteAccountPremiumGrantAudit(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int accountId,
+            int characterId,
+            AccountPremiumGrantResult grant,
+            int premiumType,
+            int durationDays)
+        {
+            if (grant == null || !grant.Success)
+                return;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO item_audit_log (
+    owner_scope, owner_id, character_id, action_name, list_type, slot_index,
+    item_template_id, delta_stack_count, payload_json)
+VALUES (
+    'account', @ownerId, @characterId, 'gm_grant', NULL, NULL,
+    @itemTemplateId, @deltaStackCount, @payloadJson);";
+                command.Parameters.AddWithValue("@ownerId", accountId);
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@itemTemplateId", grant.ItemTemplateId);
+                command.Parameters.AddWithValue("@deltaStackCount", grant.GrantedCount);
+                command.Parameters.AddWithValue("@payloadJson",
+                    "{\"source\":\"gm_tool\",\"premiumActivated\":true"
+                    + ",\"premiumType\":" + premiumType.ToString(CultureInfo.InvariantCulture)
+                    + ",\"requestedCount\":" + grant.RequestedCount.ToString(CultureInfo.InvariantCulture)
+                    + ",\"grantedCount\":" + grant.GrantedCount.ToString(CultureInfo.InvariantCulture)
+                    + ",\"durationDays\":" + durationDays.ToString(CultureInfo.InvariantCulture)
+                    + ",\"expireTime\":" + grant.ExpireTime.ToString(CultureInfo.InvariantCulture)
+                    + ",\"previousExpireTime\":" + grant.PreviousExpireTime.ToString(CultureInfo.InvariantCulture)
+                    + "}");
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static AccountPremiumGrantResult FailAccountPremiumGrant(AccountPremiumGrantResult result, string error)
+        {
+            result.Error = error;
+            return result;
         }
 
         public object GetItemGrantOptions(int characterId, int itemTemplateId, PvfIndexService pvfIndex)

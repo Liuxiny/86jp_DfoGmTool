@@ -28,7 +28,6 @@ task_plan.md
 progress.md
 findings.md
 memory/
-my-DfoGmTool.xml
 
 # 本地维护脚本(发布流程, 不入库)
 push-release.ps1
@@ -36,3 +35,4 @@ push-release.ps1
 Dockerfile
 DOCKER-README.md
 docker-entrypoint.sh
+my-DfoGmTool.xml

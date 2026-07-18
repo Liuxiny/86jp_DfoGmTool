@@ -6,6 +6,7 @@ using DfoGmTool.ServerCore.Game.Characters;
 using DfoGmTool.ServerCore.Game.Currency;
 using DfoGmTool.ServerCore.Game.Dungeon;
 using DfoGmTool.ServerCore.Game.Inventory;
+using DfoGmTool.ServerCore.Game.Premium;
 using DfoGmTool.ServerCore.Game.Quests;
 using Microsoft.Data.Sqlite;
 
@@ -36,6 +37,7 @@ namespace DfoGmTool.Services
         {
             lock (_titleBookLock)
                 _titleBookSlots = null;
+            PremiumCatalog.Reset();
         }
 
         public GmService(GmConfig config, PvfIndexService pvfIndex)

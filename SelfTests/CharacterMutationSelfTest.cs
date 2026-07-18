@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Threading;
 using DfoGmTool.ServerCore.Game.Dungeon;
 using DfoGmTool.ServerCore.Game.Inventory;
+using DfoGmTool.ServerCore.Game.Premium;
 using DfoGmTool.ServerCore.Game.TitleBook;
 using DfoGmTool.ServerCore.GameWorld;
 using DfoGmTool.ServerCore.Infrastructure;
@@ -61,6 +62,8 @@ namespace DfoGmTool.SelfTests
                 CheckJobGrowAndSkillReset(gm, tempDb);
                 CheckUnlockExtraEquipmentSlots(gm, tempDb);
                 CheckPetGrantPersistence(gm, pvfIndex, tempDb);
+                CheckNameTagGrantPersistence(gm, pvfIndex, tempDb);
+                CheckAccountPremiumGrantPersistence(gm, tempDb, pvfIndex);
                 CheckTitleQuestSynchronization(gm, pvfIndex, tempDb);
                 CheckCloneOptionCoverage(gm, tempDb);
                 CheckCloneCharacterSlotIsolation(gm, tempDb);
@@ -267,6 +270,102 @@ namespace DfoGmTool.SelfTests
             Check("creature keeps its serial separate from pet equipment quality",
                 creatureSerial > 0 && creatureInstance == 0,
                 $"item={creature.Id}, slot={creatureSlot}, serial={creatureSerial}, instance={creatureInstance}");
+        }
+
+        private static void CheckNameTagGrantPersistence(GmService gm, PvfIndexService pvfIndex, string dbPath)
+        {
+            var nameTags = pvfIndex.AllItems
+                .Where(item => string.Equals(item.TypeTag, "name tag", StringComparison.OrdinalIgnoreCase))
+                .Take(2)
+                .ToArray();
+            Check("PVF contains enough name tags for grant persistence", nameTags.Length > 0);
+            if (nameTags.Length == 0)
+                return;
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var firstGrant = gm.GiveItem(
+                CharacterId,
+                nameTags[0].Id,
+                1,
+                new ItemGrantOptions { ExpirationDays = 30 },
+                pvfIndex);
+            Check("name tag grant succeeds", IsSuccess(firstGrant));
+            Check("name tag grant reports equipped slot 28", GetIntProperty(firstGrant, "slot") == 28);
+            Check("name tag is not inserted into character inventory",
+                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_items WHERE character_id={CharacterId} AND item_template_id={nameTags[0].Id}") == 0);
+            Check("name tag persists in equipped slot 28",
+                LoadInt(dbPath, $"SELECT item_id FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28") == nameTags[0].Id);
+            Check("name tag equipped raw is persisted",
+                LoadInt(dbPath, $"SELECT length(raw_entry) FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28") > 0);
+            var firstExpire = LoadInt(dbPath,
+                $"SELECT expire_time FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28");
+            Check("name tag initial expiry is about 30 days",
+                firstExpire > now + 29 * 86400L && firstExpire <= now + 31 * 86400L,
+                "expire=" + firstExpire);
+            Check("name tag subtype mirror item id is synced",
+                LoadInt(dbPath, $"SELECT name_tag_item_id FROM character_subtype1_fields WHERE character_id={CharacterId}") == nameTags[0].Id);
+            Check("name tag subtype mirror expiry is synced",
+                LoadInt(dbPath, $"SELECT name_tag_expire_time FROM character_subtype1_fields WHERE character_id={CharacterId}") == firstExpire);
+
+            var renewGrant = gm.GiveItem(
+                CharacterId,
+                nameTags[0].Id,
+                1,
+                new ItemGrantOptions { ExpirationDays = 15 },
+                pvfIndex);
+            Check("same name tag renew succeeds", IsSuccess(renewGrant));
+            var renewedExpire = LoadInt(dbPath,
+                $"SELECT expire_time FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28");
+            Check("same name tag stacks expiry", renewedExpire >= firstExpire + 14 * 86400);
+
+            if (nameTags.Length > 1)
+            {
+                var replaceGrant = gm.GiveItem(
+                    CharacterId,
+                    nameTags[1].Id,
+                    1,
+                    new ItemGrantOptions { ExpirationDays = 5 },
+                    pvfIndex);
+                Check("different name tag replace succeeds", IsSuccess(replaceGrant));
+                Check("different name tag replaces slot 28 item",
+                    LoadInt(dbPath, $"SELECT item_id FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28") == nameTags[1].Id);
+                var replacedExpire = LoadInt(dbPath,
+                    $"SELECT expire_time FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28");
+                Check("different name tag resets expiry instead of stacking",
+                    replacedExpire < renewedExpire && replacedExpire > now + 4 * 86400L);
+            }
+        }
+
+        private static void CheckAccountPremiumGrantPersistence(GmService gm, string dbPath, PvfIndexService pvfIndex)
+        {
+            var entry = PremiumCatalog.Load().Entries
+                .OrderBy(value => value.PremiumType)
+                .ThenBy(value => value.DurationDays)
+                .FirstOrDefault();
+            Check("PVF contains account premium contract items", entry != null);
+            if (entry == null)
+                return;
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var firstGrant = gm.GiveItem(CharacterId, entry.ItemCode, 1, null, pvfIndex);
+            Check("account premium contract grant succeeds", IsSuccess(firstGrant));
+            Check("account premium contract reports activation", GetBoolProperty(firstGrant, "premiumActivated"));
+            Check("account premium contract reports premium type", GetIntProperty(firstGrant, "premiumType") == entry.PremiumType);
+            Check("account premium contract does not enter character inventory",
+                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_items WHERE character_id={CharacterId} AND item_template_id={entry.ItemCode}") == 0);
+            var firstExpire = LoadLong(dbPath,
+                $"SELECT end_time FROM account_premiums WHERE account_id={AccountId} AND premium_type={entry.PremiumType}");
+            Check("account premium contract persists to account_premiums",
+                firstExpire > now + (entry.DurationDays * 86400L) - 5,
+                "expire=" + firstExpire);
+
+            var secondGrant = gm.GiveItem(CharacterId, entry.ItemCode, 2, null, pvfIndex);
+            Check("account premium contract renew succeeds", IsSuccess(secondGrant));
+            var renewedExpire = LoadLong(dbPath,
+                $"SELECT end_time FROM account_premiums WHERE account_id={AccountId} AND premium_type={entry.PremiumType}");
+            Check("account premium contract renew extends existing expiry",
+                renewedExpire >= firstExpire + entry.DurationDays * 2L * 86400L - 5,
+                $"first={firstExpire}, renewed={renewedExpire}, days={entry.DurationDays}");
         }
 
         private static void CheckTitleQuestSynchronization(GmService gm, PvfIndexService pvfIndex, string dbPath)
@@ -608,6 +707,12 @@ INSERT INTO character_skills(character_id, page_index, slot, skill_id, level) VA
         {
             foreach (var root in EnumerateSearchRoots())
             {
+                foreach (var path in EnumerateServerPvfCandidates(root))
+                {
+                    if (File.Exists(path))
+                        return path;
+                }
+
                 var candidates = new[]
                 {
                     Path.Combine(root, "Codes", "ServerS4A12_260716", "Server", "DfoServer", "bin", "Debug", "Data", "Pvf", "Script.pvf"),
@@ -627,6 +732,38 @@ INSERT INTO character_skills(character_id, page_index, slot, skill_id, level) VA
                 }
             }
             return null;
+        }
+
+        private static IEnumerable<string> EnumerateServerPvfCandidates(string root)
+        {
+            var baseDirs = new[]
+            {
+                root,
+                Path.Combine(root, "Codes"),
+            };
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var baseDir in baseDirs)
+            {
+                if (!Directory.Exists(baseDir))
+                    continue;
+
+                foreach (var serverDir in Directory.GetDirectories(baseDir, "ServerS4A12_*")
+                    .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
+                {
+                    foreach (var path in new[]
+                    {
+                        Path.Combine(serverDir, "dist", "linux-x64", "Data", "Pvf", "Script.pvf"),
+                        Path.Combine(serverDir, "Server", "DfoServer", "bin", "Release", "win-x64", "Data", "Pvf", "Script.pvf"),
+                        Path.Combine(serverDir, "Server", "DfoServer", "bin", "Release", "linux-x64", "Data", "Pvf", "Script.pvf"),
+                        Path.Combine(serverDir, "Server", "DfoServer", "bin", "Debug", "Data", "Pvf", "Script.pvf"),
+                        Path.Combine(serverDir, "Server", "DfoServer", "Data", "Pvf", "Script.pvf"),
+                    })
+                    {
+                        if (seen.Add(path))
+                            yield return path;
+                    }
+                }
+            }
         }
 
         private static string[] EnumerateSearchRoots()
@@ -689,12 +826,30 @@ INSERT INTO character_skills(character_id, page_index, slot, skill_id, level) VA
             }
         }
 
+        private static long LoadLong(string dbPath, string sql)
+        {
+            using (var conn = Open(dbPath))
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = sql;
+                return Convert.ToInt64(cmd.ExecuteScalar());
+            }
+        }
+
         private static int GetIntProperty(object value, string propertyName)
         {
             if (value == null)
                 return 0;
             var prop = value.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
             return prop == null ? 0 : Convert.ToInt32(prop.GetValue(value));
+        }
+
+        private static bool GetBoolProperty(object value, string propertyName)
+        {
+            if (value == null)
+                return false;
+            var prop = value.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            return prop != null && Convert.ToBoolean(prop.GetValue(value));
         }
 
         private static bool IsSuccess(object result)
