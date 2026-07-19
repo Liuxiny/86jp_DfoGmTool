@@ -40,11 +40,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 if (!string.Equals(entry.Ability, "SKILL_LEVEL", StringComparison.OrdinalIgnoreCase))
                     continue;
-                if (!IsJobTokenCompatible(entry.Job, job))
-                    continue;
-
                 result.Add(new AvatarGrantOption(
-                    result.Count,
+                    entry.OptionValue,
                     BuildSkillLabel(entry.Job, entry.SkillIndex, entry.SkillLevel, job),
                     true));
             }
@@ -189,11 +186,16 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 return false;
 
             var index = 1;
-            if (index < tokens.Count && TryReadInt(tokens[index], out _))
-                index++;
 
             while (index < tokens.Count)
             {
+                var optionValue = entries.Count;
+                if (TryReadInt(tokens[index], out var parsedOptionValue) && index + 1 < tokens.Count)
+                {
+                    optionValue = parsedOptionValue;
+                    index++;
+                }
+
                 var ability = NormalizeAbilityToken(tokens[index++]);
                 if (string.IsNullOrWhiteSpace(ability))
                     continue;
@@ -201,6 +203,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 var entry = new AvatarSelectAbilityEntry
                 {
                     Ability = ability,
+                    OptionValue = optionValue,
                 };
 
                 if (string.Equals(ability, "SKILL_LEVEL", StringComparison.OrdinalIgnoreCase))
@@ -217,15 +220,6 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                         entry.SkillLevel = skillLevel;
                         index++;
                     }
-                    if (index < tokens.Count && TryReadInt(tokens[index], out var optionValue))
-                    {
-                        entry.OptionValue = optionValue;
-                        index++;
-                    }
-                    else
-                    {
-                        entry.OptionValue = entries.Count + 1;
-                    }
                 }
                 else
                 {
@@ -235,15 +229,6 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     {
                         entry.Amount = amount;
                         index++;
-                    }
-                    if (index < tokens.Count && TryReadInt(tokens[index], out var optionValue))
-                    {
-                        entry.OptionValue = optionValue;
-                        index++;
-                    }
-                    else
-                    {
-                        entry.OptionValue = entries.Count;
                     }
                 }
 
@@ -273,21 +258,6 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             if (skill == null && characterJob >= 0)
                 skill = SkillDataProvider.GetSkill(characterJob, skillIndex);
             return skill;
-        }
-
-        private static bool IsJobTokenCompatible(string token, int job)
-        {
-            var normalized = NormalizeJobToken(token);
-            if (string.IsNullOrWhiteSpace(normalized)
-                || string.Equals(normalized, "all", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(normalized, "common", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            var tokenJob = JobFromToken(normalized);
-            if (tokenJob == job)
-                return true;
-
-            return false;
         }
 
         private static int JobFromToken(string token)
