@@ -46,7 +46,7 @@ namespace DfoGmTool.SelfTests
             Check("weapon supports amplify", weapon.CanAmplify);
             Check("weapon supports forging", weapon.CanForge);
             Check("upgrade max is 31", weapon.MaxUpgradeLevel == 31);
-            Check("forging max is 8", weapon.MaxForgingLevel == 8);
+            Check("forging max is 10", weapon.MaxForgingLevel == 10);
 
             var armor = EquipmentGrantPolicy.Describe(new ItemMetadata
             {
@@ -102,7 +102,7 @@ namespace DfoGmTool.SelfTests
                 QualityMode = ItemQualityMode.Top,
                 UpgradeLevel = 18,
                 AmplifyType = 3,
-                ForgingLevel = 8,
+                ForgingLevel = 10,
             };
 
             Check("build +18 strength red weapon", EquipmentGrantPolicy.TryBuildExtraJson(
@@ -115,7 +115,7 @@ namespace DfoGmTool.SelfTests
             Check("upgrade encoded in extData0", extra.Equipment.Upgrade == 18);
             Check("PVF red type 3 means strength", extra.Equipment.AmplifyType == 3);
             Check("red initial value comes from PVF table", extra.Equipment.AmplifyValue == 5);
-            Check("forging encoded at tailData2F[27]", extra.Equipment.Forging == 8);
+            Check("forging encoded at tailData2F[27]", extra.Equipment.Forging == 10);
 
             Check("red type labels use PVF order",
                 EquipmentGrantPolicy.GetAmplifyTypeLabel(1) == "体力"
@@ -139,9 +139,9 @@ namespace DfoGmTool.SelfTests
                 _ => 5,
                 out _,
                 out _));
-            Check("forging 9 rejected", !EquipmentGrantPolicy.TryBuildExtraJson(
+            Check("forging 11 rejected", !EquipmentGrantPolicy.TryBuildExtraJson(
                 weapon,
-                new ItemGrantOptions { ForgingLevel = 9 },
+                new ItemGrantOptions { ForgingLevel = 11 },
                 _ => 5,
                 out _,
                 out _));

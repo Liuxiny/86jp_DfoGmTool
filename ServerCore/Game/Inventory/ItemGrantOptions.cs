@@ -41,7 +41,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     internal static class EquipmentGrantPolicy
     {
         internal const int MaximumUpgradeLevel = 31;
-        internal const int MaximumForgingLevel = 8;
+        internal const int MaximumForgingLevel = 10;
 
         internal static EquipmentGrantCapability Describe(ItemMetadata metadata)
         {
@@ -131,7 +131,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
             if (options.ForgingLevel < 0 || options.ForgingLevel > MaximumForgingLevel)
             {
-                error = "锻造等级必须在 0-8 之间";
+                error = "锻造等级必须在 0-10 之间";
                 return false;
             }
             if (options.ForgingLevel > 0 && !capability.CanForge)
