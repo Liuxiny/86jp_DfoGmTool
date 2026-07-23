@@ -67,5 +67,103 @@ WHERE account_id = @accountId;";
                 }
             }
         }
+
+        // 复制角色安全处理使用服务端穿脱装备的同一数据库表示：先找空槽，再把 equipped raw
+        // 还原为 character_items。调用方负责在同一事务内删除原 equipped 行。
+        internal (InventoryListType ListType, short Slot) RestoreEquippedEntryToContainer(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            short equippedSlot,
+            int itemId,
+            byte[] entryRaw,
+            int entryExpireTime,
+            byte equipmentLockId)
+        {
+            InventoryListType listType;
+            int slotStart;
+            int slotEnd;
+            if (equippedSlot >= 0 && equippedSlot <= 10)
+            {
+                listType = InventoryListType.Avatar;
+                slotStart = 0;
+                slotEnd = 209;
+            }
+            else if (equippedSlot == 24)
+            {
+                listType = InventoryListType.Pet;
+                slotStart = 0;
+                slotEnd = 139;
+            }
+            else if (equippedSlot >= 25 && equippedSlot <= 27)
+            {
+                listType = InventoryListType.Pet;
+                slotStart = 140;
+                slotEnd = 188;
+            }
+            else
+            {
+                listType = InventoryListType.Main;
+                slotStart = 9;
+                slotEnd = 64;
+            }
+
+            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, listType, slotStart, slotEnd);
+            if (targetSlot < 0)
+                throw new InvalidOperationException($"背包没有空位，无法脱下装备 itemId={itemId} equipSlot={equippedSlot}");
+
+            if (ItemMetadataResolver.IsCloneAvatarItem(itemId) && entryRaw != null && entryRaw.Length >= 16)
+                Array.Clear(entryRaw, 12, 4);
+
+            var fields = entryRaw != null && entryRaw.Length >= 24
+                ? MakeEquipListCodec.ParseDisplayFields(entryRaw)
+                : new MakeEquipListCodec.DisplayFields();
+
+            if (listType == InventoryListType.Avatar)
+            {
+                _db.InsertCharacterItem(
+                    connection, transaction, characterId, listType, (short)targetSlot, itemId, "avatar",
+                    stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0,
+                    optionValue: fields.Durability != 0 ? unchecked((byte)(fields.Durability & 0xFF)) : fields.Reinforce,
+                    expireTime: 0, marker16: SqliteInventoryStore.DefaultAvatarUnknownFixed30,
+                    petSerialOrHandle: 0, extraJson: SqliteInventoryStore.CreateDefaultAvatarExtraJson(),
+                    equipmentLockId: equipmentLockId);
+            }
+            else if (listType == InventoryListType.Pet)
+            {
+                var petHandle = entryRaw != null && entryRaw.Length >= 9 ? BitConverter.ToInt32(entryRaw, 5) : 0;
+                _db.InsertCharacterItem(
+                    connection, transaction, characterId, listType, (short)targetSlot, itemId, "pet",
+                    stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: 0,
+                    expireTime: 0, marker16: 0, petSerialOrHandle: petHandle,
+                    extraJson: "{}", equipmentLockId: equipmentLockId);
+            }
+            else
+            {
+                var builder = new ItemExtraViewBuilder();
+                builder.Equipment.Upgrade = fields.Reinforce;
+                builder.Equipment.EnchantCardId = unchecked((int)fields.Enchant);
+                builder.Equipment.EnchantUpgradeCount = fields.EnchantUpgradeCount;
+                builder.Equipment.AmplifyType = fields.AmplifyType;
+                builder.Equipment.AmplifyValue = fields.AmplifyValue;
+                builder.Equipment.EmblemData = fields.Emblem;
+                builder.Equipment.Rune = fields.Rune;
+                builder.Equipment.SealCount = fields.MagicSealCount;
+                builder.Equipment.SealTypes = fields.MagicSealTypes;
+                builder.Equipment.SealVal1s = fields.MagicSealVal1s;
+                builder.Equipment.SealVal2s = fields.MagicSealVal2s;
+                builder.Equipment.SealTail = fields.MagicSealTail;
+                builder.Equipment.Forging = fields.Forging;
+                builder.Equipment.JewelSocket = fields.JewelSocket;
+                _db.InsertCharacterItem(
+                    connection, transaction, characterId, listType, (short)targetSlot, itemId, "equipment",
+                    stackCount: fields.InstanceValue != 0 ? unchecked((int)fields.InstanceValue) : itemId, instanceValue: 0,
+                    durability: fields.Durability, sealFlag: 0, optionValue: 0,
+                    expireTime: entryExpireTime, marker16: -1, petSerialOrHandle: 0,
+                    extraJson: builder.Build().Serialize(), equipmentLockId: equipmentLockId);
+            }
+
+            return (listType, (short)targetSlot);
+        }
     }
 }

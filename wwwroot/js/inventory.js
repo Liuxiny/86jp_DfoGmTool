@@ -152,18 +152,19 @@ const WALLET_TYPES = { 0: 'gold', 1: 'revive', 2: 'sp' };
 function renderWalletRows(tbody, items) {
   for (const item of items) {
     const type = WALLET_TYPES[item.slot];
+    const goldLimit = type === 'gold' && goldLimitStatus ? goldLimitStatus.goldCarryLimit : null;
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${item.slot}</td><td>${esc(item.name)}</td>
       <td>${(item.count ?? 0).toLocaleString()}</td>
-      <td><input type="number" min="0" class="val-input" value="${item.count ?? 0}"></td>
+      <td><input type="number" min="0"${goldLimit ? ` max="${goldLimit}"` : ''} class="val-input" value="${item.count ?? 0}"></td>
       <td>${type ? '<button class="mini">覆写</button>' : ''}</td>`;
     const btn = tr.querySelector('button');
     if (btn) btn.onclick = async () => {
       const value = parseInt(tr.querySelector('input').value, 10);
       if (isNaN(value) || value < 0) return toast('请输入非负整数', true);
       try {
-        await post(`/api/characters/${currentChar.characterId}/wallet`, { type, value });
-        toast('已覆写');
+        const result = await post(`/api/characters/${currentChar.characterId}/wallet`, { type, value });
+        toast(type === 'gold' ? `金币已覆写为 ${Number(result.value).toLocaleString()}` : '已覆写');
         loadItems();
         refreshHeader();
       } catch (e) {

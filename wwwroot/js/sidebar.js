@@ -382,6 +382,7 @@ async function loadCharacters(accountId, expectedRuntimeEpoch = runtimeSourceEpo
 }
 
 async function selectCharacter(id, li) {
+  if (typeof closeCharacterClonePanel === 'function') closeCharacterClonePanel();
   const epoch = ++selectEpoch;
   document.querySelectorAll('#char-list li').forEach((el) => el.classList.remove('active'));
   if (li) li.classList.add('active');
@@ -405,6 +406,7 @@ async function selectCharacter(id, li) {
     updateExtraEquipmentSlotButton();
     resetGiveUsableJobToCurrentCharacter();
     loadStats();
+    loadGoldLimit();
     loadSpTp();
     loadGrowOptions();
     loadItems();

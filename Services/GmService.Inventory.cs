@@ -101,6 +101,8 @@ namespace DfoGmTool.Services
 
             foreach (var item in snapshot.PetItems)
             {
+                var category = ResolvePetSegment(item.SlotIndex);
+                var isPetConsumable = string.Equals(category, "宠物用品", StringComparison.Ordinal);
                 var configKind = ResolveInventoryConfigKind(
                     item.CreatureItemId,
                     "pet",
@@ -111,14 +113,14 @@ namespace DfoGmTool.Services
                 items.Add(new
                 {
                     container = "宠物",
-                    category = ResolvePetSegment(item.SlotIndex),
+                    category,
                     listType = (int)InventoryListType.Pet,
                     slot = (int)item.SlotIndex,
                     templateId = item.CreatureItemId,
                     name = pvfIndex.ResolveItemName(item.CreatureItemId),
                     kind = "pet",
                     rarity = pvfIndex.ResolveItemRarity(item.CreatureItemId),
-                    count = 1,
+                    count = isPetConsumable ? item.StackCount : 1,
                     durability = 0,
                     serial = item.CreatureSerialOrHandle,
                     instanceValue = item.CreatureSerialOrHandle,
@@ -1145,10 +1147,25 @@ VALUES (
             if (!TryGetAccountId(characterId, out accountId))
                 return Error("角色不存在: " + characterId);
 
+            GoldLimitSnapshot goldLimit;
+            try
+            {
+                goldLimit = LoadGoldLimitSnapshot(characterId);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Error(ex.Message);
+            }
+
+            var requestedAmount = amount;
+            WalletSnapshot walletAfter;
             using (var scope = _assetService.OpenScope(characterId, accountId))
             {
+                var wallet = _assetService.LoadWallet(scope);
                 if (amount > 0)
                 {
+                    // 与服务端 CurrencyService 的 MIN(当前金币 + 增量, 上限) 行为一致。
+                    amount = Math.Min(amount, Math.Max(0, goldLimit.GoldCarryLimit - wallet.Gold));
                     _assetService.GrantGold(scope, amount);
                 }
                 else if (!_assetService.TrySpendGold(scope, -amount))
@@ -1161,8 +1178,16 @@ VALUES (
 
             using (var scope = _assetService.OpenScope(characterId, accountId))
             {
-                var wallet = _assetService.LoadWallet(scope);
-                return new { success = true, characterId, amount, gold = wallet.Gold };
+                walletAfter = _assetService.LoadWallet(scope);
+                return new
+                {
+                    success = true,
+                    characterId,
+                    requestedAmount,
+                    amount,
+                    gold = walletAfter.Gold,
+                    goldCarryLimit = goldLimit.GoldCarryLimit,
+                };
             }
         }
 
@@ -1181,6 +1206,19 @@ VALUES (
 
             if (type == "gold")
             {
+                GoldLimitSnapshot goldLimit;
+                try
+                {
+                    goldLimit = LoadGoldLimitSnapshot(characterId);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Error(ex.Message);
+                }
+                if (value > goldLimit.GoldCarryLimit)
+                    return Error("金币不能超过当前上限 " + goldLimit.GoldCarryLimit.ToString("N0"));
+
+                WalletSnapshot walletAfter;
                 using (var scope = _assetService.OpenScope(characterId, accountId))
                 {
                     var wallet = _assetService.LoadWallet(scope);
@@ -1191,7 +1229,9 @@ VALUES (
                         return Error("扣减失败");
                     scope.Commit();
                 }
-                return new { success = true, characterId, type, value };
+                using (var scope = _assetService.OpenScope(characterId, accountId))
+                    walletAfter = _assetService.LoadWallet(scope);
+                return new { success = true, characterId, type, value = walletAfter.Gold, goldCarryLimit = goldLimit.GoldCarryLimit };
             }
 
             int slot;

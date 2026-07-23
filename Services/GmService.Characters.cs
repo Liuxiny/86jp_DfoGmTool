@@ -187,7 +187,21 @@ FROM characters WHERE character_id = @cid;";
                 });
             }
 
-            stats.Add(new { key = "inventoryLimit", label = "最大负重", value = U32(58), zeroBlock = false });
+            var inventoryLimit = U32(58);
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT stat_inventory_limit FROM character_subtype1_fields WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    var value = cmd.ExecuteScalar();
+                    if (value != null && value != DBNull.Value)
+                        inventoryLimit = Convert.ToInt64(value);
+                }
+            }
+
+            stats.Add(new { key = "inventoryLimit", label = "最大负重", value = inventoryLimit, zeroBlock = false });
             stats.Add(new { key = "hpRegen", label = "HP恢复率", value = (long)U16(62), zeroBlock = false });
             stats.Add(new { key = "mpRegen", label = "MP恢复率", value = (long)U16(64), zeroBlock = false });
             stats.Add(new { key = "moveSpeed", label = "移动速度", value = U32(66), zeroBlock = false });
@@ -203,8 +217,90 @@ FROM characters WHERE character_id = @cid;";
                 job,
                 level,
                 growType,
+                inventoryLimit,
+                inventoryLimitOverridden = inventoryLimit == MaxInventoryLimitStoredValue,
                 stats,
             };
+        }
+
+        // 客户端负重使用万分之一单位；999 对应存储值 9,990,000。
+        private const int MaxInventoryLimitDisplayValue = 999;
+        private const int MaxInventoryLimitStoredValue = MaxInventoryLimitDisplayValue * 10000;
+
+        public object SetInventoryLimitTo999(int characterId)
+        {
+            if (!TryGetAccountId(characterId, out _))
+                return Error("角色不存在: " + characterId);
+
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE character_subtype1_fields
+SET stat_inventory_limit = @inventoryLimit
+WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@inventoryLimit", MaxInventoryLimitStoredValue);
+                    if (cmd.ExecuteNonQuery() == 0)
+                        return Error("角色属性数据不存在，无法设置负重");
+                }
+            }
+
+            return new { success = true, characterId, inventoryLimit = MaxInventoryLimitStoredValue, displayValue = MaxInventoryLimitDisplayValue };
+        }
+
+        public object RestoreNormalInventoryLimit(int characterId)
+        {
+            byte job, level, growType;
+            using (var conn = new SqliteConnection(_config.ConnectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = "SELECT job, level, grow_type FROM characters WHERE character_id = @cid;";
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            if (!reader.Read())
+                            {
+                                tx.Rollback();
+                                return Error("角色不存在: " + characterId);
+                            }
+                            job = (byte)reader.GetInt32(0);
+                            level = (byte)reader.GetInt32(1);
+                            growType = (byte)reader.GetInt32(2);
+                        }
+                    }
+
+                    CharacterStatComputer.DecodeGrowType(growType, out var first, out var second);
+                    var blob = CharacterStatComputer.BuildAdditionalInfo(job, level, first, second);
+                    var normalInventoryLimit = (long)BitConverter.ToUInt32(blob, 58);
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = @"
+UPDATE character_subtype1_fields
+SET stat_inventory_limit = @inventoryLimit
+WHERE character_id = @cid;";
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.Parameters.AddWithValue("@inventoryLimit", normalInventoryLimit);
+                        if (cmd.ExecuteNonQuery() == 0)
+                        {
+                            tx.Rollback();
+                            return Error("角色属性数据不存在，无法恢复负重");
+                        }
+                    }
+
+                    tx.Commit();
+                    return new { success = true, characterId, inventoryLimit = normalInventoryLimit };
+                }
+            }
         }
 
         public object SetLevel(int characterId, int level)

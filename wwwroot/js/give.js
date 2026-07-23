@@ -215,7 +215,6 @@ async function loadGiveCategories(expectedRuntimeEpoch) {
     nav.innerHTML = '';
     if (!data.ready) {
       nav.innerHTML = '<div class="group-title">索引构建中…</div>';
-      setTimeout(() => loadGiveCategories(expectedRuntimeEpoch), 2500);
       return;
     }
 

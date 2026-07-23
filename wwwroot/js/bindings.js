@@ -51,6 +51,7 @@ $('#btn-check-clone-name').onclick = checkCloneCharacterName;
 $('#clone-character-name').addEventListener('input', () => {
   cloneNameAvailable = false;
   $('#clone-name-state').textContent = '';
+  updateCloneButtonState();
 });
 $('#btn-run-character-clone').onclick = runCharacterClone;
 $('#btn-open-clone-account').onclick = openCloneAccountPanel;
@@ -60,6 +61,9 @@ $('#btn-toggle-clone-password').onclick = () => togglePasswordInput('#clone-acco
 $('#btn-toggle-clone-password-confirm').onclick = () => togglePasswordInput('#clone-account-password-confirm', '#btn-toggle-clone-password-confirm');
 $('#btn-sp').onclick = adjustSp;
 $('#btn-zero-sptp').onclick = zeroRemainingSpTp;
+$('#btn-inventory-limit-999').onclick = setInventoryLimitTo999;
+$('#btn-inventory-limit-restore').onclick = restoreNormalInventoryLimit;
+$('#btn-gold-limit-max').onclick = setMaximumGoldLimit;
 $('#grow-job').onchange = loadGrowOptionsForJob;
 $('#grow-first').onchange = renderSecondOptions;
 $('#btn-grow').onclick = setGrowType;

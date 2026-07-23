@@ -59,6 +59,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_name_unique
 CREATE INDEX IF NOT EXISTS idx_characters_account
     ON characters(account_id, delete_flag);
 
+CREATE TABLE IF NOT EXISTS character_gold_limits (
+    character_id INTEGER PRIMARY KEY,
+    gold_carry_limit INTEGER NOT NULL,
+    auction_gold_limit INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS character_container_state (
     character_id INTEGER NOT NULL,
     list_type INTEGER NOT NULL,
@@ -618,6 +626,24 @@ CREATE TABLE IF NOT EXISTS character_daily_counters (
     period       TEXT    NOT NULL DEFAULT 'day' CHECK (period IN ('day', 'week')),
     value        INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (character_id, counter_key),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+-- 与当前服务端 schema 同步：守护者盾牌 deck。
+CREATE TABLE IF NOT EXISTS character_knight_shield_deck (
+    character_id INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL CHECK (slot_index >= 0 AND slot_index <= 4),
+    shield_item_id INTEGER NOT NULL CHECK (shield_item_id > 0),
+    PRIMARY KEY (character_id, slot_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+-- 与当前服务端 schema 同步：绝望之塔永久楼层进度。
+CREATE TABLE IF NOT EXISTS character_tower_of_despair_progress (
+    character_id INTEGER PRIMARY KEY,
+    highest_cleared_floor INTEGER NOT NULL DEFAULT 0
+        CHECK (highest_cleared_floor >= 0 AND highest_cleared_floor <= 100),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 

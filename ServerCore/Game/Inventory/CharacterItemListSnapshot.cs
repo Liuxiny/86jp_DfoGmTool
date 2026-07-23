@@ -80,6 +80,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         public int CreatureSerialOrHandle { get; set; }
 
+        // 宠物用品槽位中，服务端将堆叠数量镜像到三个字段；这里保留归一化后的业务数量。
+        public int StackCount { get; set; } = 1;
+
         public int ExpireTime { get; set; }
 
         public byte[] TailData0A { get; set; } = new byte[74];

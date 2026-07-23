@@ -183,6 +183,7 @@ namespace DfoGmTool
                 WithRuntime((gm, pvfIndex) => gm.GetInventoryItemConfigOptions(id, listType, slot, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/quests", (int id) => WithRuntime((gm, pvfIndex) => gm.ListQuests(id, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/stats", (int id) => WithRuntime((gm, _) => gm.GetCharacterStats(id)));
+            app.MapGet("/api/characters/{id:int}/gold-limit", (int id) => WithRuntime((gm, _) => gm.GetGoldLimitStatus(id)));
             app.MapGet("/api/characters/{id:int}/sptp", (int id) => WithRuntime((gm, _) => gm.GetSpTp(id)));
             app.MapGet("/api/characters/{id:int}/clone-plan", (int id) => WithRuntime((gm, _) => gm.GetCharacterClonePlan(id)));
             app.MapGet("/api/characters/name-available", (string name) => WithRuntime((gm, _) => gm.CheckCharacterNameAvailable(name)));
@@ -203,6 +204,12 @@ namespace DfoGmTool
                 WithRuntime((gm, _) => gm.AdjustCera(id, body.Amount, body.Type)));
             app.MapPost("/api/characters/{id:int}/level", (int id, LevelRequest body) =>
                 WithRuntime((gm, _) => gm.SetLevel(id, body.Level)));
+            app.MapPost("/api/characters/{id:int}/inventory-limit/max", (int id) =>
+                WithRuntime((gm, _) => gm.SetInventoryLimitTo999(id)));
+            app.MapPost("/api/characters/{id:int}/inventory-limit/restore", (int id) =>
+                WithRuntime((gm, _) => gm.RestoreNormalInventoryLimit(id)));
+            app.MapPost("/api/characters/{id:int}/gold-limit/max", (int id) =>
+                WithRuntime((gm, _) => gm.SetMaximumGoldLimit(id)));
             app.MapPost("/api/characters/{id:int}/personal-cargo/max", (int id) =>
                 WithRuntime((gm, _) => gm.MaxPersonalCargo(id)));
             app.MapPost("/api/characters/{id:int}/equipment-slots/unlock", (int id) =>

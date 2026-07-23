@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.Services
@@ -11,6 +12,7 @@ namespace DfoGmTool.Services
     public sealed partial class GmService
     {
         private const int DefaultCharacterSlotLimit = 17;
+        private static readonly SemaphoreSlim CharacterCloneMutationGate = new SemaphoreSlim(1, 1);
 
         private static readonly CharacterCloneOption[] CharacterCloneOptions =
         {
@@ -44,13 +46,14 @@ namespace DfoGmTool.Services
         private static readonly Dictionary<string, string[]> CharacterCloneTableGroups =
             new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
             {
-                ["basic"] = new[] { "character_subtype0_fields", "character_subtype1_fields", "character_init_flags", "character_init_bodies" },
+                ["basic"] = new[] { "character_subtype0_fields", "character_subtype1_fields", "character_init_flags" },
                 ["skills"] = new[] { "character_skills", "character_dark_knight_combo_skill_pages", "character_hotkey_slots" },
                 ["quests"] = new[] { "character_active_quests", "character_invisible_falgs" },
                 ["titlebook"] = new[] { "character_achievement_complete", "character_titlebook", "character_achievement_chunks" },
-                ["dungeon"] = new[] { "character_dungeon_permissions", "character_dimensions", "character_dimension_flags", "character_growth_weapon_stages", "character_pvp_missions" },
+                ["dungeon"] = new[] { "character_dungeon_permissions", "character_dimensions", "character_dimension_flags", "character_growth_weapon_stages", "character_pvp_missions", "character_tower_of_despair_progress" },
                 ["daily"] = new[] { "character_daily_reset", "character_daily_counters", "character_daily_challenge_groups", "character_daily_challenge_entries", "character_daily_challenge_tail_ids", "character_daily_schedule_states", "character_buy_restrict_items", "character_crystal_contract" },
-                ["equipped"] = new[] { "character_equipped_entries", "character_rental_items" },
+                ["wallet"] = new[] { "character_gold_limits" },
+                ["equipped"] = new[] { "character_equipped_entries", "character_rental_items", "character_knight_shield_deck" },
                 ["pets"] = new[] { "character_creatures", "character_pet_welcome_cache" },
                 ["locks"] = new[] { "character_item_locks", "character_sort_item_locks" },
                 ["misc"] = new[] { "character_item_values", "character_collectbox_slots", "character_mercenary_support" },
@@ -176,63 +179,80 @@ SELECT last_insert_rowid();";
                 return Error(invalidName);
 
             var selected = NormalizeCloneOptions(request.Options);
-
-            using (var conn = new SqliteConnection(_config.ConnectionString))
+            CharacterCloneMutationGate.Wait();
+            try
             {
-                conn.Open();
-                ExecutePragma(conn, "PRAGMA foreign_keys = ON;");
-                using (var tx = conn.BeginTransaction())
+                using (var conn = new SqliteConnection(_config.ConnectionString))
                 {
-                    if (!CharacterExists(conn, tx, sourceCharacterId, out var sourceAccountId))
-                        return Error("源角色不存在: " + sourceCharacterId);
-                    if (!AccountExists(conn, tx, request.TargetAccountId))
-                        return Error("目标账号不存在: " + request.TargetAccountId);
-                    if (CharacterNameExists(conn, tx, newName))
-                        return Error("角色名已存在: " + newName);
-
-                    var slotLimit = ResolveCharacterSlotLimit(conn, tx);
-                    var targetCount = CountCharactersByAccount(conn, tx, request.TargetAccountId);
-                    if (targetCount >= slotLimit)
-                        return Error($"目标账号角色数量已达上限 {slotLimit}");
-
-                    var targetSlotIndex = ResolveFreeCharacterSlotIndex(conn, tx, request.TargetAccountId, slotLimit);
-                    if (targetSlotIndex < 0)
-                        return Error("目标账号没有可用角色槽位");
-
-                    var newCharacterId = CloneCharacterRow(conn, tx, sourceCharacterId, request.TargetAccountId, newName, targetSlotIndex);
-                    var petHandleMap = new Dictionary<long, long>();
-                    var nextPetHandle = ResolveNextPetHandle(conn, tx);
-
-                    foreach (var tableName in ResolveSelectedCloneTables(selected))
+                    conn.Open();
+                    ExecutePragma(conn, "PRAGMA foreign_keys = ON;");
+                    ExecutePragma(conn, "PRAGMA busy_timeout = 5000;");
+                    using (var tx = conn.BeginTransaction(deferred: false))
                     {
-                        if (!TableExists(conn, tx, tableName))
-                            continue;
+                        if (!CharacterExists(conn, tx, sourceCharacterId, out var sourceAccountId))
+                            return Error("源角色不存在: " + sourceCharacterId);
+                        if (!AccountExists(conn, tx, request.TargetAccountId))
+                            return Error("目标账号不存在: " + request.TargetAccountId);
+                        if (CharacterNameExists(conn, tx, newName))
+                            return Error("角色名已存在: " + newName);
 
-                        if (tableName.Equals("item_audit_log", StringComparison.OrdinalIgnoreCase))
+                        var slotLimit = ResolveCharacterSlotLimit(conn, tx);
+                        var targetCount = CountCharactersByAccount(conn, tx, request.TargetAccountId);
+                        if (targetCount >= slotLimit)
+                            return Error($"目标账号角色数量已达上限 {slotLimit}");
+
+                        var targetSlotIndex = ResolveFreeCharacterSlotIndex(conn, tx, request.TargetAccountId, slotLimit);
+                        if (targetSlotIndex < 0)
+                            return Error("目标账号没有可用角色槽位");
+
+                        var cloneTables = ResolveSelectedCloneTables(conn, tx, selected);
+                        ValidateCloneTableSafety(conn, tx, cloneTables);
+
+                        var newCharacterId = CloneCharacterRow(conn, tx, sourceCharacterId, request.TargetAccountId, newName, targetSlotIndex);
+
+                        foreach (var tableName in cloneTables)
                         {
-                            CloneGenericTable(conn, tx, tableName, sourceCharacterId, newCharacterId, request.TargetAccountId, null, petHandleMap, ref nextPetHandle, cloneAudit: true);
-                            continue;
+                            if (tableName.Equals("item_audit_log", StringComparison.OrdinalIgnoreCase))
+                            {
+                                CloneGenericTable(conn, tx, tableName, sourceCharacterId, newCharacterId, request.TargetAccountId, null, cloneAudit: true);
+                                continue;
+                            }
+
+                            CloneGenericTable(conn, tx, tableName, sourceCharacterId, newCharacterId, request.TargetAccountId, null, cloneAudit: false);
                         }
 
-                        CloneGenericTable(conn, tx, tableName, sourceCharacterId, newCharacterId, request.TargetAccountId, null, petHandleMap, ref nextPetHandle, cloneAudit: false);
+                        CloneSelectedItems(conn, tx, sourceCharacterId, newCharacterId, selected);
+                        CloneSelectedContainerStates(conn, tx, sourceCharacterId, newCharacterId, selected);
+                        var strippedEquipmentCount = StripJobRestrictedEquippedItems(conn, tx, newCharacterId, selected);
+                        ValidateClonedCharacter(conn, tx, newCharacterId, request.TargetAccountId, targetSlotIndex);
+
+                        tx.Commit();
+                        return new
+                        {
+                            success = true,
+                            sourceCharacterId,
+                            characterId = newCharacterId,
+                            targetAccountId = request.TargetAccountId,
+                            sourceAccountId,
+                            name = newName,
+                            slotIndex = targetSlotIndex,
+                            strippedEquipmentCount,
+                            copiedOptions = selected.OrderBy(v => v).ToList(),
+                        };
                     }
-
-                    CloneSelectedItems(conn, tx, sourceCharacterId, newCharacterId, selected, petHandleMap, ref nextPetHandle);
-                    CloneSelectedContainerStates(conn, tx, sourceCharacterId, newCharacterId, selected);
-
-                    tx.Commit();
-                    return new
-                    {
-                        success = true,
-                        sourceCharacterId,
-                        characterId = newCharacterId,
-                        targetAccountId = request.TargetAccountId,
-                        sourceAccountId,
-                        name = newName,
-                        slotIndex = targetSlotIndex,
-                        copiedOptions = selected.OrderBy(v => v).ToList(),
-                    };
                 }
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 5 || ex.SqliteErrorCode == 6)
+            {
+                return Error("数据库正忙，复制未执行；请稍后重试（未写入半成品）");
+            }
+            catch (Exception ex)
+            {
+                return Error("复制失败，事务已回滚: " + ex.Message);
+            }
+            finally
+            {
+                CharacterCloneMutationGate.Release();
             }
         }
 
@@ -247,7 +267,7 @@ SELECT last_insert_rowid();";
             return selected;
         }
 
-        private static IEnumerable<string> ResolveSelectedCloneTables(HashSet<string> selected)
+        private static IReadOnlyList<string> ResolveSelectedCloneTables(SqliteConnection conn, SqliteTransaction tx, HashSet<string> selected)
         {
             var tables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var key in selected)
@@ -257,7 +277,12 @@ SELECT last_insert_rowid();";
                 foreach (var table in groupTables)
                     tables.Add(table);
             }
-            return tables;
+            foreach (var table in DiscoverDynamicCharacterCloneTables(conn, tx))
+                tables.Add(table);
+            tables.Remove("characters");
+            tables.Remove("character_items");
+            tables.Remove("character_container_state");
+            return tables.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         private static int CloneCharacterRow(SqliteConnection conn, SqliteTransaction tx, int sourceCharacterId, int targetAccountId, string newName, int targetSlotIndex)
@@ -303,11 +328,10 @@ SELECT last_insert_rowid();";
             int newCharacterId,
             int targetAccountId,
             Func<Dictionary<string, object>, bool> rowFilter,
-            Dictionary<long, long> petHandleMap,
-            ref long nextPetHandle,
             bool cloneAudit)
         {
-            var columns = LoadAccountBackupColumns(conn, tx, tableName).Values.Select(c => c.Name).ToList();
+            var columnInfos = LoadCloneColumns(conn, tx, tableName);
+            var columns = columnInfos.Select(c => c.Name).ToList();
             var where = BuildCharacterTableWhere(columns, tableName);
             if (where == null)
                 return;
@@ -318,9 +342,10 @@ SELECT last_insert_rowid();";
                     continue;
 
                 var insertColumns = columns
-                    .Where(c => !ShouldSkipCloneColumn(tableName, c, cloneAudit))
+                    .Where(c => !ShouldSkipCloneColumn(tableName, c, cloneAudit)
+                        && !IsGeneratedIntegerPrimaryKey(columnInfos, c))
                     .ToList();
-                InsertClonedRow(conn, tx, tableName, insertColumns, row, sourceCharacterId, newCharacterId, targetAccountId, petHandleMap, ref nextPetHandle, cloneAudit);
+                InsertClonedRow(conn, tx, tableName, insertColumns, row, sourceCharacterId, newCharacterId, targetAccountId, cloneAudit);
             }
         }
 
@@ -329,9 +354,7 @@ SELECT last_insert_rowid();";
             SqliteTransaction tx,
             int sourceCharacterId,
             int newCharacterId,
-            HashSet<string> selected,
-            Dictionary<long, long> petHandleMap,
-            ref long nextPetHandle)
+            HashSet<string> selected)
         {
             if (!TableExists(conn, tx, "character_items"))
                 return;
@@ -361,7 +384,7 @@ SELECT last_insert_rowid();";
                         continue;
                 }
 
-                InsertClonedRow(conn, tx, "character_items", insertColumns, row, sourceCharacterId, newCharacterId, 0, petHandleMap, ref nextPetHandle, cloneAudit: false);
+                InsertClonedRow(conn, tx, "character_items", insertColumns, row, sourceCharacterId, newCharacterId, 0, cloneAudit: false);
             }
         }
 
@@ -371,13 +394,13 @@ SELECT last_insert_rowid();";
                 return;
 
             var listTypes = new HashSet<int>();
-            if (selected.Overlaps(new[] { "wallet", "quickSlots", "mainEquipment", "consumables", "materials", "questItems", "expertMaterials", "emblems", "specialMaterials", "mainOther" }))
+            if (selected.Overlaps(new[] { "wallet", "quickSlots", "mainEquipment", "consumables", "materials", "questItems", "expertMaterials", "emblems", "specialMaterials", "mainOther", "equipped" }))
                 listTypes.Add(0);
             if (selected.Contains("avatars") || selected.Contains("equipped"))
                 listTypes.Add(1);
             if (selected.Contains("personalCargo"))
                 listTypes.Add(2);
-            if (selected.Overlaps(new[] { "pets", "petEquipment", "petConsumables" }))
+            if (selected.Overlaps(new[] { "pets", "petEquipment", "petConsumables", "equipped" }))
                 listTypes.Add(7);
 
             if (listTypes.Count == 0)
@@ -389,9 +412,7 @@ SELECT last_insert_rowid();";
                 if (!listTypes.Contains(ToInt(row, "list_type")))
                     continue;
 
-                var ignoredPetMap = new Dictionary<long, long>();
-                var ignored = 0L;
-                InsertClonedRow(conn, tx, "character_container_state", columns, row, sourceCharacterId, newCharacterId, 0, ignoredPetMap, ref ignored, cloneAudit: false);
+                InsertClonedRow(conn, tx, "character_container_state", columns, row, sourceCharacterId, newCharacterId, 0, cloneAudit: false);
             }
         }
 
@@ -448,8 +469,6 @@ SELECT last_insert_rowid();";
             int sourceCharacterId,
             int newCharacterId,
             int targetAccountId,
-            Dictionary<long, long> petHandleMap,
-            ref long nextPetHandle,
             bool cloneAudit)
         {
             using (var cmd = conn.CreateCommand())
@@ -475,8 +494,6 @@ SELECT last_insert_rowid();";
                         value = newCharacterId;
                     else if (column.Equals("support_character_id", StringComparison.OrdinalIgnoreCase) && ToInt(row, column) == sourceCharacterId)
                         value = newCharacterId;
-                    else if (column.Equals("pet_serial_or_handle", StringComparison.OrdinalIgnoreCase) || column.Equals("creature_key", StringComparison.OrdinalIgnoreCase))
-                        value = RemapPetHandle(ToLong(value), petHandleMap, ref nextPetHandle);
                     else if (cloneAudit && column.Equals("payload_json", StringComparison.OrdinalIgnoreCase))
                         value = "{}";
                     else if (column.Equals("created_at", StringComparison.OrdinalIgnoreCase) || column.Equals("updated_at", StringComparison.OrdinalIgnoreCase))
@@ -485,37 +502,6 @@ SELECT last_insert_rowid();";
                     cmd.Parameters.AddWithValue("@p" + i.ToString(CultureInfo.InvariantCulture), value ?? DBNull.Value);
                 }
                 cmd.ExecuteNonQuery();
-            }
-        }
-
-        private static long RemapPetHandle(long oldHandle, Dictionary<long, long> map, ref long nextHandle)
-        {
-            if (oldHandle <= 0)
-                return oldHandle;
-            if (map.TryGetValue(oldHandle, out var mapped))
-                return mapped;
-            mapped = nextHandle++;
-            map[oldHandle] = mapped;
-            return mapped;
-        }
-
-        private static long ResolveNextPetHandle(SqliteConnection conn, SqliteTransaction tx)
-        {
-            long max = 0;
-            if (TableExists(conn, tx, "character_items") && ColumnExists(conn, tx, "character_items", "pet_serial_or_handle"))
-                max = Math.Max(max, QueryMaxLong(conn, tx, "character_items", "pet_serial_or_handle"));
-            if (TableExists(conn, tx, "character_creatures") && ColumnExists(conn, tx, "character_creatures", "creature_key"))
-                max = Math.Max(max, QueryMaxLong(conn, tx, "character_creatures", "creature_key"));
-            return Math.Max(max + 1, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        }
-
-        private static long QueryMaxLong(SqliteConnection conn, SqliteTransaction tx, string table, string column)
-        {
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = "SELECT COALESCE(MAX(" + QuoteAccountBackupIdentifier(column) + "), 0) FROM " + QuoteAccountBackupIdentifier(table) + ";";
-                return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
             }
         }
 

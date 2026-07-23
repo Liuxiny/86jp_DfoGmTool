@@ -368,6 +368,15 @@
           <div class="card">
             <div class="card-title">基础属性表 <span id="stats-meta" class="hint"></span></div>
             <div class="row"><span class="hint">按 职业/等级/转职/觉醒 用服务端同一套算法计算（与面板同源，含契约补偿），随等级变化自动重算。淡显的异常抗性段本版本未配置恒为 0；力量/体力/智力/精神四维不在此属性块内。</span></div>
+            <div class="row">
+              <button id="btn-inventory-limit-999" type="button" disabled>负重999</button>
+              <button id="btn-inventory-limit-restore" type="button" disabled>正常负重</button>
+              <span id="inventory-limit-state" class="hint"></span>
+            </div>
+            <div class="row">
+              <button id="btn-gold-limit-max" type="button" disabled>升级金币上限</button>
+              <span id="gold-limit-state" class="hint">加载中…</span>
+            </div>
             <table id="stats-table" class="stats-table">
               <tbody></tbody>
             </table>

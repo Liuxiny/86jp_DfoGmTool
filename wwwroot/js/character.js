@@ -88,6 +88,7 @@ function updateExtraEquipmentSlotButton() {
 async function deleteCurrentCharacter() {
   if (!currentChar) return;
   const character = currentChar;
+  if (!confirmCharacterSwitchedAway(character, '删除')) return;
   const message = `将彻底删除角色 ${character.name} (#${character.characterId})，并删除背包、任务等关联数据。此操作不可恢复。是否继续？`;
   if (!confirm(message)) return;
 
@@ -106,6 +107,7 @@ async function deleteCurrentCharacter() {
   try {
     const r = await post(`/api/characters/${character.characterId}/delete`, { confirmText });
     toast(`已彻底删除角色 ${r.name || character.name} (#${r.characterId})`);
+    closeCharacterClonePanel();
     currentChar = null;
     selectEpoch++;
     $('#detail').classList.add('hidden');
@@ -122,6 +124,7 @@ async function deleteCurrentCharacter() {
 
 let characterClonePlan = null;
 let cloneNameAvailable = false;
+let cloneRequestRunning = false;
 const CLONE_OPTIONS_DEFAULT_OFF = new Set([
   'quests',
   'quest',
@@ -140,8 +143,17 @@ const CLONE_OPTIONS_DEFAULT_OFF = new Set([
   'itemAuditLog',
 ]);
 
+function confirmCharacterSwitchedAway(character, actionName) {
+  return confirm(
+    `${actionName}角色前，请先在客户端进入选择角色界面，并切换到其他角色。\n\n`
+    + `当前操作角色：${character.name} (#${character.characterId})\n\n`
+    + '确认已经切换到其他角色后，点击“确定”继续。'
+  );
+}
+
 async function openCharacterClonePanel() {
   if (!currentChar) return;
+  if (!confirmCharacterSwitchedAway(currentChar, '复制')) return;
   $('#character-clone-panel').classList.remove('hidden');
   $('#clone-character-state').textContent = '正在加载复制设置...';
   $('#clone-character-name').value = `${currentChar.name}_copy`;
@@ -150,7 +162,6 @@ async function openCharacterClonePanel() {
   try {
     characterClonePlan = await api(`/api/characters/${currentChar.characterId}/clone-plan`);
     renderCharacterClonePlan();
-    $('#clone-character-state').textContent = '';
   } catch (e) {
     $('#clone-character-state').textContent = e.message;
     toast(e.message, true);
@@ -189,6 +200,15 @@ function renderCharacterClonePlan() {
     }
     box.appendChild(label);
   }
+  updateCloneButtonState();
+  if (!cloneRequestRunning)
+    $('#clone-character-state').textContent = '';
+}
+
+function updateCloneButtonState() {
+  const btn = $('#btn-run-character-clone');
+  if (!btn) return;
+  btn.disabled = cloneRequestRunning;
 }
 
 function isCloneOptionDefaultOff(option) {
@@ -265,6 +285,7 @@ async function checkCloneCharacterName() {
     $('#clone-name-state').textContent = e.message;
     toast(e.message, true);
   }
+  updateCloneButtonState();
 }
 
 async function runCharacterClone() {
@@ -279,12 +300,13 @@ async function runCharacterClone() {
     return;
 
   const btn = $('#btn-run-character-clone');
-  btn.disabled = true;
+  cloneRequestRunning = true;
+  updateCloneButtonState();
   $('#clone-character-state').textContent = '正在复制...';
   try {
     const result = await post(`/api/characters/${currentChar.characterId}/clone`, { targetAccountId, newName, options });
-    $('#clone-character-state').textContent = `复制完成，新角色 #${result.characterId}`;
-    toast(`角色已复制为 ${result.name} (#${result.characterId})`);
+    $('#clone-character-state').textContent = `复制完成，新角色 #${result.characterId}；请在客户端正常重新选择角色或重新登录后进入新角色`;
+    toast(`角色已复制为 ${result.name} (#${result.characterId})，请在客户端正常刷新角色列表`);
     cloneNameAvailable = false;
     await loadAccounts();
     $('#account-select').value = String(result.targetAccountId);
@@ -293,7 +315,8 @@ async function runCharacterClone() {
     $('#clone-character-state').textContent = e.message;
     toast(e.message, true);
   } finally {
-    btn.disabled = false;
+    cloneRequestRunning = false;
+    updateCloneButtonState();
   }
 }
 
@@ -447,13 +470,30 @@ async function setGrowType() {
   }
 }
 
+let inventoryLimitIs999 = false;
+let goldLimitStatus = null;
+
+function updateInventoryLimitButtons(is999, isSaving = false) {
+  const setMaxButton = $('#btn-inventory-limit-999');
+  const restoreButton = $('#btn-inventory-limit-restore');
+  setMaxButton.disabled = isSaving || is999;
+  restoreButton.disabled = isSaving || !is999;
+}
+
 async function loadStats() {
   if (!currentChar) return;
+  updateInventoryLimitButtons(inventoryLimitIs999, true);
+  updateGoldLimitButton(null, true);
   const epoch = selectEpoch;
   try {
     const data = await api(`/api/characters/${currentChar.characterId}/stats`);
     if (epoch !== selectEpoch) return;
     $('#stats-meta').textContent = `Lv.${data.level} job=${data.job} growType=${data.growType}`;
+    inventoryLimitIs999 = data.inventoryLimitOverridden;
+    updateInventoryLimitButtons(inventoryLimitIs999);
+    $('#inventory-limit-state').textContent = data.inventoryLimitOverridden
+      ? '当前已设为 999。服务端重算属性后会恢复正常值。'
+      : '当前使用职业/等级的正常负重。';
     const tbody = $('#stats-table tbody');
     tbody.innerHTML = '';
     const cell = (s) => s
@@ -466,6 +506,72 @@ async function loadStats() {
     }
   } catch (e) {
     toast(e.message, true);
+  }
+}
+
+function updateGoldLimitButton(status, isSaving = false) {
+  const button = $('#btn-gold-limit-max');
+  button.disabled = isSaving || !status || !status.canSetMaximum;
+}
+
+async function loadGoldLimit() {
+  if (!currentChar) return;
+  updateGoldLimitButton(null, true);
+  const epoch = selectEpoch;
+  try {
+    const data = await api(`/api/characters/${currentChar.characterId}/gold-limit`);
+    if (epoch !== selectEpoch) return;
+    goldLimitStatus = data;
+    updateGoldLimitButton(data);
+    const suffix = data.isMaximum
+      ? '（已满级）'
+      : data.characterLevel < data.minimumUpgradeCharacterLevel
+        ? `（需 ${data.minimumUpgradeCharacterLevel} 级）`
+        : '';
+    $('#gold-limit-state').textContent = `当前金币上限 ${Number(data.goldCarryLimit).toLocaleString()}${suffix}`;
+  } catch (e) {
+    goldLimitStatus = null;
+    $('#gold-limit-state').textContent = '金币上限读取失败';
+    toast(e.message, true);
+  }
+}
+
+async function setMaximumGoldLimit() {
+  if (!currentChar || !goldLimitStatus?.canSetMaximum) return;
+  updateGoldLimitButton(goldLimitStatus, true);
+  try {
+    const data = await post(`/api/characters/${currentChar.characterId}/gold-limit/max`);
+    toast(`金币上限已升至 ${Number(data.goldCarryLimit).toLocaleString()}`);
+    await loadGoldLimit();
+  } catch (e) {
+    toast(e.message, true);
+    updateGoldLimitButton(goldLimitStatus);
+  }
+}
+
+async function setInventoryLimitTo999() {
+  if (!currentChar) return;
+  updateInventoryLimitButtons(inventoryLimitIs999, true);
+  try {
+    await post(`/api/characters/${currentChar.characterId}/inventory-limit/max`);
+    toast('负重上限已设为 999');
+    await loadStats();
+  } catch (e) {
+    toast(e.message, true);
+    updateInventoryLimitButtons(inventoryLimitIs999);
+  }
+}
+
+async function restoreNormalInventoryLimit() {
+  if (!currentChar) return;
+  updateInventoryLimitButtons(inventoryLimitIs999, true);
+  try {
+    await post(`/api/characters/${currentChar.characterId}/inventory-limit/restore`);
+    toast('已恢复职业/等级对应的正常负重');
+    await loadStats();
+  } catch (e) {
+    toast(e.message, true);
+    updateInventoryLimitButtons(inventoryLimitIs999);
   }
 }
 
