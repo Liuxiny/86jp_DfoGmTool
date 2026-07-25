@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
+using DfoGmTool.ServerCore.Game.Inventory;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.Services
@@ -67,7 +68,10 @@ namespace DfoGmTool.Services
         private static readonly Dictionary<string, HashSet<string>> AccountBackupRestoreExcludedColumns =
             new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
             {
-                ["item_audit_log"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id", "log_id" },
+                ["character_new_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
+                ["account_cargo_new_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
+                ["item_audit_log"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id", "log_id", "item_uid" },
+                ["inventory_audit_log_v2"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id" },
             };
 
         private static readonly HashSet<string> AccountBackupLegacyInventoryTables =
@@ -190,9 +194,10 @@ namespace DfoGmTool.Services
                     if (conflicts.Count > 0)
                         return Error("备份中的角色 ID 已被其他账号占用: " + string.Join(", ", conflicts));
 
-                    var petConflicts = FindBackupPetHandleConflicts(conn, tx, tableMap, file.CharacterIDs);
-                    if (petConflicts.Count > 0)
-                        return Error("备份中的宠物句柄已被当前数据库占用: " + string.Join(", ", petConflicts));
+                    var remappedAvatarUidCount = RemapConflictingBackupLogicalIds(
+                        conn, tx, tableMap, "character_avatar_detail", "item_uid", ItemCore.KindAvatar);
+                    var remappedCreatureUidCount = RemapConflictingBackupLogicalIds(
+                        conn, tx, tableMap, "character_creatures", "creature_key", ItemCore.KindCreature);
 
                     foreach (var dump in SortAccountBackupDumps(restorableDumps))
                     {
@@ -209,6 +214,8 @@ namespace DfoGmTool.Services
                         DeletedExistingCharacterCount = deletedExistingCharacterCount,
                         RestoredCharacterCount = file.CharacterIDs.Count,
                         CharacterIDs = file.CharacterIDs,
+                        RemappedAvatarUidCount = remappedAvatarUidCount,
+                        RemappedCreatureUidCount = remappedCreatureUidCount,
                     };
                 }
             }
@@ -610,62 +617,98 @@ namespace DfoGmTool.Services
             return result;
         }
 
-        private static List<long> FindBackupPetHandleConflicts(
-            SqliteConnection conn,
-            SqliteTransaction tx,
+        private static int RemapConflictingBackupLogicalIds(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
             Dictionary<string, AccountBackupTableDump> tableMap,
-            List<int> restoringCharacterIds)
+            string detailTableName,
+            string logicalIdColumn,
+            byte itemKind)
         {
-            var handles = ExtractBackupPetHandles(tableMap);
-            if (handles.Count == 0 || !TableExists(conn, tx, "character_creatures"))
-                return new List<long>();
+            if (!tableMap.TryGetValue(detailTableName, out var detailDump)
+                || !TableExists(connection, transaction, detailTableName))
+                return 0;
 
-            var parameters = new List<(string Name, object Value)>();
-            var handleClause = BuildInClause("creature_key", handles.Cast<object>().ToList(), parameters, "@petHandle");
-            var excludeClause = restoringCharacterIds.Count > 0
-                ? " AND NOT (" + BuildInClause("character_id", restoringCharacterIds.Cast<object>().ToList(), parameters, "@petCid") + ")"
-                : "";
+            var idIndex = detailDump.Columns.FindIndex(column =>
+                column.Equals(logicalIdColumn, StringComparison.OrdinalIgnoreCase));
+            if (idIndex < 0)
+                return 0;
 
-            using (var cmd = conn.CreateCommand())
+            var backupIds = detailDump.Rows
+                .Where(row => row.Count == detailDump.Columns.Count)
+                .Select(row => row[idIndex].ToInt64())
+                .Where(value => value > 0)
+                .Distinct()
+                .OrderBy(value => value)
+                .ToList();
+            if (backupIds.Count == 0)
+                return 0;
+
+            var occupied = new HashSet<long>();
+            using (var command = connection.CreateCommand())
             {
-                cmd.Transaction = tx;
-                cmd.CommandText = "SELECT DISTINCT creature_key FROM character_creatures WHERE " + handleClause + excludeClause + " ORDER BY creature_key;";
-                foreach (var parameter in parameters)
-                    cmd.Parameters.AddWithValue(parameter.Name, parameter.Value ?? DBNull.Value);
-
-                var conflicts = new List<long>();
-                using (var reader = cmd.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        if (!reader.IsDBNull(0))
-                            conflicts.Add(Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture));
-                    }
-                }
-                return conflicts;
+                command.Transaction = transaction;
+                command.CommandText = "SELECT " + QuoteAccountBackupIdentifier(logicalIdColumn)
+                    + " FROM " + QuoteAccountBackupIdentifier(detailTableName)
+                    + " WHERE " + QuoteAccountBackupIdentifier(logicalIdColumn) + " > 0;";
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    occupied.Add(Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture));
             }
+
+            var conflicts = backupIds.Where(occupied.Contains).ToList();
+            if (conflicts.Count == 0)
+                return 0;
+
+            var nextId = Math.Max(
+                occupied.Count == 0 ? 0 : occupied.Max(),
+                backupIds.Max());
+            var mapping = new Dictionary<int, int>();
+            foreach (var oldId64 in conflicts)
+            {
+                if (oldId64 > int.MaxValue || nextId >= int.MaxValue)
+                    throw new InvalidOperationException(detailTableName + " 逻辑 UID 已耗尽");
+                var newId = checked((int)++nextId);
+                mapping[checked((int)oldId64)] = newId;
+            }
+
+            foreach (var row in detailDump.Rows)
+            {
+                if (row.Count != detailDump.Columns.Count)
+                    continue;
+                var oldId64 = row[idIndex].ToInt64();
+                if (oldId64 <= int.MaxValue && mapping.TryGetValue((int)oldId64, out var newId))
+                    row[idIndex] = new AccountBackupValue { Type = "integer", Integer = newId };
+            }
+
+            RemapBackupItemCoreValues(tableMap, itemKind, mapping);
+            return mapping.Count;
         }
 
-        private static List<long> ExtractBackupPetHandles(Dictionary<string, AccountBackupTableDump> tableMap)
+        private static void RemapBackupItemCoreValues(
+            Dictionary<string, AccountBackupTableDump> tableMap,
+            byte itemKind,
+            IReadOnlyDictionary<int, int> mapping)
         {
-            var handles = new HashSet<long>();
-            if (tableMap.TryGetValue("character_creatures", out var creatureDump))
-            {
-                var handleIndex = creatureDump.Columns.FindIndex(c => c.Equals("creature_key", StringComparison.OrdinalIgnoreCase));
-                if (handleIndex >= 0)
-                {
-                    foreach (var row in creatureDump.Rows)
-                    {
-                        if (row.Count != creatureDump.Columns.Count)
-                            continue;
-                        var handle = row[handleIndex].ToInt64();
-                        if (handle > 0)
-                            handles.Add(handle);
-                    }
-                }
-            }
+            if (mapping.Count == 0 || !tableMap.TryGetValue("character_new_items", out var itemDump))
+                return;
+            var coreIndex = itemDump.Columns.FindIndex(column =>
+                column.Equals("item_core", StringComparison.OrdinalIgnoreCase));
+            if (coreIndex < 0)
+                return;
 
-            return handles.OrderBy(v => v).ToList();
+            foreach (var row in itemDump.Rows)
+            {
+                if (row.Count != itemDump.Columns.Count)
+                    continue;
+                if (!(row[coreIndex].ToDbValue() is byte[] bytes) || bytes.Length != ItemCore.Size)
+                    throw new InvalidOperationException("备份中的 character_new_items.item_core 长度无效");
+                var core = ItemCore.FromBytes(bytes);
+                if (core.ItemKind != itemKind || core.Value <= 0 || !mapping.TryGetValue(core.Value, out var newValue))
+                    continue;
+                core.Value = newValue;
+                row[coreIndex] = AccountBackupValue.FromDbValue(core.ToBytes());
+            }
         }
 
         private static List<int> ExtractIntColumnValues(AccountBackupTableDump dump, string columnName)
@@ -919,5 +962,11 @@ namespace DfoGmTool.Services
 
         [JsonPropertyName("characterIDs")]
         public List<int> CharacterIDs { get; set; } = new List<int>();
+
+        [JsonPropertyName("remappedAvatarUidCount")]
+        public int RemappedAvatarUidCount { get; set; }
+
+        [JsonPropertyName("remappedCreatureUidCount")]
+        public int RemappedCreatureUidCount { get; set; }
     }
 }

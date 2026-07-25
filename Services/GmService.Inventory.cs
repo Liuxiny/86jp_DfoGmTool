@@ -192,8 +192,8 @@ namespace DfoGmTool.Services
             if (slot <= 176) return "材料";      // 121-176
             if (slot <= 232) return "任务品";    // 177-232
             if (slot <= 288) return "副职业材料"; // 233-288
-            if (slot <= 344) return "徽章";      // 289-344
-            if (slot <= 353) return "特殊材料";   // 345-353
+            if (slot <= 351) return "徽章";      // 289-351
+            if (slot <= 353) return "保留槽";     // 352-353 不存放普通物品
             if (slot <= 359) return "账号晶块";   // 354-359 账号共享(accounts表列), 在账号面板调整
             return "其他";
         }
@@ -203,60 +203,6 @@ namespace DfoGmTool.Services
             if (slot <= 139) return "宠物";       // 0-139
             if (slot <= 188) return "宠物装备";    // 140-188
             return "宠物用品";                    // 189-237
-        }
-
-        private bool SortInventorySegment(int characterId, InventoryListType listType, int slot)
-        {
-            if (!TryGetSortRange(listType, slot, out var dbListType, out var start, out var end)
-                || !TryGetAccountId(characterId, out var accountId))
-                return false;
-
-            try
-            {
-                _inventory.SortRange(characterId, accountId, dbListType, (short)start, (short)end);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("[GmService] inventory sort after delete failed: " + ex.Message);
-                return false;
-            }
-        }
-
-        private static bool TryGetSortRange(
-            InventoryListType listType,
-            int slot,
-            out InventoryListType dbListType,
-            out int start,
-            out int end)
-        {
-            dbListType = listType;
-            start = 0;
-            end = -1;
-
-            switch (dbListType)
-            {
-                case InventoryListType.Main:
-                    if (slot >= 9 && slot <= 64) { start = 9; end = 64; return true; }
-                    if (slot >= 65 && slot <= 120) { start = 65; end = 120; return true; }
-                    if (slot >= 121 && slot <= 176) { start = 121; end = 176; return true; }
-                    if (slot >= 177 && slot <= 232) { start = 177; end = 232; return true; }
-                    if (slot >= 233 && slot <= 288) { start = 233; end = 288; return true; }
-                    return false;
-                case InventoryListType.Pet:
-                    if (slot >= 0 && slot <= 139) { start = 0; end = 139; return true; }
-                    if (slot >= 140 && slot <= 188) { start = 140; end = 188; return true; }
-                    if (slot >= 189 && slot <= 239) { start = 189; end = 239; return true; }
-                    return false;
-                case InventoryListType.Avatar:
-                    if (slot >= 0 && slot <= 209) { start = 0; end = 209; return true; }
-                    return false;
-                case InventoryListType.PersonalCargo:
-                    if (slot >= 0 && slot <= 151) { start = 0; end = 151; return true; }
-                    return false;
-                default:
-                    return false;
-            }
         }
 
         public object GiveItem(
@@ -652,7 +598,6 @@ VALUES (
                     new { value = "quest", label = "任务品" },
                     new { value = "expert-material", label = "副职业材料" },
                     new { value = "avatar-emblem", label = "徽章" },
-                    new { value = "special-material", label = "特殊材料" },
                     new { value = "pet-consumable", label = "宠物消耗品" },
                 };
             }

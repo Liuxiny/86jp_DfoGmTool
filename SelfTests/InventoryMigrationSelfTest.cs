@@ -18,6 +18,7 @@ namespace DfoGmTool.SelfTests
             try
             {
                 TestLegacyToNewAndConflict(root);
+                TestLegacyEquippedUsesFirstFreeBagSlots(root);
                 TestNewToLegacy(root);
                 TestFullBagResidual(root);
                 TestTitleBookBothDirections(root);
@@ -60,6 +61,30 @@ namespace DfoGmTool.SelfTests
             Check("conflict shifts forward", Scalar(db, "SELECT COUNT(*) FROM character_new_items WHERE character_id=1 AND list_type=0 AND slot_index=10;") == 1);
             Check("legacy source cleared", Scalar(db, "SELECT COUNT(*) FROM character_items;") == 0);
             Check("status disables empty legacy source", !report.Status.CanUpgrade && report.Status.CanDowngrade);
+        }
+
+        private static void TestLegacyEquippedUsesFirstFreeBagSlots(string root)
+        {
+            var db = CreateDatabase(root, "legacy-equipped-first-free.db");
+            using (var connection = Open(db))
+            {
+                SeedIdentity(connection);
+                InsertLegacyEquipped(connection, 0, 905000);
+                InsertLegacyEquipped(connection, 11, 905011);
+                InsertLegacyEquipped(connection, 12, 905012);
+                InsertLegacyEquipped(connection, 24, 905024);
+                InsertLegacyEquipped(connection, 25, 905025);
+            }
+
+            var report = Coordinator(db).MigrateLegacyToNew();
+            Check("legacy equipped item kinds fill their bags from the first free slots", report.Success
+                && Scalar(db, "SELECT COUNT(*) FROM character_new_items WHERE character_id=1 AND list_type=1 AND slot_index=0;") == 1
+                && Scalar(db, "SELECT COUNT(*) FROM character_new_items WHERE character_id=1 AND list_type=0 AND slot_index IN(9,10);") == 2
+                && Scalar(db, "SELECT COUNT(*) FROM character_new_items WHERE character_id=1 AND list_type=0 AND slot_index IN(11,12);") == 0
+                && Scalar(db, "SELECT COUNT(*) FROM character_new_items WHERE character_id=1 AND list_type=7 AND slot_index=0;") == 1
+                && Scalar(db, "SELECT COUNT(*) FROM character_new_items WHERE character_id=1 AND list_type=7 AND slot_index=140;") == 1);
+            Check("legacy equipped sources are cleared after first-free migration",
+                Scalar(db, "SELECT COUNT(*) FROM character_equipped_entries WHERE character_id=1;") == 0);
         }
 
         private static void TestNewToLegacy(string root)
@@ -517,6 +542,22 @@ VALUES(1,0,970001,'equipment',1,10000,-1,'{}');");
 VALUES('character',1,1,0,@slot,@item,'equipment',1,10000,'{}');";
             command.Parameters.AddWithValue("@slot", slot);
             command.Parameters.AddWithValue("@item", itemId);
+            command.ExecuteNonQuery();
+        }
+
+        private static void InsertLegacyEquipped(SqliteConnection connection, short slot, int itemId)
+        {
+            var raw = new byte[40];
+            raw[0] = checked((byte)slot);
+            BitConverter.GetBytes(itemId).CopyTo(raw, 1);
+            BitConverter.GetBytes(10000u).CopyTo(raw, 5);
+            using var command = connection.CreateCommand();
+            command.CommandText = @"INSERT INTO character_equipped_entries
+(character_id,slot,item_id,expire_time,equipment_lock_id,raw_entry)
+VALUES(1,@slot,@item,0,0,@raw);";
+            command.Parameters.AddWithValue("@slot", slot);
+            command.Parameters.AddWithValue("@item", itemId);
+            command.Parameters.AddWithValue("@raw", raw);
             command.ExecuteNonQuery();
         }
 

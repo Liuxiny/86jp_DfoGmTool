@@ -31,8 +31,6 @@ namespace DfoGmTool.Services
             new CharacterCloneOption("questItems", "任务品背包", true),
             new CharacterCloneOption("expertMaterials", "副职业材料背包", true),
             new CharacterCloneOption("emblems", "徽章背包", true),
-            new CharacterCloneOption("specialMaterials", "特殊材料背包", true),
-            new CharacterCloneOption("mainOther", "主背包其他槽位", true),
             new CharacterCloneOption("personalCargo", "个人仓库", true),
             new CharacterCloneOption("equipped", "身上装备/称号/穿戴记录", true),
             new CharacterCloneOption("avatars", "装扮栏", true),
@@ -214,6 +212,8 @@ SELECT last_insert_rowid();";
 
                         foreach (var tableName in cloneTables)
                         {
+                            if (tableName.Equals("character_creatures", StringComparison.OrdinalIgnoreCase))
+                                continue;
                             if (tableName.Equals("item_audit_log", StringComparison.OrdinalIgnoreCase))
                             {
                                 CloneGenericTable(conn, tx, tableName, sourceCharacterId, newCharacterId, request.TargetAccountId, null, cloneAudit: true);
@@ -223,9 +223,11 @@ SELECT last_insert_rowid();";
                             CloneGenericTable(conn, tx, tableName, sourceCharacterId, newCharacterId, request.TargetAccountId, null, cloneAudit: false);
                         }
 
-                        CloneSelectedItems(conn, tx, sourceCharacterId, newCharacterId, selected);
+                        var creatureUidMap = CloneSelectedCreatureDetails(conn, tx, sourceCharacterId, newCharacterId, selected);
+                        CloneSelectedItems(conn, tx, sourceCharacterId, newCharacterId, selected, creatureUidMap);
                         CloneSelectedContainerStates(conn, tx, sourceCharacterId, newCharacterId, selected);
                         var strippedEquipmentCount = StripJobRestrictedEquippedItems(conn, tx, newCharacterId, selected);
+                        ValidateClonedInventoryLayout(conn, tx, newCharacterId);
                         ValidateClonedCharacter(conn, tx, newCharacterId, request.TargetAccountId, targetSlotIndex);
 
                         tx.Commit();
@@ -358,12 +360,13 @@ SELECT last_insert_rowid();";
             SqliteTransaction tx,
             int sourceCharacterId,
             int newCharacterId,
-            HashSet<string> selected)
+            HashSet<string> selected,
+            IReadOnlyDictionary<int, int> creatureUidMap)
         {
             if (!TableExists(conn, tx, "character_new_items"))
                 return;
 
-            var ranges = ResolveSelectedItemRanges(selected);
+            var ranges = ResolveSelectedItemRanges(conn, tx, sourceCharacterId, selected);
             if (ranges.Count == 0)
                 return;
 
@@ -385,6 +388,12 @@ SELECT last_insert_rowid();";
                     CloneAvatarDetail(conn, tx, oldAvatarUid, newAvatarUid, newCharacterId);
                     core.Value = newAvatarUid;
                 }
+                else if (core.ItemKind == ItemCore.KindCreature && core.Value > 0)
+                {
+                    if (creatureUidMap == null || !creatureUidMap.TryGetValue(core.Value, out var newCreatureUid))
+                        throw new InvalidOperationException($"复制宠物缺少 UID 映射: source={sourceCharacterId} uid={core.Value}");
+                    core.Value = newCreatureUid;
+                }
 
                 using var insert = conn.CreateCommand();
                 insert.Transaction = tx;
@@ -401,6 +410,108 @@ VALUES('character',@cid,@cid,@list,@slot,@core,CURRENT_TIMESTAMP,CURRENT_TIMESTA
                     throw new InvalidOperationException($"复制新版物品冲突: source={sourceCharacterId} target={newCharacterId} list={listType} slot={slot}", ex);
                 }
             }
+        }
+
+        private static Dictionary<int, int> CloneSelectedCreatureDetails(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int sourceCharacterId,
+            int newCharacterId,
+            HashSet<string> selected)
+        {
+            var result = new Dictionary<int, int>();
+            if (!TableExists(conn, tx, "character_new_items") || !TableExists(conn, tx, "character_creatures"))
+                return result;
+
+            var ranges = ResolveSelectedItemRanges(conn, tx, sourceCharacterId, selected);
+            var referencedUids = new HashSet<int>();
+            foreach (var row in LoadRows(conn, tx, "character_new_items", "character_id = @cid", ("@cid", sourceCharacterId)))
+            {
+                var listType = ToInt(row, "list_type");
+                var slot = ToInt(row, "slot_index");
+                if (!ranges.Any(range => range.Contains(listType, slot)))
+                    continue;
+                if (!(row["item_core"] is byte[] bytes) || bytes.Length != ItemCore.Size)
+                    continue;
+                var core = ItemCore.FromBytes(bytes);
+                if (core.ItemKind == ItemCore.KindCreature && core.Value > 0)
+                    referencedUids.Add(core.Value);
+            }
+
+            var copiedSortOrders = new HashSet<int>();
+            var sourceDetails = LoadRows(conn, tx, "character_creatures", "character_id = @cid", ("@cid", sourceCharacterId));
+            foreach (var row in sourceDetails)
+            {
+                var oldUid = ToInt(row, "creature_key");
+                if (oldUid <= 0 || (!selected.Contains("pets") && !referencedUids.Contains(oldUid)))
+                    continue;
+                var newUid = GetOrAllocateClonedCreatureUid(conn, tx, oldUid, result);
+                var sortOrder = ToInt(row, "sort_order");
+                copiedSortOrders.Add(sortOrder);
+                using var insert = conn.CreateCommand();
+                insert.Transaction = tx;
+                insert.CommandText = @"INSERT INTO character_creatures
+(character_id,sort_order,creature_key,field04,mode_flag,progress_value,mode1_field0a,mode1_field0b,field_after_value,creature_text,tail_flag,extra_json)
+VALUES(@cid,@sort,@uid,@field04,@mode,@progress,@field0a,@field0b,@after,@text,@tail,@extra);";
+                insert.Parameters.AddWithValue("@cid", newCharacterId);
+                insert.Parameters.AddWithValue("@sort", sortOrder);
+                insert.Parameters.AddWithValue("@uid", newUid);
+                insert.Parameters.AddWithValue("@field04", row["field04"] ?? 0);
+                insert.Parameters.AddWithValue("@mode", row["mode_flag"] ?? 0);
+                insert.Parameters.AddWithValue("@progress", row["progress_value"] ?? 0);
+                insert.Parameters.AddWithValue("@field0a", row["mode1_field0a"] ?? 0);
+                insert.Parameters.AddWithValue("@field0b", row["mode1_field0b"] ?? 0);
+                insert.Parameters.AddWithValue("@after", row["field_after_value"] ?? 0);
+                insert.Parameters.AddWithValue("@text", row["creature_text"] ?? DBNull.Value);
+                insert.Parameters.AddWithValue("@tail", row["tail_flag"] ?? 0);
+                insert.Parameters.AddWithValue("@extra", row["extra_json"] ?? "{}");
+                insert.ExecuteNonQuery();
+            }
+
+            var nextSortOrder = copiedSortOrders.Count == 0 ? 0 : copiedSortOrders.Max() + 1;
+            foreach (var oldUid in referencedUids.OrderBy(value => value))
+            {
+                if (result.ContainsKey(oldUid))
+                    continue;
+                var newUid = GetOrAllocateClonedCreatureUid(conn, tx, oldUid, result);
+                while (copiedSortOrders.Contains(nextSortOrder))
+                    nextSortOrder++;
+                using var insert = conn.CreateCommand();
+                insert.Transaction = tx;
+                insert.CommandText = @"INSERT INTO character_creatures
+(character_id,sort_order,creature_key,field04,mode_flag,progress_value,mode1_field0a,mode1_field0b,field_after_value,creature_text,tail_flag,extra_json)
+VALUES(@cid,@sort,@uid,100,0,0,0,0,1,NULL,0,'{}');";
+                insert.Parameters.AddWithValue("@cid", newCharacterId);
+                insert.Parameters.AddWithValue("@sort", nextSortOrder++);
+                insert.Parameters.AddWithValue("@uid", newUid);
+                insert.ExecuteNonQuery();
+            }
+            return result;
+        }
+
+        private static int GetOrAllocateClonedCreatureUid(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int oldUid,
+            IDictionary<int, int> mapping)
+        {
+            if (mapping.TryGetValue(oldUid, out var existing))
+                return existing;
+            using (var ensure = conn.CreateCommand())
+            {
+                ensure.Transaction = tx;
+                ensure.CommandText = @"CREATE TABLE IF NOT EXISTS character_creature_uid_sequence (
+creature_uid INTEGER PRIMARY KEY AUTOINCREMENT);
+INSERT OR IGNORE INTO character_creature_uid_sequence(creature_uid)
+SELECT COALESCE(MAX(creature_key),0) FROM character_creatures WHERE creature_key > 0;";
+                ensure.ExecuteNonQuery();
+            }
+            using var allocate = conn.CreateCommand();
+            allocate.Transaction = tx;
+            allocate.CommandText = "INSERT INTO character_creature_uid_sequence DEFAULT VALUES; SELECT last_insert_rowid();";
+            var newUid = checked((int)Convert.ToInt64(allocate.ExecuteScalar(), CultureInfo.InvariantCulture));
+            mapping[oldUid] = newUid;
+            return newUid;
         }
 
         private static int AllocateClonedAvatarUid(SqliteConnection connection, SqliteTransaction transaction)
@@ -476,7 +587,7 @@ VALUES(@newUid,@cid,@cid,0,0,0,zeroblob(30),0,0,0);";
                 return;
 
             var listTypes = new HashSet<int>();
-            if (selected.Overlaps(new[] { "wallet", "quickSlots", "mainEquipment", "consumables", "materials", "questItems", "expertMaterials", "emblems", "specialMaterials", "mainOther", "equipped" }))
+            if (selected.Overlaps(new[] { "wallet", "quickSlots", "mainEquipment", "consumables", "materials", "questItems", "expertMaterials", "emblems", "equipped" }))
                 listTypes.Add(0);
             if (selected.Contains("avatars") || selected.Contains("equipped"))
                 listTypes.Add(1);
@@ -498,26 +609,85 @@ VALUES(@newUid,@cid,@cid,0,0,0,zeroblob(30),0,0,0);";
             }
         }
 
-        private static List<ItemCloneRange> ResolveSelectedItemRanges(HashSet<string> selected)
+        private static List<ItemCloneRange> ResolveSelectedItemRanges(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            HashSet<string> selected)
         {
             var ranges = new List<ItemCloneRange>();
+            var mainExpandStage = LoadCloneContainerListParam(connection, transaction, characterId, 0, 24);
+            if (mainExpandStage != 0 && mainExpandStage != 8 && mainExpandStage != 16 && mainExpandStage != 24)
+                throw new InvalidOperationException($"源角色主背包扩展状态无效: {mainExpandStage}");
+            var personalCargoCapacity = LoadCloneContainerListParam(connection, transaction, characterId, 2, 8);
+            personalCargoCapacity = personalCargoCapacity <= 0 ? 8 : Math.Min(personalCargoCapacity, 152);
+            var exEquipSlotStat = LoadCloneExtraEquipmentSlotStat(connection, transaction, characterId);
+
             if (selected.Contains("wallet")) ranges.Add(new ItemCloneRange(0, 0, 2));
-            if (selected.Contains("quickSlots")) ranges.Add(new ItemCloneRange(29, 0, 5));
-            if (selected.Contains("mainEquipment")) ranges.Add(new ItemCloneRange(0, 9, 64));
-            if (selected.Contains("consumables")) ranges.Add(new ItemCloneRange(0, 65, 120));
-            if (selected.Contains("materials")) ranges.Add(new ItemCloneRange(0, 121, 176));
-            if (selected.Contains("questItems")) ranges.Add(new ItemCloneRange(0, 177, 232));
-            if (selected.Contains("expertMaterials")) ranges.Add(new ItemCloneRange(0, 233, 288));
-            if (selected.Contains("emblems")) ranges.Add(new ItemCloneRange(0, 289, 344));
-            if (selected.Contains("specialMaterials")) ranges.Add(new ItemCloneRange(0, 345, 353));
-            if (selected.Contains("mainOther")) ranges.Add(new ItemCloneRange(0, 360, short.MaxValue));
-            if (selected.Contains("personalCargo")) ranges.Add(new ItemCloneRange(2, 0, 151));
+            if (selected.Contains("quickSlots")) ranges.Add(new ItemCloneRange(0, 3, 8));
+            if (selected.Contains("mainEquipment")) ranges.Add(new ItemCloneRange(0, 9, GetExpandedCloneMainEnd(64, mainExpandStage)));
+            if (selected.Contains("consumables")) ranges.Add(new ItemCloneRange(0, 65, GetExpandedCloneMainEnd(120, mainExpandStage)));
+            if (selected.Contains("materials")) ranges.Add(new ItemCloneRange(0, 121, GetExpandedCloneMainEnd(176, mainExpandStage)));
+            if (selected.Contains("questItems")) ranges.Add(new ItemCloneRange(0, 177, GetExpandedCloneMainEnd(232, mainExpandStage)));
+            if (selected.Contains("expertMaterials")) ranges.Add(new ItemCloneRange(0, 233, GetExpandedCloneMainEnd(288, mainExpandStage)));
+            if (selected.Contains("emblems")) ranges.Add(new ItemCloneRange(0, 289, 351));
+            if (selected.Contains("personalCargo")) ranges.Add(new ItemCloneRange(2, 0, personalCargoCapacity - 1));
             if (selected.Contains("avatars")) ranges.Add(new ItemCloneRange(1, 0, 209));
-            if (selected.Contains("equipped")) ranges.Add(new ItemCloneRange(3, 0, short.MaxValue));
+            if (selected.Contains("equipped"))
+            {
+                ranges.Add(new ItemCloneRange(3, 0, 20));
+                for (var slot = 21; slot <= 23; slot++)
+                    if ((exEquipSlotStat & (1 << (slot - 21))) != 0)
+                        ranges.Add(new ItemCloneRange(3, slot, slot));
+                ranges.Add(new ItemCloneRange(3, 24, 27));
+                ranges.Add(new ItemCloneRange(3, 29, 29));
+            }
             if (selected.Contains("pets")) ranges.Add(new ItemCloneRange(7, 0, 139));
             if (selected.Contains("petEquipment")) ranges.Add(new ItemCloneRange(7, 140, 188));
             if (selected.Contains("petConsumables")) ranges.Add(new ItemCloneRange(7, 189, 239));
             return ranges;
+        }
+
+        private static int LoadCloneContainerListParam(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int listType,
+            int defaultValue)
+        {
+            if (!TableExists(connection, transaction, "character_container_state"))
+                return defaultValue;
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"SELECT list_param16
+FROM character_container_state
+WHERE character_id=@cid AND list_type=@listType;";
+            command.Parameters.AddWithValue("@cid", characterId);
+            command.Parameters.AddWithValue("@listType", listType);
+            var value = command.ExecuteScalar();
+            return value == null || value == DBNull.Value
+                ? defaultValue
+                : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+
+        private static int LoadCloneExtraEquipmentSlotStat(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "SELECT ex_equip_slot_stat FROM characters WHERE character_id=@cid;";
+            command.Parameters.AddWithValue("@cid", characterId);
+            var value = command.ExecuteScalar();
+            return value == null || value == DBNull.Value
+                ? 0
+                : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+
+        private static int GetExpandedCloneMainEnd(int fullEnd, int mainExpandStage)
+        {
+            return fullEnd - (24 - mainExpandStage);
         }
 
         private static string BuildCharacterTableWhere(List<string> columns, string tableName)

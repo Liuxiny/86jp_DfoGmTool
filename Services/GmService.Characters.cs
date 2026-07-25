@@ -404,12 +404,12 @@ WHERE character_id = @cid;";
                     if (level < 70)
                     {
                         tx.Rollback();
-                        return Error("角色等级达到 70 级后才能开启左右槽");
+                        return Error("角色等级达到 70 级后才能开启特殊装备槽");
                     }
-                    if (exEquipSlotStat == 3)
+                    if ((exEquipSlotStat & 7) == 7)
                     {
                         tx.Rollback();
-                        return Error("左右槽已经开启");
+                        return Error("特殊装备槽已经全部开启");
                     }
 
                     var cleared = QuestRepository.LoadClearedFlags(conn, tx, characterId);
@@ -443,13 +443,13 @@ WHERE character_id = @cid;";
                         cmd.Transaction = tx;
                         cmd.CommandText = @"
 UPDATE characters
-SET ex_equip_slot_stat = 3
+SET ex_equip_slot_stat = 7
 WHERE character_id = @cid;";
                         cmd.Parameters.AddWithValue("@cid", characterId);
                         if (cmd.ExecuteNonQuery() == 0)
                         {
                             tx.Rollback();
-                            return Error("开启左右槽失败");
+                            return Error("开启特殊装备槽失败");
                         }
                     }
 
@@ -458,7 +458,7 @@ WHERE character_id = @cid;";
             }
 
             if (completedQuestIds != null)
-                return new { success = true, characterId, exEquipSlotStat = 3, completedQuestIds };
+                return new { success = true, characterId, exEquipSlotStat = 7, completedQuestIds };
 
             if (!TryGetAccountId(characterId, out _))
                 return Error("角色不存在: " + characterId);
@@ -469,14 +469,14 @@ WHERE character_id = @cid;";
                 conn.Open();
                 cmd.CommandText = @"
 UPDATE characters
-SET ex_equip_slot_stat = 3
+SET ex_equip_slot_stat = 7
 WHERE character_id = @cid;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 if (cmd.ExecuteNonQuery() == 0)
-                    return Error("开启左右槽失败");
+                    return Error("开启特殊装备槽失败");
             }
 
-            return new { success = true, characterId, exEquipSlotStat = 3 };
+            return new { success = true, characterId, exEquipSlotStat = 7 };
         }
 
         public object UnlockDungeonPermissions(int characterId, PvfIndexService pvfIndex)
@@ -576,7 +576,9 @@ WHERE character_id = @cid;";
 
                     var deletedQuestRows = 0;
                     var deletedAuditRows = 0;
+                    var deletedInventoryAuditV2Rows = 0;
                     var deletedItemRows = 0;
+                    var deletedAvatarDetailRows = 0;
                     var deletedAccountEntryRows = 0;
                     var updatedTemplateRows = 0;
                     var replacementSeedCharacterId = ResolveReplacementSeedCharacterId(conn, tx, accountId, characterId);
@@ -591,6 +593,20 @@ WHERE character_id = @cid;";
 DELETE FROM item_audit_log
 WHERE character_id = @cid
    OR (owner_scope = 'character' AND owner_id = @cid);",
+                            ("@cid", characterId));
+
+                    if (TableExists(conn, tx, "inventory_audit_log_v2"))
+                        deletedInventoryAuditV2Rows = ExecuteNonQuery(conn, tx, @"
+DELETE FROM inventory_audit_log_v2
+WHERE character_id = @cid
+   OR (owner_scope = 'character' AND owner_id = @cid);",
+                            ("@cid", characterId));
+
+                    if (TableExists(conn, tx, "character_avatar_detail"))
+                        deletedAvatarDetailRows = ExecuteNonQuery(conn, tx, @"
+DELETE FROM character_avatar_detail
+WHERE character_id = @cid
+   OR owner_id = @cid;",
                             ("@cid", characterId));
 
                     if (TableExists(conn, tx, "character_new_items"))
@@ -662,7 +678,9 @@ WHERE seed_character_id = @cid
                         name,
                         deletedQuestRows,
                         deletedAuditRows,
+                        deletedInventoryAuditV2Rows,
                         deletedItemRows,
+                        deletedAvatarDetailRows,
                         deletedAccountEntryRows,
                         updatedTemplateRows,
                         replacementSeedCharacterId,

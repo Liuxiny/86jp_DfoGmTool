@@ -38,7 +38,6 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     /// </summary>
     public sealed class NewInventoryStore
     {
-        private const int MainPhysicalExpandStage = 24;
         private readonly string _connectionString;
 
         public NewInventoryStore(string databasePath, string schemaFilePath)
@@ -180,6 +179,11 @@ WHERE owner_scope='character' AND owner_id=@owner AND list_type=@list AND slot_i
             result.ListType = listType;
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction();
+            if (!TryGetCharacterOpenRange(
+                    connection, transaction, characterId, itemKind,
+                    out listType, out start, out end, out var rangeError))
+                return Fail(result, rangeError);
+            result.ListType = listType;
 
             if (!TryResolveExpiration(itemTemplateId, metadata, options, itemKind == ItemCore.KindAvatar, out var expireTime, out var expireError))
                 return Fail(result, expireError);
@@ -389,6 +393,8 @@ WHERE owner_scope='character' AND owner_id=@cid AND list_type=0 AND slot_index I
                 error = "目标槽位没有物品";
                 return false;
             }
+            if (!TryValidateOpenItemSlot(connection, transaction, characterId, accountId, record, out error))
+                return false;
             var before = record.Core.Copy();
             error = mutate?.Invoke(record.Core);
             if (!string.IsNullOrEmpty(error))
@@ -410,6 +416,8 @@ WHERE owner_scope='character' AND owner_id=@cid AND list_type=0 AND slot_index I
                 error = "目标槽位不是时装";
                 return false;
             }
+            if (!TryValidateOpenItemSlot(connection, transaction, characterId, accountId, record, out error))
+                return false;
             var before = record.Core.Copy();
             if (abilityNo.HasValue)
                 record.Core.AbilityNo = abilityNo.Value;
@@ -735,6 +743,242 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
                 case ItemCore.KindCreatureConsumable: list = InventoryListType.Pet; start = 189; end = 239; return true;
                 default: return false;
             }
+        }
+
+        internal static bool TryGetCharacterOpenRange(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte kind,
+            out InventoryListType list,
+            out short start,
+            out short end,
+            out string error)
+        {
+            error = null;
+            if (!TryGetRange(kind, out list, out start, out end))
+            {
+                error = "物品类型没有可用背包范围";
+                return false;
+            }
+
+            if (list != InventoryListType.Main)
+                return true;
+
+            var stage = LoadCharacterListParam(connection, transaction, characterId, InventoryListType.Main, 24);
+            if (stage != 0 && stage != 8 && stage != 16 && stage != 24)
+            {
+                error = "角色主背包扩展状态无效: " + stage;
+                return false;
+            }
+            end = checked((short)(end - (24 - stage)));
+            return true;
+        }
+
+        internal static bool TryFindFirstFreeCharacterBagSlot(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte kind,
+            out InventoryListType list,
+            out short rangeStart,
+            out short destinationSlot,
+            out string error)
+            => TryFindFirstFreeCharacterBagSlot(
+                connection, transaction, characterId, kind, "character_new_items",
+                out list, out rangeStart, out destinationSlot, out error);
+
+        internal static bool TryFindFirstFreeLegacyCharacterBagSlot(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte kind,
+            out InventoryListType list,
+            out short rangeStart,
+            out short destinationSlot,
+            out string error)
+            => TryFindFirstFreeCharacterBagSlot(
+                connection, transaction, characterId, kind, "character_items",
+                out list, out rangeStart, out destinationSlot, out error);
+
+        private static bool TryFindFirstFreeCharacterBagSlot(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte kind,
+            string itemTable,
+            out InventoryListType list,
+            out short rangeStart,
+            out short destinationSlot,
+            out string error)
+        {
+            destinationSlot = -1;
+            if (!TryGetCharacterOpenRange(
+                    connection, transaction, characterId, kind,
+                    out list, out rangeStart, out var rangeEnd, out error))
+                return false;
+
+            var occupied = new HashSet<int>();
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = $@"SELECT slot_index FROM {itemTable}
+WHERE owner_scope='character'
+  AND COALESCE(character_id,owner_id)=@cid
+  AND list_type=@list
+  AND slot_index BETWEEN @start AND @end;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@list", (int)list);
+                command.Parameters.AddWithValue("@start", rangeStart);
+                command.Parameters.AddWithValue("@end", rangeEnd);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    occupied.Add(reader.GetInt32(0));
+            }
+
+            for (var slot = (int)rangeStart; slot <= rangeEnd; slot++)
+            {
+                if (occupied.Contains(slot))
+                    continue;
+                destinationSlot = checked((short)slot);
+                error = null;
+                return true;
+            }
+
+            error = $"{list} 背包已满";
+            return false;
+        }
+
+        internal static short GetPersonalCargoOpenEnd(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            var capacity = LoadCharacterListParam(connection, transaction, characterId, InventoryListType.PersonalCargo, 8);
+            capacity = capacity <= 0 ? 8 : Math.Min(capacity, 152);
+            return checked((short)(capacity - 1));
+        }
+
+        private static bool TryValidateOpenItemSlot(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int accountId,
+            NewInventoryItemRecord record,
+            out string error)
+        {
+            error = null;
+            var slot = record.SlotIndex;
+            switch (record.ListType)
+            {
+                case InventoryListType.Main:
+                    if (slot >= 0 && slot <= 2)
+                        return record.Core.ItemKind == ItemCore.KindSpecialMaterial
+                            || FailSlotValidation("货币槽物品类型不匹配", out error);
+                    if (slot >= 3 && slot <= 8)
+                        return true;
+                    if (TryGetCharacterOpenRange(connection, transaction, characterId, record.Core.ItemKind,
+                            out var expectedList, out var start, out var end, out error)
+                        && expectedList == InventoryListType.Main
+                        && slot >= start && slot <= end)
+                        return true;
+                    return FailSlotValidation(error ?? "物品不在该角色已开放的主背包区间", out error);
+
+                case InventoryListType.Avatar:
+                    return record.Core.ItemKind == ItemCore.KindAvatar && slot >= 0 && slot <= 209
+                        || FailSlotValidation("时装不在有效时装栏区间", out error);
+
+                case InventoryListType.PersonalCargo:
+                    return slot >= 0 && slot <= GetPersonalCargoOpenEnd(connection, transaction, characterId)
+                        || FailSlotValidation("物品位于未开放的个人仓库格子", out error);
+
+                case InventoryListType.Pet:
+                    if (record.Core.ItemKind == ItemCore.KindCreature) return slot >= 0 && slot <= 139 || FailSlotValidation("宠物槽位不匹配", out error);
+                    if (record.Core.ItemKind == ItemCore.KindCreatureEquipment) return slot >= 140 && slot <= 188 || FailSlotValidation("宠物装备槽位不匹配", out error);
+                    if (record.Core.ItemKind == ItemCore.KindCreatureConsumable) return slot >= 189 && slot <= 239 || FailSlotValidation("宠物用品槽位不匹配", out error);
+                    return FailSlotValidation("宠物背包物品类型无效", out error);
+
+                case InventoryListType.Equipment:
+                    if (slot >= 0 && slot <= 10)
+                        return record.Core.ItemKind == ItemCore.KindAvatar || FailSlotValidation("穿戴时装槽物品类型不匹配", out error);
+                    if (slot >= 11 && slot <= 20 || slot == 29)
+                        return record.Core.ItemKind == ItemCore.KindEquipment || FailSlotValidation("穿戴装备槽物品类型不匹配", out error);
+                    if (slot >= 21 && slot <= 23)
+                    {
+                        var flags = LoadExtraEquipmentSlotStat(connection, transaction, characterId);
+                        return record.Core.ItemKind == ItemCore.KindEquipment
+                            && (flags & (1 << (slot - 21))) != 0
+                            || FailSlotValidation("特殊装备槽尚未开放或物品类型不匹配", out error);
+                    }
+                    if (slot == 24)
+                        return record.Core.ItemKind == ItemCore.KindCreature || FailSlotValidation("穿戴宠物槽物品类型不匹配", out error);
+                    if (slot >= 25 && slot <= 27)
+                        return record.Core.ItemKind == ItemCore.KindCreatureEquipment || FailSlotValidation("穿戴宠物装备槽物品类型不匹配", out error);
+                    return FailSlotValidation("穿戴槽位无效", out error);
+
+                case InventoryListType.AccountCargo:
+                    var capacity = LoadAccountCargoCapacity(connection, transaction, accountId);
+                    return slot >= 0 && slot < capacity
+                        || FailSlotValidation("物品位于未开放的账号仓库格子", out error);
+
+                default:
+                    return FailSlotValidation("该物品列表不支持配置", out error);
+            }
+        }
+
+        private static bool FailSlotValidation(string message, out string error)
+        {
+            error = message;
+            return false;
+        }
+
+        private static int LoadCharacterListParam(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryListType listType,
+            int defaultValue)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"SELECT list_param16 FROM character_container_state
+WHERE character_id=@cid AND list_type=@list LIMIT 1;";
+            command.Parameters.AddWithValue("@cid", characterId);
+            command.Parameters.AddWithValue("@list", (int)listType);
+            var value = command.ExecuteScalar();
+            return value == null || value == DBNull.Value
+                ? defaultValue
+                : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+
+        private static int LoadExtraEquipmentSlotStat(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "SELECT ex_equip_slot_stat FROM characters WHERE character_id=@cid;";
+            command.Parameters.AddWithValue("@cid", characterId);
+            var value = command.ExecuteScalar();
+            return value == null || value == DBNull.Value
+                ? 0
+                : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+
+        private static int LoadAccountCargoCapacity(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int accountId)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "SELECT selection_key FROM account_cargo_state WHERE account_id=@aid;";
+            command.Parameters.AddWithValue("@aid", accountId);
+            var value = command.ExecuteScalar();
+            if (value == null || value == DBNull.Value)
+                return 0;
+            return Math.Max(0, Math.Min(Convert.ToInt32(value, CultureInfo.InvariantCulture), 64));
         }
 
         private SqliteConnection OpenConnection()

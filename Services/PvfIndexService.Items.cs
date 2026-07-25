@@ -90,7 +90,7 @@ namespace DfoGmTool.Services
                 return "消耗品";
             var st = stackableType.Replace("`", "").Trim().ToLowerInvariant();
             if (st.StartsWith("[material]"))
-                return st.EndsWith("4") ? "特殊材料" : "材料";
+                return "材料";
             if (st.StartsWith("[quest]"))
                 return "任务品";
             if (st.StartsWith("[material expert job]"))

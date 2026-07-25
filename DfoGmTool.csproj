@@ -4,6 +4,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <!-- dist 是发布输出目录，必须排除默认项目项，避免再次发布时递归打包旧产物。 -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);dist\**;.tmp\**</DefaultItemExcludes>
   </PropertyGroup>
   <!-- 发布件不带调试符号 -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

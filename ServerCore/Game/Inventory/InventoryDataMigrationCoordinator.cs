@@ -119,17 +119,20 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     continue;
                 }
 
-                if (!TryResolveUnequippedRange(equipped.SlotIndex, out var targetList, out var start, out var end, out var itemKind))
+                if (!ItemSlotBoundService.TryResolveItemKindForMigration(
+                        InventoryListType.Equipment, equipped.SlotIndex, equipped.ItemTemplateId, out var itemKind))
                 {
                     AddResidual(connection, transaction, report, equipped.CharacterId, InventoryListType.Equipment, equipped.SlotIndex, 1, "穿戴槽位无法映射到背包");
                     continue;
                 }
                 var fields = MakeEquipListCodec.ParseDisplayFields(equipped.RawEntry);
                 var core = LegacyItemCoreConverter.BuildCoreFromEquippedEntry(equipped, itemKind, fields);
-                var slot = AllocateTargetSlot(occupied, equipped.CharacterId, targetList, equipped.SlotIndex, start, end);
-                if (slot < 0)
+                if (!NewInventoryStore.TryFindFirstFreeCharacterBagSlot(
+                        connection, transaction, equipped.CharacterId, itemKind,
+                        out var targetList, out var start, out var slot, out var destinationError))
                 {
-                    AddResidual(connection, transaction, report, equipped.CharacterId, targetList, start, 1, "背包已满，穿戴物品无法卸下");
+                    AddResidual(connection, transaction, report, equipped.CharacterId, targetList, start, 1,
+                        "穿戴物品无法卸下：" + destinationError);
                     continue;
                 }
                 if (core.ItemKind == ItemCore.KindAvatar)
@@ -138,10 +141,10 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     core.AvatarUid = checked((int)uid);
                     InsertAvatarDetail(connection, transaction, LegacyItemCoreConverter.BuildAvatarDetailFromEquippedEntry(equipped, uid, fields));
                 }
-                InsertNewCharacterItem(connection, transaction, equipped.CharacterId, targetList, (short)slot, core);
-                UpdateLock(connection, transaction, equipped.CharacterId, core.EquipmentLockId, targetList, (short)slot);
+                InsertNewCharacterItem(connection, transaction, equipped.CharacterId, targetList, slot, core);
+                UpdateLock(connection, transaction, equipped.CharacterId, core.EquipmentLockId, targetList, slot);
                 DeleteLegacyEquipped(connection, transaction, equipped.CharacterId, equipped.SlotIndex);
-                MarkOccupied(occupied, equipped.CharacterId, targetList, (short)slot);
+                MarkOccupied(occupied, equipped.CharacterId, targetList, slot);
                 report.MigratedItems++;
             }
 
@@ -159,7 +162,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     continue;
                 }
                 var core = LegacyItemCoreConverter.BuildCoreFromCharacterItem(row);
-                if (!TryResolveTargetRange(row.ListType, row.SlotIndex, core.ItemKind, out var targetList, out var start, out var end))
+                if (!TryResolveTargetRange(connection, transaction, row.CharacterId, row.ListType, row.SlotIndex, core.ItemKind, out var targetList, out var start, out var end))
                 {
                     AddResidual(connection, transaction, report, row.CharacterId, row.ListType, row.SlotIndex, 1, "物品类型或槽位无法映射");
                     continue;
@@ -211,11 +214,12 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 if (row.CharacterId > 0) touched.Add(row.CharacterId);
                 var core = LegacyItemCoreConverter.BuildCoreFromAccountCargoItem(row);
+                var cargoEnd = GetAccountCargoMigrationOpenEnd(connection, transaction, row.AccountId);
                 if (InventoryStackRuleService.IsStackable(core))
                 {
                     if (!TryMigrateStackableToNewCargo(
                             connection, transaction, cargoOccupied, newCargoTargets,
-                            row.AccountId, row.CharacterId, row.SlotIndex, core,
+                            row.AccountId, row.CharacterId, row.SlotIndex, cargoEnd, core,
                             out var requiredFreeSlots, out var stackError))
                     {
                         AddResidual(connection, transaction, report, row.CharacterId, InventoryListType.AccountCargo, 0,
@@ -226,13 +230,14 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     report.MigratedItems++;
                     continue;
                 }
-                if (HasMatchingNewAccountCargo(connection, transaction, row.AccountId, row.SlotIndex, row.ItemTemplateId))
+                if (row.SlotIndex >= 0 && row.SlotIndex <= cargoEnd
+                    && HasMatchingNewAccountCargo(connection, transaction, row.AccountId, row.SlotIndex, row.ItemTemplateId))
                 {
                     DeleteLegacyAccountCargoItem(connection, transaction, row.ItemUid);
                     report.MigratedItems++;
                     continue;
                 }
-                var slot = AllocateAccountCargoSlot(cargoOccupied, row.AccountId, row.SlotIndex);
+                var slot = AllocateAccountCargoSlot(cargoOccupied, row.AccountId, row.SlotIndex, cargoEnd);
                 if (slot < 0)
                 {
                     AddResidual(connection, transaction, report, row.CharacterId, InventoryListType.AccountCargo, 0, 1, "账号仓库已满", row.AccountId);
@@ -252,20 +257,17 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             foreach (var row in LoadNewCharacterItems(connection, transaction).Where(x => x.ListType == InventoryListType.Equipment).OrderBy(x => x.CharacterId).ThenBy(x => x.SlotIndex))
             {
                 touched.Add(row.CharacterId);
-                if (!TryGetDefaultRange(row.Core.ItemKind, out var targetList, out var start, out var end))
+                if (!NewInventoryStore.TryFindFirstFreeCharacterBagSlot(
+                        connection, transaction, row.CharacterId, row.Core.ItemKind,
+                        out var targetList, out var start, out var slot, out var destinationError))
                 {
-                    AddResidual(connection, transaction, report, row.CharacterId, InventoryListType.Equipment, row.SlotIndex, 1, "穿戴物品无法映射到新版背包");
+                    AddResidual(connection, transaction, report, row.CharacterId, targetList, start, 1,
+                        "穿戴物品无法映射到新版背包：" + destinationError);
                     continue;
                 }
-                var slot = AllocateTargetSlot(newOccupied, row.CharacterId, targetList, start, start, end);
-                if (slot < 0)
-                {
-                    AddResidual(connection, transaction, report, row.CharacterId, targetList, start, 1, "新版背包已满，穿戴物品无法卸下");
-                    continue;
-                }
-                MoveNewCharacterItem(connection, transaction, row.ItemUid, targetList, (short)slot);
-                UpdateLock(connection, transaction, row.CharacterId, row.Core.EquipmentLockId, targetList, (short)slot);
-                MarkOccupied(newOccupied, row.CharacterId, targetList, (short)slot);
+                MoveNewCharacterItem(connection, transaction, row.ItemUid, targetList, slot);
+                UpdateLock(connection, transaction, row.CharacterId, row.Core.EquipmentLockId, targetList, slot);
+                MarkOccupied(newOccupied, row.CharacterId, targetList, slot);
             }
 
             var legacyOccupied = LoadLegacyOccupied(connection, transaction);
@@ -273,7 +275,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             foreach (var row in LoadNewCharacterItems(connection, transaction).Where(x => x.ListType != InventoryListType.Equipment).OrderBy(x => x.CharacterId).ThenBy(x => x.ListType).ThenBy(x => x.SlotIndex).ThenBy(x => x.ItemUid))
             {
                 touched.Add(row.CharacterId);
-                if (!TryResolveTargetRange(row.ListType, row.SlotIndex, row.Core.ItemKind, out var targetList, out var start, out var end))
+                if (!TryResolveTargetRange(connection, transaction, row.CharacterId, row.ListType, row.SlotIndex, row.Core.ItemKind, out var targetList, out var start, out var end))
                 {
                     AddResidual(connection, transaction, report, row.CharacterId, row.ListType, row.SlotIndex, 1, "物品类型或槽位无法映射到旧版");
                     continue;
@@ -318,11 +320,12 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             foreach (var row in LoadNewAccountCargoItems(connection, transaction).OrderBy(x => x.AccountId).ThenBy(x => x.SlotIndex).ThenBy(x => x.ItemUid))
             {
                 if (row.CharacterId > 0) touched.Add(row.CharacterId);
+                var cargoEnd = GetAccountCargoMigrationOpenEnd(connection, transaction, row.AccountId);
                 if (InventoryStackRuleService.IsStackable(row.Core))
                 {
                     if (!TryMigrateStackableToLegacyCargo(
                             connection, transaction, legacyCargoOccupied, legacyCargoTargets,
-                            row.AccountId, row.CharacterId, row.SlotIndex, row.Core,
+                            row.AccountId, row.CharacterId, row.SlotIndex, cargoEnd, row.Core,
                             out var requiredFreeSlots, out var stackError))
                     {
                         AddResidual(connection, transaction, report, row.CharacterId, InventoryListType.AccountCargo, 0,
@@ -333,13 +336,14 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     report.MigratedItems++;
                     continue;
                 }
-                if (HasMatchingLegacyAccountCargo(connection, transaction, row.AccountId, row.SlotIndex, row.Core.ItemId))
+                if (row.SlotIndex >= 0 && row.SlotIndex <= cargoEnd
+                    && HasMatchingLegacyAccountCargo(connection, transaction, row.AccountId, row.SlotIndex, row.Core.ItemId))
                 {
                     DeleteNewAccountCargoItem(connection, transaction, row.ItemUid);
                     report.MigratedItems++;
                     continue;
                 }
-                var slot = AllocateAccountCargoSlot(legacyCargoOccupied, row.AccountId, row.SlotIndex);
+                var slot = AllocateAccountCargoSlot(legacyCargoOccupied, row.AccountId, row.SlotIndex, cargoEnd);
                 if (slot < 0)
                 {
                     AddResidual(connection, transaction, report, row.CharacterId, InventoryListType.AccountCargo, 0, 1, "旧版账号仓库已满", row.AccountId);
@@ -560,11 +564,25 @@ VALUES(@cid,1,@g,@s,@p,@d,@e,CURRENT_TIMESTAMP);",
             items[(category, slot)] = core;
         }
 
-        private static bool TryResolveTargetRange(InventoryListType sourceList, short sourceSlot, byte itemKind, out InventoryListType targetList, out short start, out short end)
+        private static bool TryResolveTargetRange(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryListType sourceList,
+            short sourceSlot,
+            byte itemKind,
+            out InventoryListType targetList,
+            out short start,
+            out short end)
         {
             targetList = sourceList;
             start = end = 0;
-            if (sourceList == InventoryListType.PersonalCargo) { start = 0; end = 151; return true; }
+            if (sourceList == InventoryListType.PersonalCargo)
+            {
+                start = 0;
+                end = NewInventoryStore.GetPersonalCargoOpenEnd(connection, transaction, characterId);
+                return true;
+            }
             if (sourceList == InventoryListType.Avatar) { start = 0; end = 209; return true; }
             if (sourceList == InventoryListType.Pet)
             {
@@ -574,23 +592,20 @@ VALUES(@cid,1,@g,@s,@p,@d,@e,CURRENT_TIMESTAMP);",
             }
             if (sourceList == InventoryListType.Main && sourceSlot >= 0 && sourceSlot <= 2) { start=sourceSlot; end=sourceSlot; return true; }
             if (sourceList == InventoryListType.Main && sourceSlot >= 3 && sourceSlot <= 8) { start=3; end=8; return true; }
-            return TryGetDefaultRange(itemKind, out targetList, out start, out end);
+            return TryGetDefaultRange(connection, transaction, characterId, itemKind, out targetList, out start, out end);
         }
 
-        private static bool TryGetDefaultRange(byte kind, out InventoryListType list, out short start, out short end)
-            => NewInventoryStore.TryGetRange(kind, out list, out start, out end);
-
-        private static bool TryResolveUnequippedRange(short equippedSlot, out InventoryListType list, out short start, out short end, out byte kind)
-        {
-            list = InventoryListType.Main;
-            start = end = 0;
-            kind = equippedSlot <= 10 ? ItemCore.KindAvatar
-                : equippedSlot <= 23 || equippedSlot == 29 ? ItemCore.KindEquipment
-                : equippedSlot == 24 ? ItemCore.KindCreature
-                : equippedSlot >= 25 && equippedSlot <= 27 ? ItemCore.KindCreatureEquipment
-                : ItemCore.KindUnknown;
-            return kind != ItemCore.KindUnknown && TryGetDefaultRange(kind, out list, out start, out end);
-        }
+        private static bool TryGetDefaultRange(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte kind,
+            out InventoryListType list,
+            out short start,
+            out short end)
+            => NewInventoryStore.TryGetCharacterOpenRange(
+                connection, transaction, characterId, kind,
+                out list, out start, out end, out _);
 
         private static Dictionary<(int CharacterId, InventoryListType List), HashSet<short>> LoadNewOccupied(SqliteConnection connection, SqliteTransaction transaction)
             => LoadOccupied(connection, transaction, "SELECT COALESCE(character_id,owner_id),list_type,slot_index FROM character_new_items WHERE owner_scope='character';");
@@ -635,12 +650,45 @@ VALUES(@cid,1,@g,@s,@p,@d,@e,CURRENT_TIMESTAMP);",
             return result;
         }
 
-        private static int AllocateAccountCargoSlot(Dictionary<int,HashSet<short>> occupied,int accountId,short preferred)
+        private static int AllocateAccountCargoSlot(Dictionary<int,HashSet<short>> occupied,int accountId,short preferred,short end)
         {
+            if (end < 0) return -1;
             if(!occupied.TryGetValue(accountId,out var slots)) slots=new HashSet<short>();
-            for(var slot=Math.Max(0,(int)preferred);slot<=63;slot++) if(!slots.Contains((short)slot)) return slot;
-            for(var slot=0;slot<Math.Max(0,(int)preferred);slot++) if(!slots.Contains((short)slot)) return slot;
+            var first=Math.Max(0,(int)preferred);
+            for(var slot=first;slot<=end;slot++) if(!slots.Contains((short)slot)) return slot;
+            for(var slot=0;slot<Math.Min(first,end+1);slot++) if(!slots.Contains((short)slot)) return slot;
             return -1;
+        }
+
+        private static short GetAccountCargoMigrationOpenEnd(SqliteConnection connection, SqliteTransaction transaction, int accountId)
+        {
+            using (var state = connection.CreateCommand())
+            {
+                state.Transaction = transaction;
+                state.CommandText = "SELECT selection_key FROM account_cargo_state WHERE account_id=@aid;";
+                state.Parameters.AddWithValue("@aid", accountId);
+                var value = state.ExecuteScalar();
+                if (value != null && value != DBNull.Value)
+                {
+                    var capacity = Math.Max(0, Math.Min(Convert.ToInt32(value, CultureInfo.InvariantCulture), 64));
+                    return checked((short)(capacity - 1));
+                }
+            }
+
+            // 旧库可能已有仓库物品却没有状态行。迁移时只保留已有数据实际占用到的范围，
+            // 不把缺失状态误当成已开放 64 格。
+            using var occupied = connection.CreateCommand();
+            occupied.Transaction = transaction;
+            occupied.CommandText = @"SELECT MAX(slot_index) FROM (
+SELECT account_id,slot_index FROM account_cargo_items
+UNION ALL
+SELECT account_id,slot_index FROM account_cargo_new_items
+) WHERE account_id=@aid;";
+            occupied.Parameters.AddWithValue("@aid", accountId);
+            var maximum = occupied.ExecuteScalar();
+            return maximum == null || maximum == DBNull.Value
+                ? (short)-1
+                : checked((short)Math.Max(0, Math.Min(Convert.ToInt32(maximum, CultureInfo.InvariantCulture), 63)));
         }
 
         private static void MarkAccountCargoOccupied(Dictionary<int,HashSet<short>> occupied,int accountId,short slot)
@@ -725,7 +773,9 @@ VALUES(@cid,1,@g,@s,@p,@d,@e,CURRENT_TIMESTAMP);",
                 return false;
             }
 
-            var preferredTarget = targets.FirstOrDefault(target => target.SlotIndex == preferred);
+            var preferredTarget = preferred >= start && preferred <= end
+                ? targets.FirstOrDefault(target => target.SlotIndex == preferred)
+                : null;
             if (preferredTarget != null && AreEquivalentStackMirrors(source, preferredTarget.Core))
             {
                 plan = new StackMigrationPlan { IsExactMirror = true };
@@ -839,12 +889,18 @@ VALUES(@cid,1,@g,@s,@p,@d,@e,CURRENT_TIMESTAMP);",
             SqliteConnection connection, SqliteTransaction transaction,
             Dictionary<int, HashSet<short>> occupied,
             List<NewInventoryItemRecord> targets,
-            int accountId, int characterId, short preferred, ItemCore source,
+            int accountId, int characterId, short preferred, short end, ItemCore source,
             out int requiredFreeSlots, out string error)
         {
+            if (end < 0)
+            {
+                requiredFreeSlots = 1;
+                error = "账号仓库未开通";
+                return false;
+            }
             var targetItems = targets.Where(target => target.AccountId == accountId).ToList();
             var slots = GetOccupiedCargoSlots(occupied, accountId);
-            if (!TryBuildStackMigrationPlan(source, preferred, 0, 63, targetItems, slots, out var plan, out requiredFreeSlots, out error))
+            if (!TryBuildStackMigrationPlan(source, preferred, 0, end, targetItems, slots, out var plan, out requiredFreeSlots, out error))
                 return false;
             if (plan.IsExactMirror)
                 return true;
@@ -864,12 +920,18 @@ VALUES(@cid,1,@g,@s,@p,@d,@e,CURRENT_TIMESTAMP);",
             SqliteConnection connection, SqliteTransaction transaction,
             Dictionary<int, HashSet<short>> occupied,
             List<NewInventoryItemRecord> targets,
-            int accountId, int characterId, short preferred, ItemCore source,
+            int accountId, int characterId, short preferred, short end, ItemCore source,
             out int requiredFreeSlots, out string error)
         {
+            if (end < 0)
+            {
+                requiredFreeSlots = 1;
+                error = "账号仓库未开通";
+                return false;
+            }
             var targetItems = targets.Where(target => target.AccountId == accountId).ToList();
             var slots = GetOccupiedCargoSlots(occupied, accountId);
-            if (!TryBuildStackMigrationPlan(source, preferred, 0, 63, targetItems, slots, out var plan, out requiredFreeSlots, out error))
+            if (!TryBuildStackMigrationPlan(source, preferred, 0, end, targetItems, slots, out var plan, out requiredFreeSlots, out error))
                 return false;
             if (plan.IsExactMirror)
                 return true;

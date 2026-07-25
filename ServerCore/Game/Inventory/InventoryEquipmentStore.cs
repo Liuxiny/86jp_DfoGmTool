@@ -80,37 +80,13 @@ WHERE account_id = @accountId;";
             int entryExpireTime,
             byte equipmentLockId)
         {
-            InventoryListType listType;
-            int slotStart;
-            int slotEnd;
-            if (equippedSlot >= 0 && equippedSlot <= 10)
-            {
-                listType = InventoryListType.Avatar;
-                slotStart = 0;
-                slotEnd = 209;
-            }
-            else if (equippedSlot == 24)
-            {
-                listType = InventoryListType.Pet;
-                slotStart = 0;
-                slotEnd = 139;
-            }
-            else if (equippedSlot >= 25 && equippedSlot <= 27)
-            {
-                listType = InventoryListType.Pet;
-                slotStart = 140;
-                slotEnd = 188;
-            }
-            else
-            {
-                listType = InventoryListType.Main;
-                slotStart = 9;
-                slotEnd = 64;
-            }
-
-            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, listType, slotStart, slotEnd);
-            if (targetSlot < 0)
-                throw new InvalidOperationException($"背包没有空位，无法脱下装备 itemId={itemId} equipSlot={equippedSlot}");
+            if (!ItemSlotBoundService.TryResolveItemKindForMigration(
+                    InventoryListType.Equipment, equippedSlot, itemId, out var itemKind))
+                throw new InvalidOperationException($"穿戴槽位无法映射到背包 itemId={itemId} equipSlot={equippedSlot}");
+            if (!NewInventoryStore.TryFindFirstFreeLegacyCharacterBagSlot(
+                    connection, transaction, characterId, itemKind,
+                    out var listType, out _, out var targetSlot, out var destinationError))
+                throw new InvalidOperationException($"背包没有空位，无法脱下穿戴物 itemId={itemId} equipSlot={equippedSlot}: {destinationError}");
 
             if (ItemMetadataResolver.IsCloneAvatarItem(itemId) && entryRaw != null && entryRaw.Length >= 16)
                 Array.Clear(entryRaw, 12, 4);
@@ -163,7 +139,7 @@ WHERE account_id = @accountId;";
                     extraJson: builder.Build().Serialize(), equipmentLockId: equipmentLockId);
             }
 
-            return (listType, (short)targetSlot);
+            return (listType, targetSlot);
         }
     }
 }
