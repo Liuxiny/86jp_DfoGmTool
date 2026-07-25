@@ -63,15 +63,26 @@ ORDER BY c.account_id, c.slot_index, c.character_id;";
             if (!TryGetAccountId(characterId, out accountId))
                 return Error("角色不存在: " + characterId);
 
-            WalletSnapshot wallet;
-            using (var scope = _assetService.OpenScope(characterId, accountId))
-            {
-                wallet = _assetService.LoadWallet(scope);
-            }
+            var wallet = _inventory.LoadWallet(characterId);
 
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
+                var cera = 0;
+                var tokenCera = 0;
+                long luckyStar = 0;
+                using (var currency = conn.CreateCommand())
+                {
+                    currency.CommandText = "SELECT cera,token_cera,lucky_star FROM accounts WHERE account_id=@aid;";
+                    currency.Parameters.AddWithValue("@aid", accountId);
+                    using var currencyReader = currency.ExecuteReader();
+                    if (currencyReader.Read())
+                    {
+                        cera = currencyReader.GetInt32(0);
+                        tokenCera = currencyReader.GetInt32(1);
+                        luckyStar = currencyReader.GetInt64(2);
+                    }
+                }
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
@@ -103,9 +114,9 @@ FROM characters WHERE character_id = @cid;";
                             wallet = new
                             {
                                 gold = wallet.Gold,
-                                cera = wallet.Cera,
-                                tokenCera = wallet.TokenCera,
-                                luckyStar = (int)wallet.LuckyStar,
+                                cera,
+                                tokenCera,
+                                luckyStar,
                             },
                         };
                     }
@@ -582,9 +593,9 @@ WHERE character_id = @cid
    OR (owner_scope = 'character' AND owner_id = @cid);",
                             ("@cid", characterId));
 
-                    if (TableExists(conn, tx, "character_items"))
+                    if (TableExists(conn, tx, "character_new_items"))
                         deletedItemRows = ExecuteNonQuery(conn, tx, @"
-DELETE FROM character_items
+DELETE FROM character_new_items
 WHERE character_id = @cid
    OR (owner_scope = 'character' AND owner_id = @cid);",
                             ("@cid", characterId));

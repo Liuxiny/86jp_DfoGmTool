@@ -11,6 +11,14 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         Equipment = 3,
         Pet = 7,
         AccountCargo = 12,
+        TitleBookGeneral = 19,
+        TitleBookSpecific = 20,
+        TitleBookPvp = 21,
+        TitleBookDespair = 22,
+        TitleBookEvent = 23,
+        QuickSlot = 29,
+        KnightShieldEquipped = 33,
+        KnightShieldCatalog = 34,
     }
 
     // ITEM_LIST/UPDATE_ITEM_LIST 的普通 0x54 entry 协议 DTO。

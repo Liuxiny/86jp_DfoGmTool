@@ -22,7 +22,7 @@ namespace DfoGmTool.Services
             "account_settings",
             "account_premiums",
             "account_cargo_state",
-            "account_cargo_items",
+            "account_cargo_new_items",
             "characters",
             "character_subtype1_fields",
             "character_subtype0_fields",
@@ -34,16 +34,16 @@ namespace DfoGmTool.Services
             "character_dungeon_permissions",
             "character_container_state",
             "character_creatures",
-            "character_equipped_entries",
-            "equipped_items",
+            "character_avatar_detail",
+            "character_new_items",
+            "character_name_tag_state",
             "character_item_values",
             "character_item_locks",
             "character_sort_item_locks",
             "character_hotkey_slots",
             "character_active_quests",
             "character_achievement_complete",
-            "character_titlebook",
-            "character_achievement_chunks",
+            "character_new_titlebook",
             "character_daily_reset",
             "character_daily_counters",
             "character_daily_challenge_groups",
@@ -60,7 +60,6 @@ namespace DfoGmTool.Services
             "character_dimension_flags",
             "character_collectbox_slots",
             "character_mercenary_support",
-            "character_items",
             "item_audit_log",
             "account_character_entries",
         };
@@ -68,9 +67,14 @@ namespace DfoGmTool.Services
         private static readonly Dictionary<string, HashSet<string>> AccountBackupRestoreExcludedColumns =
             new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
             {
-                ["character_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
-                ["account_cargo_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
                 ["item_audit_log"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id", "log_id" },
+            };
+
+        private static readonly HashSet<string> AccountBackupLegacyInventoryTables =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "character_items", "character_equipped_entries", "equipped_items",
+                "account_cargo_items", "character_titlebook", "character_achievement_chunks",
             };
 
         private static readonly HashSet<string> AccountBackupDeprecatedOptionalTables =
@@ -157,6 +161,8 @@ namespace DfoGmTool.Services
                     var restorableDumps = new List<AccountBackupTableDump>();
                     foreach (var dump in file.Tables)
                     {
+                        if (AccountBackupLegacyInventoryTables.Contains(dump.Name))
+                            return Error("备份包含旧版背包表，当前版本仅支持新版背包备份: " + dump.Name);
                         if (!schemaTables.TryGetValue(dump.Name, out var targetTable))
                         {
                             if (AccountBackupDeprecatedOptionalTables.Contains(dump.Name))
@@ -411,6 +417,8 @@ namespace DfoGmTool.Services
             List<int> characterIds,
             List<object> characterNames)
         {
+            if (AccountBackupLegacyInventoryTables.Contains(table.Name))
+                return null;
             var clauses = new List<string>();
             var parameters = new List<(string Name, object Value)>();
 
@@ -609,15 +617,11 @@ namespace DfoGmTool.Services
             List<int> restoringCharacterIds)
         {
             var handles = ExtractBackupPetHandles(tableMap);
-            if (handles.Count == 0 || !TableExists(conn, tx, "character_items"))
-                return new List<long>();
-
-            var columns = LoadAccountBackupColumns(conn, tx, "character_items");
-            if (!columns.ContainsKey("pet_serial_or_handle"))
+            if (handles.Count == 0 || !TableExists(conn, tx, "character_creatures"))
                 return new List<long>();
 
             var parameters = new List<(string Name, object Value)>();
-            var handleClause = BuildInClause("pet_serial_or_handle", handles.Cast<object>().ToList(), parameters, "@petHandle");
+            var handleClause = BuildInClause("creature_key", handles.Cast<object>().ToList(), parameters, "@petHandle");
             var excludeClause = restoringCharacterIds.Count > 0
                 ? " AND NOT (" + BuildInClause("character_id", restoringCharacterIds.Cast<object>().ToList(), parameters, "@petCid") + ")"
                 : "";
@@ -625,7 +629,7 @@ namespace DfoGmTool.Services
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT DISTINCT pet_serial_or_handle FROM character_items WHERE " + handleClause + excludeClause + " ORDER BY pet_serial_or_handle;";
+                cmd.CommandText = "SELECT DISTINCT creature_key FROM character_creatures WHERE " + handleClause + excludeClause + " ORDER BY creature_key;";
                 foreach (var parameter in parameters)
                     cmd.Parameters.AddWithValue(parameter.Name, parameter.Value ?? DBNull.Value);
 
@@ -645,26 +649,6 @@ namespace DfoGmTool.Services
         private static List<long> ExtractBackupPetHandles(Dictionary<string, AccountBackupTableDump> tableMap)
         {
             var handles = new HashSet<long>();
-            if (tableMap.TryGetValue("character_items", out var itemDump))
-            {
-                var kindIndex = itemDump.Columns.FindIndex(c => c.Equals("item_kind", StringComparison.OrdinalIgnoreCase));
-                var handleIndex = itemDump.Columns.FindIndex(c => c.Equals("pet_serial_or_handle", StringComparison.OrdinalIgnoreCase));
-                if (kindIndex >= 0 && handleIndex >= 0)
-                {
-                    foreach (var row in itemDump.Rows)
-                    {
-                        if (row.Count != itemDump.Columns.Count)
-                            continue;
-                        var kind = row[kindIndex].ToDbValue() as string;
-                        if (!string.Equals(kind, "pet", StringComparison.OrdinalIgnoreCase))
-                            continue;
-                        var handle = row[handleIndex].ToInt64();
-                        if (handle > 0)
-                            handles.Add(handle);
-                    }
-                }
-            }
-
             if (tableMap.TryGetValue("character_creatures", out var creatureDump))
             {
                 var handleIndex = creatureDump.Columns.FindIndex(c => c.Equals("creature_key", StringComparison.OrdinalIgnoreCase));

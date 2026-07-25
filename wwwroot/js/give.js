@@ -681,7 +681,7 @@ async function giveItem(templateId, count, options) {
     const body = { templateId, count };
     if (options) body.options = options;
     const r = await post(`/api/characters/${currentChar.characterId}/items`, body);
-    toast(`已发放 ${r.name || r.itemTemplateId} x${r.count} → 槽位 ${r.slot}`);
+    toast(`已发放 ${r.name || r.itemTemplateId} x${r.count} → 槽位 ${r.slot}；在线角色请返回选角后再进入`);
     if (options) clearGiveConfiguration();
     loadItems();
   } catch (e) {

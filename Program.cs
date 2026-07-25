@@ -22,6 +22,12 @@ namespace DfoGmTool
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-inventory-migration") >= 0)
+            {
+                Environment.Exit(SelfTests.InventoryMigrationSelfTest.Run());
+                return;
+            }
+
             GmToolHostConfig hostConfig;
             GmConfig initialConfig;
             try
@@ -145,6 +151,13 @@ namespace DfoGmTool
                 Results.Json(hostConfig.AllowRemoteAccess
                     ? new { success = false, error = "远程访问模式下请在 config.ini 修改数据库和 PVF 路径。" }
                     : runtime.Configure(body.DatabasePath, body.PvfPath)));
+
+            app.MapGet("/api/inventory-migration/status", () =>
+                WithRuntime((gm, _) => gm.GetInventoryMigrationStatus()));
+            app.MapPost("/api/inventory-migration/legacy-to-new", () =>
+                WithRuntime((gm, _) => gm.MigrateLegacyInventoryToNew()));
+            app.MapPost("/api/inventory-migration/new-to-legacy", () =>
+                WithRuntime((gm, _) => gm.MigrateNewInventoryToLegacy()));
 
             app.MapGet("/api/accounts", () => WithRuntime((gm, _) => gm.ListAccounts()));
             app.MapGet("/api/accounts/{id:int}/detail", (int id) => WithRuntime((gm, pvfIndex) => gm.GetAccountDetail(id, pvfIndex)));

@@ -15,7 +15,7 @@ namespace DfoGmTool.Services
             int characterId,
             HashSet<string> selected)
         {
-            if (!selected.Contains("equipped") || !TableExists(conn, tx, "character_equipped_entries"))
+            if (!selected.Contains("equipped") || !TableExists(conn, tx, "character_new_items"))
                 return 0;
 
             var itemIndex = (_pvfIndex.AllItems ?? Array.Empty<PvfIndexService.ItemEntry>())
@@ -26,41 +26,54 @@ namespace DfoGmTool.Services
             {
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
-SELECT slot, item_id, raw_entry, expire_time, equipment_lock_id
-FROM character_equipped_entries
-WHERE character_id = @cid
-ORDER BY slot;";
+SELECT item_uid, slot_index, item_core
+FROM character_new_items
+WHERE character_id = @cid AND list_type = 3
+ORDER BY slot_index;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 using (var reader = cmd.ExecuteReader())
                 {
                     while (reader.Read())
                     {
-                        var itemId = reader.GetInt32(1);
+                        var coreBytes = reader.IsDBNull(2) ? null : (byte[])reader.GetValue(2);
+                        if (coreBytes == null || coreBytes.Length != ItemCore.Size)
+                            throw new InvalidOperationException("复制后的穿戴 ItemCore 长度无效");
+                        var core = ItemCore.FromBytes(coreBytes);
+                        var itemId = core.ItemId;
                         if (!itemIndex.TryGetValue(itemId, out var item) || !HasExplicitJobRestriction(item.UsableJob))
                             continue;
                         restricted.Add(new RestrictedEquippedRow(
-                            Convert.ToInt16(reader.GetInt32(0), CultureInfo.InvariantCulture),
+                            reader.GetInt64(0),
+                            Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture),
                             itemId,
-                            reader.IsDBNull(2) ? Array.Empty<byte>() : (byte[])reader.GetValue(2),
-                            reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
-                            reader.IsDBNull(4) ? (byte)0 : Convert.ToByte(reader.GetInt32(4), CultureInfo.InvariantCulture)));
+                            core.EquipmentLockId));
                     }
                 }
             }
 
             foreach (var row in restricted)
             {
-                var destination = _store._equipStore.RestoreEquippedEntryToContainer(
-                    conn, tx, characterId, row.Slot, row.ItemId, row.Raw, row.ExpireTime, row.EquipmentLockId);
-
-                using (var delete = conn.CreateCommand())
+                var destinationSlot = FindFreeCloneMainEquipmentSlot(conn, tx, characterId);
+                if (destinationSlot < 0)
+                    throw new InvalidOperationException($"复制后职业限制装备无法脱下：装备背包已满 itemId={row.ItemId}");
+                using (var move = conn.CreateCommand())
                 {
-                    delete.Transaction = tx;
-                    delete.CommandText = "DELETE FROM character_equipped_entries WHERE character_id = @cid AND slot = @slot;";
-                    delete.Parameters.AddWithValue("@cid", characterId);
-                    delete.Parameters.AddWithValue("@slot", row.Slot);
-                    if (delete.ExecuteNonQuery() != 1)
-                        throw new InvalidOperationException($"脱下职业限制装备失败: itemId={row.ItemId} slot={row.Slot}");
+                    move.Transaction = tx;
+                    move.CommandText = @"UPDATE character_new_items
+SET list_type=0,slot_index=@target,updated_at=CURRENT_TIMESTAMP
+WHERE item_uid=@uid AND character_id=@cid AND list_type=3;";
+                    move.Parameters.AddWithValue("@target", destinationSlot);
+                    move.Parameters.AddWithValue("@uid", row.ItemUid);
+                    move.Parameters.AddWithValue("@cid", characterId);
+                    try
+                    {
+                        if (move.ExecuteNonQuery() != 1)
+                            throw new InvalidOperationException($"脱下职业限制装备失败: itemId={row.ItemId} slot={row.Slot}");
+                    }
+                    catch (SqliteException ex)
+                    {
+                        throw new InvalidOperationException($"脱下职业限制装备发生目标槽冲突: itemId={row.ItemId} from={row.Slot} to={destinationSlot}", ex);
+                    }
                 }
 
                 if (row.EquipmentLockId > 0 && TableExists(conn, tx, "character_item_locks"))
@@ -72,8 +85,8 @@ ORDER BY slot;";
 UPDATE character_item_locks
 SET inventory_list_type = @listType, slot = @slot
 WHERE character_id = @cid AND equipment_lock_id = @lockId;";
-                        updateLock.Parameters.AddWithValue("@listType", (int)destination.ListType);
-                        updateLock.Parameters.AddWithValue("@slot", destination.Slot);
+                        updateLock.Parameters.AddWithValue("@listType", (int)InventoryListType.Main);
+                        updateLock.Parameters.AddWithValue("@slot", destinationSlot);
                         updateLock.Parameters.AddWithValue("@cid", characterId);
                         updateLock.Parameters.AddWithValue("@lockId", row.EquipmentLockId);
                         updateLock.ExecuteNonQuery();
@@ -100,19 +113,39 @@ WHERE character_id = @cid AND equipment_lock_id = @lockId;";
                 using (var verify = conn.CreateCommand())
                 {
                     verify.Transaction = tx;
-                    verify.CommandText = "SELECT item_id FROM character_equipped_entries WHERE character_id = @cid;";
+                    verify.CommandText = "SELECT item_core FROM character_new_items WHERE character_id = @cid AND list_type=3;";
                     verify.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = verify.ExecuteReader())
                     {
                         while (reader.Read())
                         {
-                            if (restrictedIds.Contains(reader.GetInt32(0)))
+                            var bytes = reader.IsDBNull(0) ? null : (byte[])reader.GetValue(0);
+                            if (bytes != null && bytes.Length == ItemCore.Size && restrictedIds.Contains(ItemCore.FromBytes(bytes).ItemId))
                                 throw new InvalidOperationException("复制后仍存在职业限制穿戴项，已回滚");
                         }
                     }
                 }
             }
             return restricted.Count;
+        }
+
+        private static short FindFreeCloneMainEquipmentSlot(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            var occupied = new HashSet<int>();
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"SELECT slot_index FROM character_new_items
+WHERE character_id=@cid AND list_type=0 AND slot_index BETWEEN 9 AND 64;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    occupied.Add(reader.GetInt32(0));
+            }
+            for (short slot = 9; slot <= 64; slot++)
+                if (!occupied.Contains(slot))
+                    return slot;
+            return -1;
         }
 
         private static bool HasExplicitJobRestriction(string usableJob)
@@ -127,19 +160,17 @@ WHERE character_id = @cid AND equipment_lock_id = @lockId;";
 
         private sealed class RestrictedEquippedRow
         {
-            public RestrictedEquippedRow(short slot, int itemId, byte[] raw, int expireTime, byte equipmentLockId)
+            public RestrictedEquippedRow(long itemUid, short slot, int itemId, byte equipmentLockId)
             {
+                ItemUid = itemUid;
                 Slot = slot;
                 ItemId = itemId;
-                Raw = raw ?? Array.Empty<byte>();
-                ExpireTime = expireTime;
                 EquipmentLockId = equipmentLockId;
             }
 
+            public long ItemUid { get; }
             public short Slot { get; }
             public int ItemId { get; }
-            public byte[] Raw { get; }
-            public int ExpireTime { get; }
             public byte EquipmentLockId { get; }
         }
     }

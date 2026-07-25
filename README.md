@@ -2,7 +2,7 @@
 
 > S4A12 (86jp) 服务端的 Web GM 控制台 — 基于 [rewio/DfoGmTool](https://codeberg.org/rewio/DfoGmTool) 深度重构
 >
-> 版本 **260718** · MIT License
+> 当前版本 **v260725** · 支持服务端 **2026-07-24 新版背包系统** · MIT License
 
 独立进程运行，直接操作服务端部署目录里的 `inventory.db` 和 `Script.pvf`；浏览器打开 `http://localhost:5050` 即可使用。源码自包含，不依赖任何本地相邻仓库即可构建和发布。
 
@@ -42,11 +42,11 @@
 
 ### 背包管理
 
-**装备页** — 按容器分类查看，可配置装备显示「配置」按钮，点击弹出浮动配置卡片修改强化/增幅/锻造/红字，只改已知字段不破坏附魔宝珠等 `extra_json` 数据：
+**装备页** — 按容器分类查看，可配置装备显示「配置」按钮，点击弹出浮动配置卡片修改强化/增幅/锻造/红字，直接更新新版 `ItemCore` 对应字段，不破坏附魔、徽章、异界属性等数据：
 
 ![装备背包](Pic/06_Bag_Equipments.png)
 
-**装扮页** — 可配置装扮显示「配置」按钮，修改部位属性/上衣技能，不破坏已有 avatar selector 之外的数据：
+**装扮页** — 可配置装扮显示「配置」按钮，修改部位属性/上衣技能，并保持新版装扮明细与 `ItemCore` 引用一致：
 
 ![装扮背包](Pic/07_Bag_Avatar.png)
 
@@ -74,7 +74,24 @@
 
 ![成就与称号簿](Pic/12_Quest_Achievement.png)
 
+### 背包数据迁移
+
+**旧版/新版背包双向迁移** — 位于「账号数据管理 → 背包数据迁移」。迁移前会统计两侧数据，整个操作在单一数据库事务中执行；异常整体回滚，迁移期间两个方向的按钮同时锁定：
+
+![背包数据迁移](Pic/13_Inventory%20_Migration.png)
+
+> 迁移时必须先停止游戏服务端并确保没有在线角色。普通物品遇到满包会保留来源数据，并按角色、背包类型和所需空槽位报告；称号簿与名称装饰卡不占普通背包槽位，目标侧已有数据时保留目标侧并清理来源侧。
+
 ---
+
+## v260725 更新
+
+- **适配 07-24 新版背包架构**：发放、背包查看与整理、装备/装扮配置、角色货币、账号货币、金币、晶块、复活币、账号金库、角色复制、账号备份和称号簿全部切换到新版 `ItemCore` 数据语义，不再保留旧版背包业务兼容路径。
+- **背包数据双向迁移**：支持旧版升级新版及新版还原旧版；先处理穿戴数据，再按目标槽位合并，冲突顺序后移，可堆叠物品按 PVF 堆叠上限合并和拆分。
+- **事务与残余保护**：每次迁移使用完整事务和进程互斥锁，错误整体回滚；普通背包容量不足时保留来源数据并给出具体角色、背包类型、物品数量和所需空槽位。
+- **防止镜像重复**：迁移后完整清理已消费的来源数据；金币、复活币、胜点、晶块及账号金库的旧/新镜像不会再次叠加或复制。
+- **称号簿与名称装饰卡**：新版称号簿按每个称号一条数据处理；冲突时以目标侧为准并清理来源侧，不作为满包残余保留。
+- **离线写入提示**：GM 修改运行中的服务端数据后，角色必须返回选角并重新进入才会生效；背包迁移必须在服务端停止且无人在线时执行。
 
 ## 相较上游的实际代码变更
 
@@ -88,7 +105,7 @@
 | `GmService.CharacterClone.cs` | 738 | 角色复制 — 25 个可选复制类别（背包各分区、装备、装扮、宠物、技能、任务、称号簿、每日/周常、地图难度等），支持跨账号复制、新建目标账号（MD5 密码）、宠物句柄重映射、主键冲突规避 |
 | `GmService.CharacterFixes.cs` | 344 | 转职/觉醒重写 — `SetGrowTypeFixed` 增加 PVF 校验 (`TryValidateJobGrowOption`)、等级前置检查、转职后技能列表重建 (`CharacterSkillProfile.BuildSnapshot`) 或觉醒技能合并 (`MergeGrants`)、转职任务状态同步 |
 | `GmService.CharacterSpTp.cs` | 226 | SP/TP 管理 — `AdjustSpTpSynced` 每次调整后同步技能点状态（区分双技能方案页），调整前校验负数保护；新增 `ZeroRemainingSpTp` 一键归零 |
-| `GmService.InventoryConfiguration.cs` | 694 | 背包物品在线配置 — 装备配置（强化/增幅最高 31、武器锻造最高 8、红字属性、品级种子）通过 `MergeKnownEquipmentExtraJson` 只改已知字段；装扮配置（部位属性 `option_value`）；期限修改；均不破坏原有 `extra_json` |
+| `GmService.InventoryConfiguration.cs` | 694 | 背包物品在线配置 — 直接修改新版 `ItemCore` 的强化、增幅、锻造、红字、品级、期限与装扮能力字段，并维护装扮明细引用 |
 | `PvfIndexService.Dungeons.cs` | ~60 | 地下城权限数据读取 |
 
 ### 显著扩展的服务文件
@@ -137,13 +154,16 @@
 | `sidebar.js` | 14KB → 17KB | 新功能入口 |
 | `bindings.js` | 3.5KB → 6.2KB | 新增模块的事件绑定 |
 
-### 新增 28 个 API 端点
+### 主要新增 API 端点
 
 ```
 POST /api/accounts/{id}/backup              账号备份导出
 POST /api/accounts/restore                   账号备份还原
 POST /api/accounts/create-for-clone          为角色复制新建目标账号
 POST /api/accounts/{id}/cargo/max            账号金库一键满级
+GET  /api/inventory-migration/status          查询新旧背包数据与可迁移状态
+POST /api/inventory-migration/legacy-to-new   旧版背包升级新版背包
+POST /api/inventory-migration/new-to-legacy   新版背包还原旧版背包
 
 GET  /api/characters/{id}/items/{tid}/grant-options   发放物品配置选项
 GET  /api/characters/{id}/items/config-options        背包物品配置选项
@@ -185,12 +205,13 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 
 ### 自测框架
 
-新增 `SelfTests/` 目录，包含两个自测入口：
+`SelfTests/` 目录包含三个自测入口：
 
 | 文件 | 行数 | 覆盖范围 |
 |------|------|----------|
 | `ItemGrantOptionsSelfTest.cs` | ~500 | 装备/装扮/可叠加/期限物品的 `ItemGrantOptions` 处理逻辑 |
 | `CharacterMutationSelfTest.cs` | ~1200 | 等级/经验/转职/觉醒/技能重建/SP·TP 同步/角色删除种子兜底 |
+| `InventoryMigrationSelfTest.cs` | — | 新旧背包双向迁移、冲突顺延、可堆叠合并拆分、镜像去重、满包残余与事务回滚 |
 
 ---
 
@@ -203,6 +224,7 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 - **晶块**：六种晶块覆写
 - **账号金库**：查看、单删、确认后清空、一键满级
 - **备份与还原**：导出账号全量数据（含所有角色），还原时自动处理外键和主键冲突
+- **背包数据迁移**：旧版/新版双向迁移、事务回滚、容量残余报告与可重试清源
 
 ### 🎮 角色
 
@@ -218,8 +240,8 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 
 - **五组分类侧栏**：常用 / 角色背包 / 穿戴 / 宠物 / 仓库
 - **金币 / 复活币 / 技能点**在「货币」分类里按类型覆写
-- **装备在线配置**：通过浮动配置卡片修改强化/增幅/锻造/红字，只改 `extra_json` 中的 `extData0`、`prefixData0E`、`middleData1A`、`tailData2F`、`jewelSocket` 五个已知键
-- **装扮在线配置**：修改 `option_value`（部位属性/上衣技能）
+- **装备在线配置**：通过浮动配置卡片修改新版 `ItemCore` 的强化、增幅、锻造、红字、品级和期限字段
+- **装扮在线配置**：修改 `ItemCore.AbilityNo` 与装扮明细（部位属性/上衣技能）
 - **期限修改**：装扮按 PVF 档位选择，其他物品按天数设置
 - 单件删除立即生效；「清空分类」需确认
 
@@ -236,10 +258,10 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 
 | 物品类型 | 处理方式 |
 |----------|----------|
-| **名称装饰卡** | 直接写入穿戴栏 slot 28（`character_equipped_entries`）并同步 `character_subtype1_fields` 的 `name_tag_item_id` / `name_tag_expire_time`。如果同 ID 的名称装饰卡已穿戴且未过期，则在剩余期限上叠加天数（默认 30 天/张）；不同 ID 则直接替换 |
+| **名称装饰卡** | 直接写入新版 `character_name_tag_state`。如果同 ID 的名称装饰卡仍未过期，则在剩余期限上叠加天数（默认 30 天/张）；不同 ID 直接替换 |
 | **契约（高级频道等）** | 根据 `PremiumCatalog` 识别契约类型和时长，直接写入 `account_premiums` 表的对应类型期限，多张叠加天数。不占用任何背包槽位 |
-| **晶块（六种）** | 通过 `CurrencyService.IsCubeFragment` 识别后走服务端 `TryAddItem` 入口，写入主背包 slot 354-359 对应的账号共享属性列，而非普通背包格 |
-| **复活币道具** | 通过 `ReviveCoinService.IsReviveCoinReward` 识别后走服务端 `TryAddItem` 入口，写入钱包的正确属性列 |
+| **晶块（六种）** | 通过 `CurrencyService.IsCubeFragment` 识别后写入账号共享晶块字段，不占用普通背包格 |
+| **复活币道具** | 通过 `ReviveCoinService.IsReviveCoinReward` 识别后写入新版角色虚拟钱包槽 |
 
 ### 📜 任务
 
@@ -258,7 +280,7 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 
 ```
 DfoGmTool/
-├── Program.cs              ← ASP.NET Minimal API 入口（28 个新增端点）
+├── Program.cs              ← ASP.NET Minimal API 入口
 ├── GmToolHostConfig.cs     ← config.ini 解析 + 本地/远程模式切换
 ├── GmConfig.cs             ← 数据源定位（DB + PVF）
 ├── Services/               ← GM 业务逻辑（23 个文件）
@@ -271,12 +293,13 @@ DfoGmTool/
 │   ├── GmService.CharacterSpTp.cs          ★ SP/TP 同步管理
 │   ├── GmService.Inventory.cs              背包与物品发放
 │   ├── GmService.InventoryConfiguration.cs ★ 装备/装扮在线配置
+│   ├── GmService.Migration.cs              ★ 新旧背包双向迁移 API
 │   ├── GmService.Quests.cs                 任务系统
 │   ├── GmService.TitleBook.cs              称号簿
 │   └── PvfIndexService.*.cs                PVF 索引
 ├── ServerCore/             ← 服务端业务源码拷贝件
 ├── PvfLib/                 ← PVF 解析库（GmPvfLib）
-├── SelfTests/              ★ 自测用例（2 个文件 ~1700 行）
+├── SelfTests/              ★ 物品发放、角色变更与背包迁移自测
 ├── wwwroot/                ← 前端（无框架原生 HTML/JS/CSS）
 │   ├── index.html
 │   ├── style.css
@@ -288,9 +311,11 @@ DfoGmTool/
 
 ### 设计原则
 
-- **数据变更走服务端自己的业务代码**：发放/删除 → `SqliteAssetService`/`SqliteInventoryStore`，货币 → `CurrencyService`，等级 → `CharacterProgressService`，任务位图 → `QuestRepository`，称号簿 → `TitleBookMutationService`。仅少数简单计数列按与服务端同构的 SQL 直改。
+- **物品数据匹配服务端新版语义**：角色物品使用 `character_new_items` + 82 字节 `ItemCore`，账号金库使用 `account_cargo_new_items`，装扮/宠物使用独立明细表；旧物品表只允许由迁移工具读写。
+- **迁移可恢复**：旧版与新版背包可双向迁移，单次操作使用完整 SQLite 事务；普通物品容量不足时保留来源数据，修复后可以再次执行。
+- 货币走新版虚拟钱包与账号共享字段，等级走 `CharacterProgressService`，任务位图走 `QuestRepository`，新版称号簿按单个称号记录维护。
 - 服务端源码以**拷贝件**形式入库（`ServerCore/` + `PvfLib/`），命名空间统一为 `DfoGmTool.ServerCore.*`，逻辑与服务端一致。
-- 前端为无依赖的原生 HTML/JS/CSS，脚本按 `core → environment → sidebar → give → inventory → floating-config → character → character-sp-overrides → quests → item-page-size → theme → bindings` 顺序加载；**全部事件绑定只放 `bindings.js`**（最后加载）。静态文件禁缓存。
+- 前端为无依赖的原生 HTML/JS/CSS，新增 `migration.js` 管理迁移状态、二次确认、按钮互锁与报告渲染；静态文件禁缓存。
 
 ---
 
@@ -376,6 +401,7 @@ pvf_path=
 ```bash
 DfoGmTool.exe --selftest-item-grant-options
 DfoGmTool.exe --selftest-character-mutations
+DfoGmTool.exe --selftest-inventory-migration
 ```
 
 ---
@@ -383,6 +409,7 @@ DfoGmTool.exe --selftest-character-mutations
 ## 注意事项
 
 - ⚡ **在线角色需要返回选角再进入才能看到改动**（服务端内存中的会话状态不会自动刷新）。
+- 🔁 **执行背包数据迁移前必须停止游戏服务端，并确保没有在线角色**；不要在迁移事务执行期间启动服务端。
 - ⏳ 物品/任务索引启动后后台构建（约 15 秒），页面顶部显示状态，构建完成前发放不校验物品 ID。
 - 🎯 强制完成任务不发奖励；想拿奖励用「标记可交」然后回城正常交付。
 - 🗑️ 清空类操作有确认框；单件删除立即生效不可撤销。

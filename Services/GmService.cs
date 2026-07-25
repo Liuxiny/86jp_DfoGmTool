@@ -12,10 +12,9 @@ using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.Services
 {
-    // 所有写操作都走服务端自己的业务代码(SqliteAssetService/CharacterProgressService/QuestRepository),
-    // GM 工具不自己拼物品数据。读操作用只读 SQL。
+    // 物品读写统一走新版 ItemCore 仓储；旧表只允许显式迁移协调器访问。
     // partial 按域拆分: Accounts(账号/货币/晶块/金库) Characters(角色/属性/转职)
-    // Inventory(背包/发放/删除/钱包) Quests(任务总览/完成链) TitleBook(称号簿)
+    // Inventory(背包/发放/删除/钱包) Quests(任务总览/完成链) TitleBook(新版称号簿)
     public sealed partial class GmService
     {
         private static readonly string[] JobNames =
@@ -27,10 +26,9 @@ namespace DfoGmTool.Services
 
         private readonly GmConfig _config;
         private readonly PvfIndexService _pvfIndex;
-        private readonly SqliteInventoryStore _store;
-        private readonly SqliteAssetService _assetService;
+        private readonly NewInventoryStore _inventory;
+        private readonly InventoryDataMigrationCoordinator _inventoryMigration;
         private readonly SupplementalItemExpirationService _supplementalItemExpiration;
-        private readonly Lazy<TitleBookMutationService> _titleBookMutation;
         private readonly AccountProgressService _accountProgress;
 
         internal static void ResetPvfStaticData()
@@ -44,11 +42,9 @@ namespace DfoGmTool.Services
         {
             _config = config;
             _pvfIndex = pvfIndex;
-            _store = new SqliteInventoryStore(config.DatabasePath, config.SchemaPath);
-            _assetService = new SqliteAssetService(config.DatabasePath, config.SchemaPath, _store);
+            _inventory = new NewInventoryStore(config.DatabasePath, config.SchemaPath);
+            _inventoryMigration = new InventoryDataMigrationCoordinator(config.ConnectionString);
             _supplementalItemExpiration = new SupplementalItemExpirationService(config.ConnectionString);
-            _titleBookMutation = new Lazy<TitleBookMutationService>(
-                () => new TitleBookMutationService(config.ConnectionString));
             _accountProgress = new AccountProgressService(config.DatabasePath, config.SchemaPath, config.PvfPath);
         }
 

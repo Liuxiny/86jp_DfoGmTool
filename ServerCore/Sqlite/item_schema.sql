@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS characters (
     pvp_grade INTEGER NOT NULL DEFAULT 0,
     pvp_rating_grade INTEGER NOT NULL DEFAULT 0,
     user_state INTEGER NOT NULL DEFAULT 0,
-    -- 货币不在本表: 金币=character_items slot0, 点券系=accounts.cera等 (旧 gold/coin 影子列已由迁移v12删除)
+    -- 货币不在本表: 金币/复活币/胜点=character_new_items 主背包虚拟槽0/1/2, 点券系=accounts.cera等 (旧 gold/coin 影子列已由迁移v12删除)
     town_id INTEGER NOT NULL DEFAULT 0,
     area_id INTEGER NOT NULL DEFAULT 0,
     pos_x INTEGER NOT NULL DEFAULT 0,
@@ -59,11 +59,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_name_unique
 CREATE INDEX IF NOT EXISTS idx_characters_account
     ON characters(account_id, delete_flag);
 
+-- 金币携带上限与拍卖额上限是两个独立持久化值；升级事务会同步推进两者。
 CREATE TABLE IF NOT EXISTS character_gold_limits (
-    character_id INTEGER PRIMARY KEY,
-    gold_carry_limit INTEGER NOT NULL,
+    character_id       INTEGER PRIMARY KEY,
+    gold_carry_limit   INTEGER NOT NULL,
     auction_gold_limit INTEGER NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -112,6 +113,51 @@ CREATE INDEX IF NOT EXISTS idx_character_items_character
 CREATE INDEX IF NOT EXISTS idx_character_items_char_template
     ON character_items(character_id, list_type, item_template_id);
 
+CREATE TABLE IF NOT EXISTS character_new_items (
+    item_uid INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_scope TEXT NOT NULL CHECK (owner_scope IN ('character', 'account')),
+    owner_id INTEGER NOT NULL,
+    character_id INTEGER,
+    list_type INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    item_core BLOB NOT NULL CHECK(length(item_core) = 82),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(owner_scope, owner_id, list_type, slot_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_character_new_items_character_space
+    ON character_new_items(character_id, list_type, slot_index);
+
+CREATE TABLE IF NOT EXISTS character_avatar_detail (
+    item_uid INTEGER PRIMARY KEY,
+    owner_id INTEGER NOT NULL DEFAULT 0,
+    character_id INTEGER NOT NULL DEFAULT 0,
+    item_id INTEGER NOT NULL DEFAULT 0,
+    expire_date INTEGER NOT NULL DEFAULT 0,
+    clear_avatar_id INTEGER NOT NULL DEFAULT 0,
+    jewel_socket BLOB NOT NULL CHECK(length(jewel_socket) = 30),
+    color1 INTEGER NOT NULL DEFAULT 0,
+    color2 INTEGER NOT NULL DEFAULT 0,
+    delete_date INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_character_avatar_detail_character
+    ON character_avatar_detail(character_id);
+
+CREATE TABLE IF NOT EXISTS character_name_tag_state (
+    character_id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL DEFAULT 0,
+    expire_time INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_avatar_uid_sequence (
+    avatar_uid INTEGER PRIMARY KEY AUTOINCREMENT
+);
+
 CREATE TABLE IF NOT EXISTS account_cargo_state (
     account_id INTEGER PRIMARY KEY,
     selection_key INTEGER NOT NULL DEFAULT 0,
@@ -134,6 +180,19 @@ CREATE TABLE IF NOT EXISTS account_cargo_items (
     expire_time INTEGER NOT NULL DEFAULT 0,
     marker_16 INTEGER NOT NULL DEFAULT 0,
     extra_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(account_id, slot_index),
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS account_cargo_new_items (
+    item_uid INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    character_id INTEGER,
+    list_type INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    item_core BLOB NOT NULL CHECK(length(item_core) = 82),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(account_id, slot_index),
@@ -168,11 +227,44 @@ CREATE TABLE IF NOT EXISTS item_audit_log (
 CREATE INDEX IF NOT EXISTS idx_item_audit_log_char_time
     ON item_audit_log(character_id, created_at);
 
+CREATE TABLE IF NOT EXISTS inventory_audit_log_v2 (
+    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    session_id TEXT,
+    owner_scope TEXT NOT NULL DEFAULT 'character' CHECK(owner_scope IN ('character', 'account')),
+    owner_id INTEGER NOT NULL DEFAULT 0,
+    character_id INTEGER NOT NULL DEFAULT 0,
+    account_id INTEGER NOT NULL DEFAULT 0,
+    action_name TEXT NOT NULL,
+    list_type INTEGER,
+    slot_index INTEGER,
+    item_id INTEGER NOT NULL DEFAULT 0,
+    item_kind INTEGER NOT NULL DEFAULT 0,
+    value_before INTEGER NOT NULL DEFAULT 0,
+    value_after INTEGER NOT NULL DEFAULT 0,
+    count_before INTEGER NOT NULL DEFAULT 0,
+    count_after INTEGER NOT NULL DEFAULT 0,
+    count_delta INTEGER NOT NULL DEFAULT 0,
+    before_core_hash TEXT,
+    after_core_hash TEXT,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_audit_v2_char_time
+    ON inventory_audit_log_v2(character_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_audit_v2_account_time
+    ON inventory_audit_log_v2(account_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_audit_v2_action_time
+    ON inventory_audit_log_v2(action_name, created_at);
+
+-- SP/TP 由 SkillPointLedger 从已学技能全量派生, 不落库(迁移23退役了镜像表)。
 CREATE TABLE IF NOT EXISTS character_skills (
     character_id INTEGER NOT NULL,
     page_index INTEGER NOT NULL DEFAULT 0,
     slot INTEGER NOT NULL DEFAULT -1,
-    skill_id INTEGER NOT NULL,
+    skill_id INTEGER NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 0,
     extra_values BLOB,
     PRIMARY KEY (character_id, page_index, slot),
@@ -185,6 +277,15 @@ CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
     body BLOB NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (character_id, page_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+-- 守护者盾牌 deck: slot 0=当前主盾, slot 1..4=备用盾。
+-- 空槽不落行，repository 加载时固定补齐为 5 个零值槽。
+CREATE TABLE IF NOT EXISTS character_knight_shield_deck (
+    character_id INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL CHECK (slot_index >= 0 AND slot_index <= 4),
+    shield_item_id INTEGER NOT NULL CHECK (shield_item_id > 0),
+    PRIMARY KEY (character_id, slot_index),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -219,6 +320,10 @@ CREATE TABLE IF NOT EXISTS character_creatures (
 
 CREATE INDEX IF NOT EXISTS idx_character_creatures_key
     ON character_creatures(character_id, creature_key);
+
+CREATE TABLE IF NOT EXISTS character_creature_uid_sequence (
+    creature_uid INTEGER PRIMARY KEY AUTOINCREMENT
+);
 
 -- Removed 18 columns verified via seed DB (DfoDbGenerator) as safe:
 --   A) Overwritten by account_settings/account_premiums: hotkey_key_type, main_game_option_blob,
@@ -365,6 +470,16 @@ CREATE TABLE IF NOT EXISTS character_titlebook (
     despair BLOB,
     event BLOB,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_new_titlebook (
+    character_id INTEGER NOT NULL,
+    category INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    item_core BLOB NOT NULL CHECK(length(item_core) = 82),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (character_id, category, slot_index),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -531,7 +646,7 @@ CREATE TABLE IF NOT EXISTS character_subtype1_fields (
     stat_level INTEGER NOT NULL DEFAULT 0,
     name_tag_item_id INTEGER NOT NULL DEFAULT 0,     -- 名称装饰卡 itemId (sub_F546B0 i64 low32 → slot 28; 旧误名 skill_tree_check)
     name_tag_expire_time INTEGER NOT NULL DEFAULT 0, -- 名称装饰卡到期时间 (i64 high32)
-    skill_tree_index INTEGER NOT NULL DEFAULT -1,
+    skill_tree_index INTEGER NOT NULL DEFAULT -1, -- -1=第二技能页未购买，0/1=已购买且为当前页
     equipped_creature_level INTEGER NOT NULL DEFAULT 0,
     equip_list_trailing INTEGER NOT NULL DEFAULT 0,
     manage_level INTEGER NOT NULL DEFAULT 0,
@@ -586,8 +701,8 @@ CREATE TABLE IF NOT EXISTS character_sort_item_locks (
 );
 
 -- 收集箱(SAO/生肖之灵等)槛位存档: 记录角色在某个收集箱(box_index=PVF [Index])的某个槛位放了哪个宝珠。
--- 宝珠本质仍是背包里的道具(character_items), 这里只是"哪个itemId被摆在收集箱槛位里"的状态表,
--- 放入/取出时需要联动对 character_items 的扣减/归还(见 CollectBoxProgressRepository.cs)。
+-- 宝珠本质仍是背包里的道具(character_new_items/在线 InventoryService), 这里只是"哪个itemId被摆在收集箱槛位里"的状态表,
+-- 放入/取出时由 CollectBoxRuntimeService 联动在线背包扣减/归还。
 CREATE TABLE IF NOT EXISTS character_collectbox_slots (
     character_id INTEGER NOT NULL,
     box_index INTEGER NOT NULL,
@@ -629,16 +744,7 @@ CREATE TABLE IF NOT EXISTS character_daily_counters (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
--- 与当前服务端 schema 同步：守护者盾牌 deck。
-CREATE TABLE IF NOT EXISTS character_knight_shield_deck (
-    character_id INTEGER NOT NULL,
-    slot_index INTEGER NOT NULL CHECK (slot_index >= 0 AND slot_index <= 4),
-    shield_item_id INTEGER NOT NULL CHECK (shield_item_id > 0),
-    PRIMARY KEY (character_id, slot_index),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
--- 与当前服务端 schema 同步：绝望之塔永久楼层进度。
+-- 绝望之塔永久楼层进度。客户端始终请求第一层入口，服务端按最高通关层重定向到下一层。
 CREATE TABLE IF NOT EXISTS character_tower_of_despair_progress (
     character_id INTEGER PRIMARY KEY,
     highest_cleared_floor INTEGER NOT NULL DEFAULT 0

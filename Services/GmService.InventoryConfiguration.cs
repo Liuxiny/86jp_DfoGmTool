@@ -30,179 +30,93 @@ namespace DfoGmTool.Services
             if (!TryLoadGrantCharacter(characterId, out var job, out _, out _))
                 return Error("角色不存在: " + characterId);
 
+            if (!TryGetAccountId(characterId, out var accountId))
+                return Error("角色不存在: " + characterId);
             var list = (InventoryListType)request.ListType;
-            using (var connection = new SqliteConnection(_config.ConnectionString))
+            if (!_inventory.TryLoadItem(characterId, accountId, list, (short)request.Slot, out var record))
+                return Error("目标槽位没有可配置物品");
+
+            var metadata = ItemMetadataResolver.Resolve(record.ItemTemplateId);
+            if (metadata == null || metadata.ItemKind == "special")
+                return Error("物品模板不存在，无法配置");
+            var options = request.Options ?? new ItemGrantOptions();
+            var wantsExpiration = options.ExpirationDays != null;
+            int? expireTime = null;
+            if (wantsExpiration)
             {
-                connection.Open();
-                using (var transaction = connection.BeginTransaction())
-                {
-                    if (!TryLoadInventoryItemRecord(connection, transaction, characterId, list, request.Slot, out var record))
-                        return Error("目标槽位没有可配置物品");
-
-                    var metadata = ItemMetadataResolver.Resolve(record.ItemTemplateId);
-                    if (metadata == null || metadata.ItemKind == "special")
-                        return Error("物品模板不存在，无法配置");
-
-                    var options = request.Options ?? new ItemGrantOptions();
-                    var wantsExpiration = options.ExpirationDays != null;
-                    int? expireTime = null;
-                    if (wantsExpiration)
-                    {
-                        if (!TryResolveInventoryExpirationOverride(record, metadata, options.ExpirationDays.Value, out var resolvedExpireTime, out var expirationError))
-                            return Error(expirationError);
-                        expireTime = resolvedExpireTime;
-                    }
-
-                    if (string.Equals(record.ItemKind, "avatar", StringComparison.Ordinal))
-                    {
-                        byte? requested = null;
-                        if (options.AvatarOptionValue != null)
-                        {
-                            if (!TryBuildInventoryAvatarOptions(record.ItemTemplateId, job, out var avatarOptions, out var avatarError))
-                                return Error(avatarError ?? "该时装没有可配置属性");
-
-                            var requestedRaw = options.AvatarOptionValue.Value;
-                            if (requestedRaw < 0 || requestedRaw > byte.MaxValue
-                                || !AvatarGrantPolicy.ContainsValue(avatarOptions, requestedRaw))
-                            {
-                                return Error("装扮属性不属于当前模板、品级和职业的合法选项");
-                            }
-                            requested = (byte)requestedRaw;
-                        }
-
-                        if (requested == null && expireTime == null)
-                            return Error("该时装没有可保存的配置项");
-
-                        using (var command = connection.CreateCommand())
-                        {
-                            command.Transaction = transaction;
-                            if (expireTime != null && requested != null)
-                            {
-                                command.CommandText = @"
-UPDATE character_items
-SET option_value = @optionValue,
-    expire_time = @expireTime,
-    updated_at = CURRENT_TIMESTAMP
-WHERE item_uid = @itemUid;";
-                                command.Parameters.AddWithValue("@optionValue", requested.Value);
-                                command.Parameters.AddWithValue("@expireTime", expireTime.Value);
-                            }
-                            else if (expireTime != null)
-                            {
-                                command.CommandText = @"
-UPDATE character_items
-SET expire_time = @expireTime,
-    updated_at = CURRENT_TIMESTAMP
-WHERE item_uid = @itemUid;";
-                                command.Parameters.AddWithValue("@expireTime", expireTime.Value);
-                            }
-                            else
-                            {
-                                command.CommandText = @"
-UPDATE character_items
-SET option_value = @optionValue,
-    updated_at = CURRENT_TIMESTAMP
-WHERE item_uid = @itemUid;";
-                                command.Parameters.AddWithValue("@optionValue", requested.Value);
-                            }
-                            command.Parameters.AddWithValue("@itemUid", record.ItemUid);
-                            command.ExecuteNonQuery();
-                        }
-
-                        transaction.Commit();
-                        return new { success = true, characterId, listType = request.ListType, slot = request.Slot, type = "avatar", optionValue = requested, expireTime };
-                    }
-
-                    if (!IsInventoryConfigurableEquipment(record.ItemTemplateId, record.ItemKind, list, pvfIndex, out var capability))
-                    {
-                        if (expireTime == null)
-                            return Error("该装备类型没有可配置属性");
-
-                        using (var command = connection.CreateCommand())
-                        {
-                            command.Transaction = transaction;
-                            command.CommandText = @"
-UPDATE character_items
-SET expire_time = @expireTime,
-    updated_at = CURRENT_TIMESTAMP
-WHERE item_uid = @itemUid;";
-                            command.Parameters.AddWithValue("@expireTime", expireTime.Value);
-                            command.Parameters.AddWithValue("@itemUid", record.ItemUid);
-                            command.ExecuteNonQuery();
-                        }
-
-                        transaction.Commit();
-                        return new { success = true, characterId, listType = request.ListType, slot = request.Slot, type = "expiration", expireTime };
-                    }
-
-                    var view = ItemExtraView.Parse(record.ExtraJson);
-                    var builder = ItemExtraViewBuilder.FromView(view);
-                    if (!EquipmentGrantPolicy.TryApplyToBuilder(
-                            metadata,
-                            options,
-                            AmplifyInitialValueResolver.Resolve,
-                            builder.Equipment,
-                            out var error))
-                    {
-                        return Error(error);
-                    }
-
-                    var seed = (int)ItemQuality.ResolveSeed(options.QualityMode);
-                    var extraJson = MergeKnownEquipmentExtraJson(record.ExtraJson, builder.Build().Serialize());
-                    using (var command = connection.CreateCommand())
-                    {
-                        command.Transaction = transaction;
-                        if (expireTime != null)
-                        {
-                            command.CommandText = @"
-UPDATE character_items
-SET stack_count = @seed,
-    instance_value = @seed,
-    extra_json = @extraJson,
-    expire_time = @expireTime,
-    updated_at = CURRENT_TIMESTAMP
-WHERE item_uid = @itemUid;";
-                            command.Parameters.AddWithValue("@expireTime", expireTime.Value);
-                        }
-                        else
-                        {
-                            command.CommandText = @"
-UPDATE character_items
-SET stack_count = @seed,
-    instance_value = @seed,
-    extra_json = @extraJson,
-    updated_at = CURRENT_TIMESTAMP
-WHERE item_uid = @itemUid;";
-                        }
-                        command.Parameters.AddWithValue("@seed", seed);
-                        command.Parameters.AddWithValue("@extraJson", extraJson);
-                        command.Parameters.AddWithValue("@itemUid", record.ItemUid);
-                        command.ExecuteNonQuery();
-                    }
-
-                    transaction.Commit();
-                    return new
-                    {
-                        success = true,
-                        characterId,
-                        listType = request.ListType,
-                        slot = request.Slot,
-                        type = "equipment",
-                        qualitySeed = seed,
-                        upgradeLevel = options.UpgradeLevel,
-                        amplifyType = options.AmplifyType,
-                        forgingLevel = options.ForgingLevel,
-                        expireTime,
-                        canUpgrade = capability.CanUpgrade,
-                        canAmplify = capability.CanAmplify,
-                        canForge = capability.CanForge,
-                    };
-                }
+                if (!TryResolveInventoryExpirationOverride(record, metadata, options.ExpirationDays.Value, out var resolvedExpireTime, out var expirationError))
+                    return Error(expirationError);
+                expireTime = resolvedExpireTime;
             }
+
+            if (string.Equals(record.ItemKind, "avatar", StringComparison.Ordinal))
+            {
+                ushort? requested = null;
+                if (options.AvatarOptionValue != null)
+                {
+                    if (!TryBuildInventoryAvatarOptions(record.ItemTemplateId, job, out var avatarOptions, out var avatarError))
+                        return Error(avatarError ?? "该时装没有可配置属性");
+                    var raw = options.AvatarOptionValue.Value;
+                    if (raw < 0 || raw > byte.MaxValue || !AvatarGrantPolicy.ContainsValue(avatarOptions, raw))
+                        return Error("装扮属性不属于当前模板、品级和职业的合法选项");
+                    requested = (ushort)raw;
+                }
+                if (requested == null && expireTime == null)
+                    return Error("该时装没有可保存的配置项");
+                if (!_inventory.UpdateAvatarDetail(characterId, accountId, list, (short)request.Slot, requested, expireTime, out var avatarUpdateError))
+                    return Error(avatarUpdateError);
+                return new { success = true, characterId, listType = request.ListType, slot = request.Slot, type = "avatar", optionValue = requested, expireTime };
+            }
+
+            if (!IsInventoryConfigurableEquipment(record.ItemTemplateId, record.ItemKind, list, pvfIndex, out var capability))
+            {
+                if (expireTime == null)
+                    return Error("该装备类型没有可配置属性");
+                if (!_inventory.UpdateItemCore(characterId, accountId, list, (short)request.Slot, core => { core.ExpireTime = expireTime.Value; return null; }, out _, out var expirationUpdateError))
+                    return Error(expirationUpdateError);
+                return new { success = true, characterId, listType = request.ListType, slot = request.Slot, type = "expiration", expireTime };
+            }
+
+            var seed = (int)ItemQuality.ResolveSeed(options.QualityMode);
+            if (!_inventory.UpdateItemCore(characterId, accountId, list, (short)request.Slot, core =>
+            {
+                if (!Enum.IsDefined(typeof(ItemQualityMode), options.QualityMode)) return "装备品级选项无效";
+                if (options.UpgradeLevel < 0 || options.UpgradeLevel > EquipmentGrantPolicy.MaximumUpgradeLevel) return "强化/增幅等级必须在 0-31 之间";
+                if (options.AmplifyType < 0 || options.AmplifyType > 4) return "红字属性类型无效";
+                if (options.AmplifyType > 0 && !capability.CanAmplify) return "该装备不支持增幅";
+                if (options.UpgradeLevel > 0 && options.AmplifyType == 0 && !capability.CanUpgrade) return "该装备不支持强化";
+                if (options.ForgingLevel < 0 || options.ForgingLevel > EquipmentGrantPolicy.MaximumForgingLevel || (options.ForgingLevel > 0 && !capability.CanForge)) return "锻造等级无效或该装备不是武器";
+                core.InstanceValue = seed;
+                core.Upgrade = (byte)options.UpgradeLevel;
+                core.AmplifyType = (byte)options.AmplifyType;
+                core.AmplifyValue = options.AmplifyType > 0 ? AmplifyInitialValueResolver.Resolve(metadata.Rarity) : (ushort)0;
+                if (options.AmplifyType > 0 && core.AmplifyValue == 0) return "无法从 PVF 计算红字初始值";
+                core.GenuineUpgrade = (byte)options.ForgingLevel;
+                if (expireTime != null) core.ExpireTime = expireTime.Value;
+                return null;
+            }, out _, out var updateError))
+                return Error(updateError);
+
+            return new
+            {
+                success = true,
+                characterId,
+                listType = request.ListType,
+                slot = request.Slot,
+                type = "equipment",
+                qualitySeed = seed,
+                upgradeLevel = options.UpgradeLevel,
+                amplifyType = options.AmplifyType,
+                forgingLevel = options.ForgingLevel,
+                expireTime,
+                canUpgrade = capability.CanUpgrade,
+                canAmplify = capability.CanAmplify,
+                canForge = capability.CanForge,
+            };
         }
 
         private object BuildInventoryItemConfigOptions(
-            SqliteInventoryStore.ItemRecord record,
+            NewInventoryItemRecord record,
             InventoryListType list,
             int job,
             PvfIndexService pvfIndex,
@@ -234,8 +148,8 @@ WHERE item_uid = @itemUid;";
 
                 if (!ItemMetadataResolver.TryLoadEquipmentFile(record.ItemTemplateId, out var equipment))
                     return Error("装扮模板无法从 PVF 读取");
-                var selected = AvatarGrantPolicy.ContainsValue(options, record.OptionValue)
-                    ? (int)record.OptionValue
+                var selected = AvatarGrantPolicy.ContainsValue(options, record.Core.AbilityNo)
+                    ? (int)record.Core.AbilityNo
                     : options[0].Value;
 
                 return new
@@ -283,9 +197,8 @@ WHERE item_uid = @itemUid;";
             }
 
             var metadata = ItemMetadataResolver.Resolve(record.ItemTemplateId);
-            var extra = ItemExtraView.Parse(record.ExtraJson).Equipment;
-            var currentAmplifyType = extra.AmplifyType >= 0 && extra.AmplifyType <= 4
-                ? extra.AmplifyType
+            var currentAmplifyType = record.Core.AmplifyType <= 4
+                ? record.Core.AmplifyType
                 : 0;
 
             return new
@@ -310,9 +223,9 @@ WHERE item_uid = @itemUid;";
                         ? (int)ItemQualityMode.Top
                         : (int)ItemQualityMode.Random,
                     currentQualitySeed = record.InstanceValue,
-                    currentUpgradeLevel = (int)extra.Upgrade,
+                    currentUpgradeLevel = (int)record.Core.Upgrade,
                     currentAmplifyType = (int)currentAmplifyType,
-                    currentForgingLevel = (int)extra.Forging,
+                    currentForgingLevel = (int)record.Core.GenuineUpgrade,
                     qualityOptions = new[]
                     {
                         new { value = (int)ItemQualityMode.Random, label = "随机品级" },
@@ -360,7 +273,7 @@ WHERE item_uid = @itemUid;";
             return false;
         }
 
-        private static object BuildInventoryExpirationConfig(SqliteInventoryStore.ItemRecord record)
+        private static object BuildInventoryExpirationConfig(NewInventoryItemRecord record)
         {
             if (record == null || !CanConfigureInventoryExpiration(record.ItemTemplateId, record.ItemKind, record.ExpireTime))
                 return null;
@@ -402,7 +315,7 @@ WHERE item_uid = @itemUid;";
         }
 
         private static bool TryResolveInventoryExpirationOverride(
-            SqliteInventoryStore.ItemRecord record,
+            NewInventoryItemRecord record,
             ItemMetadata metadata,
             int days,
             out int expireTime,
@@ -597,88 +510,11 @@ WHERE item_uid = @itemUid;";
             int characterId,
             InventoryListType listType,
             int slot,
-            out SqliteInventoryStore.ItemRecord record)
-        {
-            using (var connection = new SqliteConnection(_config.ConnectionString))
-            {
-                connection.Open();
-                return TryLoadInventoryItemRecord(connection, null, characterId, listType, slot, out record);
-            }
-        }
-
-        private static bool TryLoadInventoryItemRecord(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            InventoryListType listType,
-            int slot,
-            out SqliteInventoryStore.ItemRecord record)
+            out NewInventoryItemRecord record)
         {
             record = null;
-            var dbListType = SqliteInventoryStore.MapToDbListType(listType);
-            var expectedKind = listType == InventoryListType.Avatar
-                ? "avatar"
-                : listType == InventoryListType.Equipment
-                    ? "equipment"
-                    : null;
-
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = @"
-SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
-FROM character_items
-WHERE character_id = @characterId
-  AND list_type = @listType
-  AND slot_index = @slotIndex
-  AND (@expectedKind IS NULL OR item_kind = @expectedKind)
-ORDER BY item_uid DESC
-LIMIT 1;";
-                command.Parameters.AddWithValue("@characterId", characterId);
-                command.Parameters.AddWithValue("@listType", (int)dbListType);
-                command.Parameters.AddWithValue("@slotIndex", slot);
-                if (expectedKind == null)
-                    command.Parameters.AddWithValue("@expectedKind", DBNull.Value);
-                else
-                    command.Parameters.AddWithValue("@expectedKind", expectedKind);
-
-                using (var reader = command.ExecuteReader())
-                {
-                    if (!reader.Read())
-                        return false;
-                    record = SqliteInventoryStore.ReadItemRecord(reader);
-                    return true;
-                }
-            }
-        }
-
-        private static string MergeKnownEquipmentExtraJson(string originalExtraJson, string equipmentExtraJson)
-        {
-            var target = ParseJsonObject(originalExtraJson);
-            var equipment = ParseJsonObject(equipmentExtraJson);
-            foreach (var key in new[] { "extData0", "prefixData0E", "middleData1A", "tailData2F", "jewelSocket" })
-            {
-                if (equipment.TryGetPropertyValue(key, out var value))
-                    target[key] = value == null ? null : value.DeepClone();
-            }
-            return target.ToJsonString();
-        }
-
-        private static JsonObject ParseJsonObject(string json)
-        {
-            if (!string.IsNullOrWhiteSpace(json))
-            {
-                try
-                {
-                    return JsonNode.Parse(json) as JsonObject ?? new JsonObject();
-                }
-                catch
-                {
-                    return new JsonObject();
-                }
-            }
-            return new JsonObject();
+            return TryGetAccountId(characterId, out var accountId)
+                && _inventory.TryLoadItem(characterId, accountId, listType, (short)slot, out record);
         }
     }
 

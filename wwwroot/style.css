@@ -311,11 +311,25 @@ header h1::before {
 }
 
 .notice {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   padding: 8px 20px;
   border-bottom: 1px solid var(--notice-border);
   background: var(--notice-bg);
   color: var(--notice-text);
   font-size: 12px;
+}
+
+.open-source-notice {
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.open-source-notice a {
+  color: inherit;
+  font-weight: 700;
 }
 
 .runtime-source-panel,
@@ -641,6 +655,76 @@ select:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+.inventory-migration-dialog {
+  max-width: 780px;
+}
+
+.migration-warning {
+  margin: 4px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger-bg);
+  border-radius: 4px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--danger-bg) 12%, var(--surface));
+}
+
+.migration-status {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  line-height: 1.8;
+  background: var(--surface-soft);
+}
+
+.migration-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.migration-actions button {
+  min-height: 44px;
+  font-weight: 700;
+}
+
+.migration-confirm-dialog {
+  width: min(560px, calc(100vw - 32px));
+  text-align: center;
+}
+
+.migration-direction {
+  margin-bottom: 16px;
+  color: var(--danger-bg);
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.migration-confirm-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.migration-report {
+  margin-top: 14px;
+  max-height: 340px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-soft);
+}
+
+.migration-report h3 { margin: 0 0 8px; }
+.migration-report ul { margin: 6px 0 12px; padding-left: 22px; }
+
+@media (max-width: 720px) {
+  .migration-actions { grid-template-columns: 1fr; }
 }
 
 table {

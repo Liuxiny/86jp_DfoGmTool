@@ -119,31 +119,19 @@ WHERE account_id = @aid;";
                     }
                 }
 
-                using (var cmd = conn.CreateCommand())
+                foreach (var item in _inventory.LoadAccountCargo(accountId))
                 {
-                    cmd.CommandText = @"
-SELECT slot_index, item_template_id, stack_count, durability
-FROM account_cargo_items
-WHERE account_id = @aid
-ORDER BY slot_index;";
-                    cmd.Parameters.AddWithValue("@aid", accountId);
-                    using (var reader = cmd.ExecuteReader())
+                    var templateId = item.ItemTemplateId;
+                    var kind = pvfIndex.ResolveItemKind(templateId);
+                    cargo.Add(new
                     {
-                        while (reader.Read())
-                        {
-                            var templateId = reader.GetInt32(1);
-                            var kind = pvfIndex.ResolveItemKind(templateId);
-                            cargo.Add(new
-                            {
-                                slot = reader.GetInt32(0),
-                                templateId,
-                                name = pvfIndex.ResolveItemName(templateId),
-                                kind,
-                                count = kind == "equipment" ? 1 : reader.GetInt32(2),
-                                durability = reader.GetInt32(3),
-                            });
-                        }
-                    }
+                        slot = (int)item.SlotIndex,
+                        templateId,
+                        name = pvfIndex.ResolveItemName(templateId),
+                        kind,
+                        count = item.Count,
+                        durability = (int)item.Core.Durability,
+                    });
                 }
 
                 if (!_accountProgress.TryLoad(accountId, out var progress))
@@ -335,39 +323,20 @@ ORDER BY slot_index;";
         // 与服务端 InventoryDbPrimitives.DeleteAccountCargoItem 同语义(该原语未公开, 表结构简单无关联行)
         public object DeleteAccountCargoAt(int accountId, int slot)
         {
-            using (var conn = new SqliteConnection(_config.ConnectionString))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "DELETE FROM account_cargo_items WHERE account_id = @aid AND slot_index = @slot;";
-                    cmd.Parameters.AddWithValue("@aid", accountId);
-                    cmd.Parameters.AddWithValue("@slot", slot);
-                    if (cmd.ExecuteNonQuery() == 0)
-                        return Error("该槽位没有物品");
-                }
-            }
+            if (_inventory.DeleteAccountCargoAt(accountId, (short)slot) == 0)
+                return Error("该槽位没有物品");
             return new { success = true, accountId, slot };
         }
 
         public object ClearAccountCargo(int accountId)
         {
-            using (var conn = new SqliteConnection(_config.ConnectionString))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "DELETE FROM account_cargo_items WHERE account_id = @aid;";
-                    cmd.Parameters.AddWithValue("@aid", accountId);
-                    var deleted = cmd.ExecuteNonQuery();
-                    return new { success = true, accountId, deleted };
-                }
-            }
+            var deleted = _inventory.ClearAccountCargo(accountId);
+            return new { success = true, accountId, deleted };
         }
 
         public object MaxAccountCargo(int accountId)
         {
-            const int MaxCargoSelectionKey = 152;
+            const int MaxCargoSelectionKey = 64;
 
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
@@ -388,7 +357,7 @@ WHERE account_id = @aid;";
                     {
                         success = true,
                         accountId,
-                        listType = 2,
+                        listType = (int)InventoryListType.AccountCargo,
                         listParam16 = MaxCargoSelectionKey,
                         affectedRows = updated,
                     };

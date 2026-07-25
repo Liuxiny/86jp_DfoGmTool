@@ -52,6 +52,10 @@ function setLoginState(text, isError) {
 
 function updateRuntimeActionButtons(status) {
   $('#btn-runtime-source').classList.toggle('hidden', !(status && status.canChangeSource));
+  $('#btn-inventory-migration').classList.add('hidden');
+  if (status && status.ready && (!status.authenticationRequired || status.authenticated)
+      && typeof refreshInventoryMigrationShortcut === 'function')
+    refreshInventoryMigrationShortcut();
   $('#btn-logout').classList.toggle('hidden', !(status && status.authenticationRequired && status.authenticated));
 }
 

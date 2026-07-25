@@ -13,6 +13,7 @@
     <div class="header-actions">
       <span id="status" class="status">连接中…</span>
       <button id="btn-runtime-source" class="mini hidden" type="button">数据源</button>
+      <button id="btn-inventory-migration" class="mini danger hidden" type="button">背包数据迁移</button>
       <button id="btn-logout" class="mini hidden" type="button">退出</button>
       <div id="theme-switcher" class="theme-switcher" role="group" aria-label="界面主题">
         <button type="button" class="theme-option" data-theme-option="white"
@@ -39,7 +40,10 @@
     </div>
   </header>
 
-  <div id="runtime-notice" class="notice hidden">服务器运行中做的改动，在线角色需要<b>返回选角再进入</b>才会生效。</div>
+  <div id="runtime-notice" class="notice hidden">
+    <span>GM 直接改库仅适用于离线角色。服务器运行中做的改动，在线角色需要<b>返回选角再进入</b>才会生效；未返回选角时整理、移动或退出保存可能覆盖本次修改。</span>
+    <span class="open-source-notice">本软件为免费开源软件&nbsp; 开源地址：<a href="https://github.com/Liuxiny/86jp_DfoGmTool" target="_blank" rel="noopener noreferrer">Liuxiny/86jp_DfoGmTool</a></span>
+  </div>
 
   <section id="login-panel" class="login-panel hidden" role="dialog" aria-modal="true" aria-labelledby="login-title">
     <form id="login-form" class="login-dialog">
@@ -71,6 +75,17 @@
         <span id="runtime-source-state" class="hint" aria-live="polite"></span>
       </div>
     </form>
+  </section>
+
+  <section id="inventory-migration-confirm" class="runtime-source-panel hidden" role="dialog" aria-modal="true" aria-labelledby="inventory-migration-confirm-direction">
+    <div class="runtime-source-dialog migration-confirm-dialog">
+      <div id="inventory-migration-confirm-direction" class="migration-direction"></div>
+      <p>该操作会合并目标侧已有数据，并在成功迁移后清除源侧对应数据。容量不足的数据会保留在源侧并生成报告。</p>
+      <div class="migration-confirm-actions">
+        <button id="btn-confirm-inventory-migration" class="danger" type="button">确认执行迁移</button>
+        <button id="btn-cancel-inventory-migration" type="button">取消</button>
+      </div>
+    </div>
   </section>
 
   <section id="clone-account-panel" class="runtime-source-panel hidden" aria-labelledby="clone-account-title">
@@ -119,6 +134,7 @@
         <button class="acc-tab tab" data-acc-tab="progress">账号进度</button>
         <button class="acc-tab tab" data-acc-tab="cargo">账号金库</button>
         <button class="acc-tab tab" data-acc-tab="backup">账号备份</button>
+        <button class="acc-tab tab" data-acc-tab="migration">背包数据迁移</button>
       </nav>
 
       <div id="acc-tab-currency" class="acc-tab-page">
@@ -171,6 +187,20 @@
             <button id="btn-restore-account-backup" class="mini danger">恢复备份</button>
           </div>
           <div id="account-backup-state" class="hint"></div>
+        </div>
+      </div>
+
+      <div id="acc-tab-migration" class="acc-tab-page hidden">
+        <div class="card inventory-migration-dialog">
+          <div class="card-title">背包数据迁移</div>
+          <p class="migration-warning">请确保游戏服务端已停止，且没有在线角色。每次迁移在一个完整事务中执行，错误会整体回滚。</p>
+          <div id="inventory-migration-status" class="migration-status" aria-live="polite">正在读取数据状态…</div>
+          <div class="migration-actions">
+            <button id="btn-migrate-legacy-new" class="danger" type="button" disabled>旧版背包升级新版背包</button>
+            <button id="btn-migrate-new-legacy" class="danger" type="button" disabled>新版背包还原旧版背包</button>
+          </div>
+          <div id="inventory-migration-progress" class="hint" aria-live="polite"></div>
+          <div id="inventory-migration-report" class="migration-report hidden"></div>
         </div>
       </div>
     </section>
@@ -527,6 +557,7 @@
   <script src="js/core.js"></script>
   <script src="js/sidebar.js"></script>
   <script src="js/environment.js"></script>
+  <script src="js/migration.js"></script>
   <script src="js/floating-config.js"></script>
   <script src="js/item-page-size.js"></script>
   <script src="js/give.js"></script>

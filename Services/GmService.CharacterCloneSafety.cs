@@ -12,7 +12,9 @@ namespace DfoGmTool.Services
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "characters", "character_items", "character_container_state",
+                "characters", "character_items", "character_equipped_entries", "equipped_items",
+                "character_titlebook", "character_achievement_chunks", "character_new_items",
+                "character_avatar_detail", "character_container_state",
             };
             foreach (var group in CharacterCloneTableGroups.Values)
             {
@@ -170,14 +172,14 @@ WHERE account_id = @aid AND slot_index = @slot AND delete_flag = 0;";
                     throw new InvalidOperationException("目标账号角色槽位发生唯一性冲突");
             }
 
-            if (TableExists(conn, tx, "character_items"))
+            if (TableExists(conn, tx, "character_new_items"))
             {
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.Transaction = tx;
                     cmd.CommandText = @"
 SELECT COUNT(1)
-FROM character_items
+FROM character_new_items
 WHERE character_id = @cid
   AND (owner_scope <> 'character' OR owner_id <> @cid);";
                     cmd.Parameters.AddWithValue("@cid", characterId);

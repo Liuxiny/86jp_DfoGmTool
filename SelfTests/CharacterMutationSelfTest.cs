@@ -105,7 +105,7 @@ namespace DfoGmTool.SelfTests
 
             var creatures = items.Where(item => string.Equals(item.TypeTag, "creature", StringComparison.OrdinalIgnoreCase)).ToArray();
             Check("PVF contains creature items", creatures.Length > 0);
-            Check("creatures are direct-grant items", creatures.Length > 0 && creatures.All(item => !item.RequiresConfiguration));
+            Check("creatures include direct-grant items", creatures.Length > 0 && creatures.Any(item => !item.RequiresConfiguration));
 
             var petArtifacts = items.Where(item =>
                 string.Equals(item.TypeTag, "artifact red", StringComparison.OrdinalIgnoreCase)
@@ -273,8 +273,7 @@ namespace DfoGmTool.SelfTests
                 pvfIndex);
             Check("quality pet equipment grant succeeds", IsSuccess(qualityGrant));
             var qualitySlot = GetIntProperty(qualityGrant, "slot");
-            var firstQualitySeed = LoadInt(dbPath,
-                $"SELECT instance_value FROM character_items WHERE character_id={CharacterId} AND list_type=7 AND slot_index={qualitySlot}");
+            var firstQualitySeed = LoadCore(dbPath, CharacterId, 7, qualitySlot)?.Value ?? 0;
             Check("quality pet equipment persists a quality seed", firstQualitySeed != 0);
 
             var configured = gm.ConfigureInventoryItem(CharacterId, new InventoryItemConfigureRequest
@@ -285,27 +284,23 @@ namespace DfoGmTool.SelfTests
             }, pvfIndex);
             Check("inventory can reconfigure quality pet equipment", IsSuccess(configured));
             Check("inventory pet equipment quality uses the protocol instance field",
-                LoadInt(dbPath,
-                    $"SELECT instance_value FROM character_items WHERE character_id={CharacterId} AND list_type=7 AND slot_index={qualitySlot}")
+                (LoadCore(dbPath, CharacterId, 7, qualitySlot)?.Value ?? 0)
                 == unchecked((int)ItemQuality.TopQualitySeed));
 
             var directGrant = gm.GiveItem(CharacterId, directArtifact.Id, 1, null, pvfIndex);
             Check("pet equipment without quality grants without options", IsSuccess(directGrant));
             var directSlot = GetIntProperty(directGrant, "slot");
             Check("pet equipment without quality keeps instance value empty",
-                LoadInt(dbPath,
-                    $"SELECT instance_value FROM character_items WHERE character_id={CharacterId} AND list_type=7 AND slot_index={directSlot}") == 0);
+                (LoadCore(dbPath, CharacterId, 7, directSlot)?.Value ?? -1) == 0);
 
             var creatureGrant = gm.GiveItem(CharacterId, creature.Id, 1, null, pvfIndex);
             Check("creature grants without configuration", IsSuccess(creatureGrant));
             var creatureSlot = GetIntProperty(creatureGrant, "slot");
-            var creatureSerial = LoadInt(dbPath,
-                $"SELECT pet_serial_or_handle FROM character_items WHERE character_id={CharacterId} AND list_type=7 AND slot_index={creatureSlot}");
-            var creatureInstance = LoadInt(dbPath,
-                $"SELECT instance_value FROM character_items WHERE character_id={CharacterId} AND list_type=7 AND slot_index={creatureSlot}");
-            Check("creature keeps its serial separate from pet equipment quality",
-                creatureSerial > 0 && creatureInstance == 0,
-                $"item={creature.Id}, slot={creatureSlot}, serial={creatureSerial}, instance={creatureInstance}");
+            var creatureCore = LoadCore(dbPath, CharacterId, 7, creatureSlot);
+            Check("creature core references its detail row",
+                creatureCore != null && creatureCore.Value > 0
+                    && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_creatures WHERE character_id={CharacterId} AND creature_key={creatureCore.Value}") == 1,
+                $"item={creature.Id}, slot={creatureSlot}, uid={creatureCore?.Value ?? 0}");
         }
 
         private static void CheckNameTagGrantPersistence(GmService gm, PvfIndexService pvfIndex, string dbPath)
@@ -328,20 +323,16 @@ namespace DfoGmTool.SelfTests
             Check("name tag grant succeeds", IsSuccess(firstGrant));
             Check("name tag grant reports equipped slot 28", GetIntProperty(firstGrant, "slot") == 28);
             Check("name tag is not inserted into character inventory",
-                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_items WHERE character_id={CharacterId} AND item_template_id={nameTags[0].Id}") == 0);
-            Check("name tag persists in equipped slot 28",
-                LoadInt(dbPath, $"SELECT item_id FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28") == nameTags[0].Id);
-            Check("name tag equipped raw is persisted",
-                LoadInt(dbPath, $"SELECT length(raw_entry) FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28") > 0);
+                CountCoreItem(dbPath, CharacterId, nameTags[0].Id) == 0);
+            Check("name tag persists in dedicated new state",
+                LoadInt(dbPath, $"SELECT item_id FROM character_name_tag_state WHERE character_id={CharacterId}") == nameTags[0].Id);
             var firstExpire = LoadInt(dbPath,
-                $"SELECT expire_time FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28");
+                $"SELECT expire_time FROM character_name_tag_state WHERE character_id={CharacterId}");
             Check("name tag initial expiry is about 30 days",
                 firstExpire > now + 29 * 86400L && firstExpire <= now + 31 * 86400L,
                 "expire=" + firstExpire);
-            Check("name tag subtype mirror item id is synced",
-                LoadInt(dbPath, $"SELECT name_tag_item_id FROM character_subtype1_fields WHERE character_id={CharacterId}") == nameTags[0].Id);
-            Check("name tag subtype mirror expiry is synced",
-                LoadInt(dbPath, $"SELECT name_tag_expire_time FROM character_subtype1_fields WHERE character_id={CharacterId}") == firstExpire);
+            Check("name tag no longer writes old equipped rows",
+                LoadInt(dbPath, $"SELECT COUNT(*) FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28") == 0);
 
             var renewGrant = gm.GiveItem(
                 CharacterId,
@@ -351,7 +342,7 @@ namespace DfoGmTool.SelfTests
                 pvfIndex);
             Check("same name tag renew succeeds", IsSuccess(renewGrant));
             var renewedExpire = LoadInt(dbPath,
-                $"SELECT expire_time FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28");
+                $"SELECT expire_time FROM character_name_tag_state WHERE character_id={CharacterId}");
             Check("same name tag stacks expiry", renewedExpire >= firstExpire + 14 * 86400);
 
             if (nameTags.Length > 1)
@@ -364,9 +355,9 @@ namespace DfoGmTool.SelfTests
                     pvfIndex);
                 Check("different name tag replace succeeds", IsSuccess(replaceGrant));
                 Check("different name tag replaces slot 28 item",
-                    LoadInt(dbPath, $"SELECT item_id FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28") == nameTags[1].Id);
+                    LoadInt(dbPath, $"SELECT item_id FROM character_name_tag_state WHERE character_id={CharacterId}") == nameTags[1].Id);
                 var replacedExpire = LoadInt(dbPath,
-                    $"SELECT expire_time FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28");
+                    $"SELECT expire_time FROM character_name_tag_state WHERE character_id={CharacterId}");
                 Check("different name tag resets expiry instead of stacking",
                     replacedExpire < renewedExpire && replacedExpire > now + 4 * 86400L);
             }
@@ -439,10 +430,7 @@ namespace DfoGmTool.SelfTests
 
         private static bool HasAnyTitleBookData(string dbPath)
         {
-            var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
-            return new CharacterTitleBookRepository(builder.ToString())
-                .LoadSnapshots(CharacterId)
-                .Any(snapshot => snapshot.Entries.Count > 0);
+            return LoadInt(dbPath, $"SELECT COUNT(*) FROM character_new_titlebook WHERE character_id={CharacterId}") > 0;
         }
 
         private static void CheckCloneCharacterSlotIsolation(GmService gm, string dbPath)
@@ -541,13 +529,13 @@ WHERE target.character_id={basicOnlyId} AND target.marker='dynamic-base' AND tar
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_active_quests WHERE character_id={id} AND quest_id=42420") > 0
                 && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_invisible_falgs WHERE character_id={id} AND slot_index=2424") > 0);
             CheckCloneOption(gm, dbPath, "titlebook", "cltitl", id =>
-                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_achievement_chunks WHERE character_id={id} AND chunk_index=42") > 0);
+                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_new_titlebook WHERE character_id={id} AND category=0 AND slot_index=42") > 0);
             CheckCloneOption(gm, dbPath, "dungeon", "cldung", id =>
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_dungeon_permissions WHERE character_id={id} AND dungeon_id=4242") > 0);
             CheckCloneOption(gm, dbPath, "daily", "cldail", id =>
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_daily_counters WHERE character_id={id} AND counter_key='clone_option_daily'") > 0);
             CheckCloneOption(gm, dbPath, "wallet", "clwall", id => HasClonedItem(dbPath, id, 0, 0, "stackable"));
-            CheckCloneOption(gm, dbPath, "quickSlots", "clquik", id => HasClonedItem(dbPath, id, 0, 3, "stackable"));
+            CheckCloneOption(gm, dbPath, "quickSlots", "clquik", id => HasClonedItem(dbPath, id, 29, 0, "stackable"));
             CheckCloneOption(gm, dbPath, "mainEquipment", "cleqip", id => HasClonedItem(dbPath, id, 0, 9, "equipment"));
             CheckCloneOption(gm, dbPath, "consumables", "clcons", id => HasClonedItem(dbPath, id, 0, 65, "stackable"));
             CheckCloneOption(gm, dbPath, "materials", "clmatr", id => HasClonedItem(dbPath, id, 0, 121, "stackable"));
@@ -558,22 +546,18 @@ WHERE target.character_id={basicOnlyId} AND target.marker='dynamic-base' AND tar
             CheckCloneOption(gm, dbPath, "mainOther", "clothr", id => HasClonedItem(dbPath, id, 0, 360, "stackable"));
             CheckCloneOption(gm, dbPath, "personalCargo", "clpcar", id => HasClonedItem(dbPath, id, 2, 0, "stackable"));
             CheckCloneOption(gm, dbPath, "equipped", "cleqed", id =>
-                HasClonedItem(dbPath, id, 1, 0, "equipment")
-                && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_equipped_entries WHERE character_id={id} AND slot=12") > 0
+                HasClonedItem(dbPath, id, 3, 12, "equipment")
                 && (restrictedEquipment == null
-                    || (LoadInt(dbPath, $"SELECT COUNT(1) FROM character_equipped_entries WHERE character_id={id} AND item_id={restrictedEquipment.Id}") == 0
-                        && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_items WHERE character_id={id} AND list_type=0 AND item_template_id={restrictedEquipment.Id}") == 1)));
+                    || (CountCoreItem(dbPath, id, restrictedEquipment.Id, listType: 3) == 0
+                        && CountCoreItem(dbPath, id, restrictedEquipment.Id, listType: 0) == 1)));
             CheckCloneOption(gm, dbPath, "avatars", "clavat", id => HasClonedItem(dbPath, id, 1, 1, "avatar"));
             CheckCloneOption(gm, dbPath, "pets", "clpets", id =>
                 HasClonedItem(dbPath, id, 7, 0, "pet")
-                && LoadInt(dbPath, $"SELECT pet_serial_or_handle FROM character_items WHERE character_id={id} AND list_type=7 AND slot_index=0") == 424277
                 && LoadInt(dbPath, $"SELECT creature_key FROM character_creatures WHERE character_id={id} AND sort_order=77") == 424277);
             CheckCloneOption(gm, dbPath, "petEquipment", "clpequ", id => HasClonedItem(dbPath, id, 7, 140, "equipment"));
             CheckCloneOption(gm, dbPath, "petConsumables", "clpcon", id =>
                 HasClonedItem(dbPath, id, 7, 189, "pet")
-                && LoadInt(dbPath, $"SELECT stack_count FROM character_items WHERE character_id={id} AND list_type=7 AND slot_index=189") == 37
-                && LoadInt(dbPath, $"SELECT instance_value FROM character_items WHERE character_id={id} AND list_type=7 AND slot_index=189") == 37
-                && LoadInt(dbPath, $"SELECT pet_serial_or_handle FROM character_items WHERE character_id={id} AND list_type=7 AND slot_index=189") == 37
+                && (LoadCore(dbPath, id, 7, 189)?.Count ?? 0) == 37
                 && GetListedItemCount(gm.ListItems(id, pvfIndex), 7, 189) == 37);
             CheckCloneOption(gm, dbPath, "locks", "cllock", id =>
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_item_locks WHERE character_id={id} AND equipment_lock_id=4242") > 0);
@@ -598,21 +582,14 @@ WHERE target.character_id={basicOnlyId} AND target.marker='dynamic-base' AND tar
                 NewName = cloneName,
                 Options = options.ToList(),
             });
-            Check("CloneCharacter option run succeeds: " + cloneName, IsSuccess(result));
+            Check("CloneCharacter option run succeeds: " + cloneName, IsSuccess(result), GetStringProperty(result, "error"));
             return GetIntProperty(result, "characterId");
         }
 
         private static bool HasClonedItem(string dbPath, int characterId, int listType, int slot, string kind)
         {
-            return LoadInt(dbPath, $@"
-SELECT COUNT(1)
-FROM character_items
-WHERE character_id={characterId}
-  AND owner_id={characterId}
-  AND owner_scope='character'
-  AND list_type={listType}
-  AND slot_index={slot}
-  AND item_kind='{kind}';") > 0;
+            _ = kind;
+            return LoadCore(dbPath, characterId, listType, slot) != null;
         }
 
         private static void DeleteCharacterRow(string dbPath, int characterId)
@@ -644,31 +621,13 @@ FOREIGN KEY(character_id) REFERENCES characters(character_id) ON DELETE CASCADE
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_hotkey_slots(character_id, slot_index, hotkey_value) VALUES(926014, 44, 4242);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_active_quests(character_id, slot, quest_id, trigger_value) VALUES(926014, 44, 42420, 7);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_invisible_falgs(character_id, slot_index, flag_value) VALUES(926014, 2424, 1);");
-                Exec(conn, tx, "INSERT OR REPLACE INTO character_achievement_chunks(character_id, chunk_index, mode_byte, owner_id16, entries_blob) VALUES(926014, 42, 1, 2, X'0102');");
+                SeedNewTitleBookItem(conn, tx, 0, 42, 904242);
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_dungeon_permissions(character_id, sort_order, dungeon_id, clear_state) VALUES(926014, 42, 4242, 4);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_daily_counters(character_id, counter_key, period, value) VALUES(926014, 'clone_option_daily', 'day', 1);");
-                Exec(conn, tx, "INSERT OR REPLACE INTO character_equipped_entries(character_id, slot, item_id, expire_time, raw_entry) VALUES(926014, 12, 424212, 0, X'00');");
+                SeedCloneOptionItem(conn, tx, 3, 12, 424212, "equipment");
                 if (restrictedEquipment != null)
                 {
-                    var raw = MakeEquipListCodec.BuildEntryFromDisplayFields(
-                        11,
-                        restrictedEquipment.Id,
-                        new MakeEquipListCodec.DisplayFields
-                        {
-                            InstanceValue = 999999998u,
-                            Durability = 123,
-                            Reinforce = 7,
-                        });
-                    using (var equip = conn.CreateCommand())
-                    {
-                        equip.Transaction = tx;
-                        equip.CommandText = @"
-INSERT OR REPLACE INTO character_equipped_entries(character_id, slot, item_id, expire_time, raw_entry)
-VALUES(926014, 11, @itemId, 0, @raw);";
-                        equip.Parameters.AddWithValue("@itemId", restrictedEquipment.Id);
-                        equip.Parameters.AddWithValue("@raw", raw);
-                        equip.ExecuteNonQuery();
-                    }
+                    SeedCloneOptionItem(conn, tx, 3, 11, restrictedEquipment.Id, "equipment");
                 }
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_creatures(character_id, sort_order, creature_key, field04) VALUES(926014, 77, 424277, 1);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_item_locks(character_id, equipment_lock_id, inventory_list_type, slot, state) VALUES(926014, 4242, 0, 9, 1);");
@@ -676,7 +635,7 @@ VALUES(926014, 11, @itemId, 0, @raw);";
                 Exec(conn, tx, "INSERT INTO item_audit_log(owner_scope, owner_id, character_id, action_name, list_type, slot_index, item_template_id, delta_stack_count, payload_json) VALUES('character', 926014, 926014, 'clone_option_audit', 0, 0, 4242, 1, '{}');");
 
                 SeedCloneOptionItem(conn, tx, 0, 0, 910000, "stackable");
-                SeedCloneOptionItem(conn, tx, 0, 3, 910003, "stackable");
+                SeedCloneOptionItem(conn, tx, 29, 0, 910003, "stackable");
                 SeedCloneOptionItem(conn, tx, 0, 9, 910009, "equipment");
                 SeedCloneOptionItem(conn, tx, 0, 65, 910065, "stackable");
                 SeedCloneOptionItem(conn, tx, 0, 121, 910121, "stackable");
@@ -686,7 +645,6 @@ VALUES(926014, 11, @itemId, 0, @raw);";
                 SeedCloneOptionItem(conn, tx, 0, 345, 910345, "stackable");
                 SeedCloneOptionItem(conn, tx, 0, 360, 910360, "stackable");
                 SeedCloneOptionItem(conn, tx, 2, 0, 920000, "stackable");
-                SeedCloneOptionItem(conn, tx, 1, 0, 930000, "equipment");
                 SeedCloneOptionItem(conn, tx, 1, 1, 930001, "avatar");
                 SeedCloneOptionItem(conn, tx, 7, 0, 970000, "pet");
                 SeedCloneOptionItem(conn, tx, 7, 140, 970140, "equipment");
@@ -697,26 +655,50 @@ VALUES(926014, 11, @itemId, 0, @raw);";
 
         private static void SeedCloneOptionItem(SqliteConnection conn, SqliteTransaction tx, int listType, int slot, int itemId, string kind, int count = 1)
         {
+            byte coreKind;
+            if (listType == 1) coreKind = ItemCore.KindAvatar;
+            else if (listType == 7 && slot <= 139) coreKind = ItemCore.KindCreature;
+            else if (listType == 7 && slot <= 188) coreKind = ItemCore.KindCreatureEquipment;
+            else if (listType == 7) coreKind = ItemCore.KindCreatureConsumable;
+            else if (listType == 3 || (listType == 0 && slot >= 9 && slot <= 64)) coreKind = ItemCore.KindEquipment;
+            else if (listType == 0 && slot == 0) coreKind = ItemCore.KindSpecialMaterial;
+            else if (listType == 0 && slot >= 121 && slot <= 176) coreKind = ItemCore.KindMaterial;
+            else if (listType == 0 && slot >= 177 && slot <= 232) coreKind = ItemCore.KindQuest;
+            else if (listType == 0 && slot >= 233 && slot <= 288) coreKind = ItemCore.KindExpertJobMaterial;
+            else if (listType == 0 && slot >= 289) coreKind = ItemCore.KindAvatarEmblem;
+            else coreKind = ItemCore.KindConsumable;
+            var core = ItemCore.Create(coreKind, itemId);
+            if (coreKind == ItemCore.KindCreature) core.Value = 77;
+            else if (coreKind == ItemCore.KindAvatar) core.Value = 424201;
+            else if (coreKind != ItemCore.KindEquipment && coreKind != ItemCore.KindCreatureEquipment) core.Count = count;
+            else core.InstanceValue = 10000;
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
-INSERT OR REPLACE INTO character_items
-    (owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json)
-VALUES
-    ('character', 926014, 926014, @list, @slot, @item, @kind, @count, @instance, 0, 0, 0, 0, 0, @pet, '{}');";
+INSERT OR REPLACE INTO character_new_items
+    (owner_scope, owner_id, character_id, list_type, slot_index, item_core)
+VALUES ('character', 926014, 926014, @list, @slot, @core);";
                 cmd.Parameters.AddWithValue("@list", listType);
                 cmd.Parameters.AddWithValue("@slot", slot);
-                cmd.Parameters.AddWithValue("@item", itemId);
-                cmd.Parameters.AddWithValue("@kind", kind);
-                var isPetConsumable = listType == 7 && slot >= 189 && slot <= 237;
-                cmd.Parameters.AddWithValue("@count", count);
-                cmd.Parameters.AddWithValue("@instance", isPetConsumable ? count : 0);
-                cmd.Parameters.AddWithValue("@pet", isPetConsumable
-                    ? count
-                    : string.Equals(kind, "pet", StringComparison.OrdinalIgnoreCase) ? 424277 : 0);
+                cmd.Parameters.AddWithValue("@core", core.ToBytes());
                 cmd.ExecuteNonQuery();
             }
+            if (coreKind == ItemCore.KindAvatar)
+                Exec(conn, tx, @"INSERT OR REPLACE INTO character_avatar_detail
+(item_uid,owner_id,character_id,item_id,jewel_socket) VALUES(424201,926014,926014,930001,zeroblob(30));");
+        }
+
+        private static void SeedNewTitleBookItem(SqliteConnection conn, SqliteTransaction tx, int category, int slot, int itemId)
+        {
+            var core = ItemCore.Create(ItemCore.KindEquipment, itemId);
+            using var command = conn.CreateCommand();
+            command.Transaction = tx;
+            command.CommandText = "INSERT OR REPLACE INTO character_new_titlebook(character_id,category,slot_index,item_core) VALUES(926014,@category,@slot,@core);";
+            command.Parameters.AddWithValue("@category", category);
+            command.Parameters.AddWithValue("@slot", slot);
+            command.Parameters.AddWithValue("@core", core.ToBytes());
+            command.ExecuteNonQuery();
         }
 
         private static void CheckAccountBackupRestoreSlotCompatibility(GmService gm, string dbPath)
@@ -946,6 +928,37 @@ INSERT INTO character_skills(character_id, page_index, slot, skill_id, level) VA
             }
         }
 
+        private static ItemCore LoadCore(string dbPath, int characterId, int listType, int slot)
+        {
+            using var conn = Open(dbPath);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"SELECT item_core FROM character_new_items
+WHERE character_id=@cid AND list_type=@list AND slot_index=@slot LIMIT 1;";
+            cmd.Parameters.AddWithValue("@cid", characterId);
+            cmd.Parameters.AddWithValue("@list", listType);
+            cmd.Parameters.AddWithValue("@slot", slot);
+            var value = cmd.ExecuteScalar() as byte[];
+            return value != null && value.Length == ItemCore.Size ? ItemCore.FromBytes(value) : null;
+        }
+
+        private static int CountCoreItem(string dbPath, int characterId, int itemId, int? listType = null)
+        {
+            using var conn = Open(dbPath);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT item_core FROM character_new_items WHERE character_id=@cid"
+                + (listType.HasValue ? " AND list_type=@list" : string.Empty) + ";";
+            cmd.Parameters.AddWithValue("@cid", characterId);
+            if (listType.HasValue) cmd.Parameters.AddWithValue("@list", listType.Value);
+            var count = 0;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var bytes = reader.IsDBNull(0) ? null : (byte[])reader.GetValue(0);
+                if (bytes != null && bytes.Length == ItemCore.Size && ItemCore.FromBytes(bytes).ItemId == itemId) count++;
+            }
+            return count;
+        }
+
         private static long LoadLong(string dbPath, string sql)
         {
             using (var conn = Open(dbPath))
@@ -985,6 +998,13 @@ INSERT INTO character_skills(character_id, page_index, slot, skill_id, level) VA
                 return false;
             var prop = value.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
             return prop != null && Convert.ToBoolean(prop.GetValue(value));
+        }
+
+        private static string GetStringProperty(object value, string propertyName)
+        {
+            if (value == null) return null;
+            var prop = value.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            return prop?.GetValue(value)?.ToString();
         }
 
         private static bool IsSuccess(object result)

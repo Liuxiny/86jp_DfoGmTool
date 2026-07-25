@@ -72,7 +72,8 @@ namespace DfoGmTool.ServerCore.Sqlite
                 ("cube_gold", "INTEGER NOT NULL DEFAULT 0"),
             })),
 
-            (9, "晶块从 character_items 归集账号", CurrencyService.MigrateCubeFragmentsFromCharacterItems),
+            // GM 不再在启动阶段隐式搬动旧背包；旧晶块只允许由显式双向迁移事务处理。
+            (9, "旧晶块保留给显式背包迁移", _ => { }),
 
             // 原 AccountCharacterEntryRepository.SaveAll 内散装补列
             (10, "account_character_entries 选角条目列", conn => SqliteSchemaMigrator.EnsureColumns(conn, "account_character_entries", new[]

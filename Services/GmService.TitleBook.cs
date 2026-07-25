@@ -13,18 +13,25 @@ namespace DfoGmTool.Services
 {
     public sealed partial class GmService
     {
-        // 称号簿壳任务的完成不能只写位图: 服务端正规链(TriggerAchievement)在
-        // 计数归零时会把称号写进 character_titlebook 簿槽。GM 强制完成对壳任务
-        // 复用该链(计数一次打满→自动入簿), 取消完成反向清簿槽。
+        // 离线 GM 没有在线 InventoryLease，称号簿直接按服务端 ItemCore 语义写新版槽表。
         private void DeliverTitleIfBookShell(int characterId, int questId, List<int> delivered)
         {
             foreach (var slot in FindTitleBookSlotsForQuest(questId))
             {
                 try
                 {
-                    var result = _titleBookMutation.Value.TriggerAchievement(
-                        characterId, slot.ShellQuestId, ushort.MaxValue, ushort.MaxValue, ushort.MaxValue);
-                    if (result.Completed && delivered != null && !delivered.Contains(slot.ShellQuestId))
+                    if (slot.RewardItemId <= 0)
+                        continue;
+                    using (var conn = new SqliteConnection(_config.ConnectionString))
+                    {
+                        conn.Open();
+                        using var tx = conn.BeginTransaction();
+                        var core = ItemCore.Create(ItemCore.KindEquipment, slot.RewardItemId);
+                        core.InstanceValue = checked((int)ItemQuality.TopQualitySeed);
+                        SaveNewTitleBookSlot(conn, tx, characterId, slot.Category, slot.Index, core);
+                        tx.Commit();
+                    }
+                    if (delivered != null && !delivered.Contains(slot.ShellQuestId))
                         delivered.Add(slot.ShellQuestId);
                 }
                 catch (Exception ex)
@@ -45,8 +52,7 @@ namespace DfoGmTool.Services
                         conn.Open();
                         using (var tx = conn.BeginTransaction())
                         {
-                            new CharacterTitleBookRepository(_config.ConnectionString)
-                                .ClearItem(conn, tx, characterId, slot.Category, slot.Index);
+                            SaveNewTitleBookSlot(conn, tx, characterId, slot.Category, slot.Index, null);
                             using (var cmd = conn.CreateCommand())
                             {
                                 cmd.Transaction = tx;
@@ -141,7 +147,6 @@ WHERE character_id = @cid AND achievement_id = @qid;";
             if (job < 0)
                 return Error("角色不存在 " + characterId);
 
-            var repository = new CharacterTitleBookRepository(_config.ConnectionString);
             var slots = EnsureTitleBookSlots()
                 .Where(slot => TitleBookSlotMatchesCharacter(slot, job, grow))
                 .ToArray();
@@ -155,8 +160,7 @@ WHERE character_id = @cid AND achievement_id = @qid;";
                 conn.Open();
                 foreach (var slot in slots)
                 {
-                    var item = repository.LoadItem(conn, null, characterId, slot.Category, slot.Index);
-                    var titleMissing = item == null || item.IsEmpty;
+                    var titleMissing = !NewTitleBookSlotHasItem(conn, characterId, slot.Category, slot.Index);
                     var questPending = ResolveTitleBoundQuestIds(slot.ShellQuestId)
                         .Any(id => id > 0 && (!cleared.TryGetValue(id, out var flag) || flag == 0));
 
@@ -202,6 +206,46 @@ WHERE character_id = @cid AND achievement_id = @qid;";
                 pendingQuestSlots,
                 skipped = false,
             };
+        }
+
+        private static bool NewTitleBookSlotHasItem(SqliteConnection connection, int characterId, int category, int slotIndex)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = @"SELECT item_core FROM character_new_titlebook
+WHERE character_id=@cid AND category=@category AND slot_index=@slot LIMIT 1;";
+            command.Parameters.AddWithValue("@cid", characterId);
+            command.Parameters.AddWithValue("@category", category);
+            command.Parameters.AddWithValue("@slot", slotIndex);
+            var value = command.ExecuteScalar();
+            return value is byte[] bytes && bytes.Length == ItemCore.Size && !ItemCore.FromBytes(bytes).IsEmpty;
+        }
+
+        private static void SaveNewTitleBookSlot(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int category,
+            int slotIndex,
+            ItemCore core)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            if (core == null || core.IsEmpty)
+            {
+                command.CommandText = @"DELETE FROM character_new_titlebook
+WHERE character_id=@cid AND category=@category AND slot_index=@slot;";
+            }
+            else
+            {
+                command.CommandText = @"INSERT INTO character_new_titlebook(character_id,category,slot_index,item_core,updated_at)
+VALUES(@cid,@category,@slot,@core,CURRENT_TIMESTAMP)
+ON CONFLICT(character_id,category,slot_index) DO UPDATE SET item_core=excluded.item_core,updated_at=CURRENT_TIMESTAMP;";
+                command.Parameters.AddWithValue("@core", core.ToBytes());
+            }
+            command.Parameters.AddWithValue("@cid", characterId);
+            command.Parameters.AddWithValue("@category", category);
+            command.Parameters.AddWithValue("@slot", slotIndex);
+            command.ExecuteNonQuery();
         }
 
         private bool TitleBookSlotMatchesCharacter(TitleBookSlot slot, int job, int grow)

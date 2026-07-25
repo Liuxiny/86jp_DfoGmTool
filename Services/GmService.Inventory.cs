@@ -20,114 +20,57 @@ namespace DfoGmTool.Services
         private const int DefaultNameTagGrantDays = 30;
         private const long SecondsPerDay = 86400L;
 
-        // 读侧同样走服务端快照(覆盖全部容器和多态字段语义), 不裸读 character_items
+        // 读侧从新版 ItemCore 投影页面模型，不读取旧 character_items。
         public object ListItems(int characterId, PvfIndexService pvfIndex)
         {
             int accountId;
             if (!TryGetAccountId(characterId, out accountId))
                 return Error("角色不存在: " + characterId);
 
-            // 快照加载内部自己开连接, 不能包在 scope 事务里(同库两连接会锁死)
-            var snapshot = _store.LoadCharacterItemListSnapshot(characterId, accountId);
+            var snapshot = _inventory.LoadCharacterItems(characterId, accountId);
             var rentalExpireTimes = _supplementalItemExpiration.LoadRentalExpireTimes(characterId);
             TryLoadGrantCharacter(characterId, out var job, out _, out _);
 
             var items = new List<object>();
-            AppendCommonItems(items, "主背包", InventoryListType.Main, snapshot.MainItems, pvfIndex, rentalExpireTimes, job);
-            AppendCommonItems(items, "个人仓库", InventoryListType.PersonalCargo, snapshot.PersonalCargoItems, pvfIndex, rentalExpireTimes, job);
-            AppendCommonItems(items, "账号金库", InventoryListType.AccountCargo, snapshot.AccountCargoItems, pvfIndex, rentalExpireTimes, job);
-
-            foreach (var item in snapshot.EquipmentItems)
+            foreach (var item in snapshot)
             {
-                var configKind = ResolveInventoryConfigKind(
-                    item.AvatarItemId,
-                    "equipment",
-                    InventoryListType.Equipment,
-                    job,
-                    pvfIndex);
-                var expirationConfigurable = CanConfigureInventoryExpiration(item.AvatarItemId, "equipment", item.ExpireTime);
+                var kind = item.ItemKind;
+                var configKind = ResolveInventoryConfigKind(item.ItemTemplateId, kind, item.ListType, job, pvfIndex);
+                var expirationConfigurable = CanConfigureInventoryExpiration(item.ItemTemplateId, kind, item.ExpireTime);
+                var container = item.ListType switch
+                {
+                    InventoryListType.PersonalCargo => "个人仓库",
+                    InventoryListType.AccountCargo => "账号金库",
+                    InventoryListType.Pet => "宠物",
+                    _ => "主背包",
+                };
+                var category = item.ListType switch
+                {
+                    InventoryListType.Main => ResolveMainSegment(item.SlotIndex),
+                    InventoryListType.Equipment => "穿戴装备",
+                    InventoryListType.Avatar => "时装",
+                    InventoryListType.Pet => ResolvePetSegment(item.SlotIndex),
+                    _ => container,
+                };
                 items.Add(new
                 {
-                    container = "主背包",
-                    category = "穿戴装备",
-                    listType = (int)InventoryListType.Equipment,
-                    slot = (int)item.SlotIndex,
-                    templateId = item.AvatarItemId,
-                    name = pvfIndex.ResolveItemName(item.AvatarItemId),
-                    kind = "equipment",
-                    rarity = pvfIndex.ResolveItemRarity(item.AvatarItemId),
-                    count = 1,
-                    durability = 0,
-                    expireTime = item.ExpireTime,
-                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.AvatarItemId, item.ExpireTime),
-                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.AvatarItemId),
-                    deletable = true,
-                    configurable = configKind != null || expirationConfigurable,
-                    expirationConfigurable,
-                    configKind,
-                });
-            }
-
-            foreach (var item in snapshot.AvatarItems)
-            {
-                var configKind = ResolveInventoryConfigKind(
-                    item.AvatarItemId,
-                    "avatar",
-                    InventoryListType.Avatar,
-                    job,
-                    pvfIndex);
-                var expirationConfigurable = CanConfigureInventoryExpiration(item.AvatarItemId, "avatar", item.ExpireTime);
-                items.Add(new
-                {
-                    container = "主背包",
-                    category = "时装",
-                    listType = (int)InventoryListType.Avatar,
-                    slot = (int)item.SlotIndex,
-                    templateId = item.AvatarItemId,
-                    name = pvfIndex.ResolveItemName(item.AvatarItemId),
-                    kind = "avatar",
-                    rarity = pvfIndex.ResolveItemRarity(item.AvatarItemId),
-                    count = 1,
-                    durability = 0,
-                    expireTime = item.ExpireTime,
-                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.AvatarItemId, item.ExpireTime),
-                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.AvatarItemId),
-                    deletable = true,
-                    configurable = configKind != null || expirationConfigurable,
-                    expirationConfigurable,
-                    configKind,
-                });
-            }
-
-            foreach (var item in snapshot.PetItems)
-            {
-                var category = ResolvePetSegment(item.SlotIndex);
-                var isPetConsumable = string.Equals(category, "宠物用品", StringComparison.Ordinal);
-                var configKind = ResolveInventoryConfigKind(
-                    item.CreatureItemId,
-                    "pet",
-                    InventoryListType.Pet,
-                    job,
-                    pvfIndex);
-                var expirationConfigurable = CanConfigureInventoryExpiration(item.CreatureItemId, "pet", item.ExpireTime);
-                items.Add(new
-                {
-                    container = "宠物",
+                    container,
                     category,
-                    listType = (int)InventoryListType.Pet,
+                    listType = (int)item.ListType,
                     slot = (int)item.SlotIndex,
-                    templateId = item.CreatureItemId,
-                    name = pvfIndex.ResolveItemName(item.CreatureItemId),
-                    kind = "pet",
-                    rarity = pvfIndex.ResolveItemRarity(item.CreatureItemId),
-                    count = isPetConsumable ? item.StackCount : 1,
-                    durability = 0,
-                    serial = item.CreatureSerialOrHandle,
-                    instanceValue = item.CreatureSerialOrHandle,
+                    templateId = item.ItemTemplateId,
+                    name = pvfIndex.ResolveItemName(item.ItemTemplateId),
+                    kind,
+                    rarity = pvfIndex.ResolveItemRarity(item.ItemTemplateId),
+                    count = item.Count,
+                    instanceValue = item.InstanceValue,
+                    durability = (int)item.Core.Durability,
+                    serial = item.Core.ItemKind == ItemCore.KindCreature ? item.Core.CreatureUid : 0,
                     expireTime = item.ExpireTime,
-                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.CreatureItemId, item.ExpireTime),
-                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.CreatureItemId),
-                    deletable = true,
+                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.ItemTemplateId, item.ExpireTime),
+                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.ItemTemplateId),
+                    seal = (int)item.Core.SealFlag,
+                    deletable = IsDeletable(item.ListType, item.SlotIndex),
                     configurable = configKind != null || expirationConfigurable,
                     expirationConfigurable,
                     configKind,
@@ -135,41 +78,6 @@ namespace DfoGmTool.Services
             }
 
             return new { characterId, count = items.Count, items };
-        }
-
-        private static void AppendCommonItems(List<object> items, string container, InventoryListType listType,
-            List<CommonInventoryItem> source, PvfIndexService pvfIndex, IReadOnlyDictionary<int, int> rentalExpireTimes, int job)
-        {
-            var isMainList = listType == InventoryListType.Main;
-            foreach (var item in source)
-            {
-                var kind = pvfIndex.ResolveItemKind(item.ItemTemplateId);
-                var configKind = ResolveInventoryConfigKind(item.ItemTemplateId, kind, listType, job, pvfIndex);
-                var expirationConfigurable = CanConfigureInventoryExpiration(item.ItemTemplateId, kind, item.ExpireTime);
-                items.Add(new
-                {
-                    container,
-                    category = isMainList ? ResolveMainSegment(item.SlotIndex) : container,
-                    listType = (int)listType,
-                    slot = (int)item.SlotIndex,
-                    templateId = item.ItemTemplateId,
-                    name = pvfIndex.ResolveItemName(item.ItemTemplateId),
-                    kind,
-                    rarity = pvfIndex.ResolveItemRarity(item.ItemTemplateId),
-                    // CountOrInstanceValue 对装备是实例值(品质种子), 对堆叠物是数量
-                    count = kind == "equipment" ? 1 : item.CountOrInstanceValue,
-                    instanceValue = item.CountOrInstanceValue,
-                    durability = (int)item.Durability,
-                    expireTime = item.ExpireTime,
-                    supplementalExpiration = CreateSupplementalExpiration(rentalExpireTimes, item.ItemTemplateId, item.ExpireTime),
-                    templateExpiration = CreateTemplateExpiration(pvfIndex, item.ItemTemplateId),
-                    seal = (int)item.SealFlag,
-                    deletable = IsDeletable(listType, item.SlotIndex),
-                    configurable = configKind != null || expirationConfigurable,
-                    expirationConfigurable,
-                    configKind,
-                });
-            }
         }
 
         // 货币行(主背包 slot 0-2)删行会打坏钱包; 晶块(354-359)和账号金库是账号共享, 在账号面板管理
@@ -229,8 +137,7 @@ namespace DfoGmTool.Services
             if (!IsDeletable(list, slot))
                 return Error("该槽位不允许删除(货币行或账号金库)");
 
-            InventoryMutationResult result;
-            if (!_store.TryDeleteItem(characterId, accountId, list, (short)slot, (short)count, out result))
+            if (!_inventory.TryDelete(characterId, accountId, list, (short)slot, count, out var remaining))
                 return Error("删除失败(槽位为空或该列表不支持删除)");
 
             return new
@@ -239,7 +146,7 @@ namespace DfoGmTool.Services
                 characterId,
                 listType,
                 slot,
-                remaining = result != null ? result.RemainingStackCount : 0,
+                remaining,
                 sorted = false,
             };
         }
@@ -264,8 +171,7 @@ namespace DfoGmTool.Services
                     continue;
                 }
 
-                InventoryMutationResult result;
-                if (_store.TryDeleteItem(characterId, accountId, list, (short)entry.Slot, 0, out result))
+                if (_inventory.TryDelete(characterId, accountId, list, (short)entry.Slot, 0, out _))
                 {
                     deleted++;
                 }
@@ -301,122 +207,20 @@ namespace DfoGmTool.Services
 
         private bool SortInventorySegment(int characterId, InventoryListType listType, int slot)
         {
-            if (!TryGetSortRange(listType, slot, out var dbListType, out var start, out var end))
+            if (!TryGetSortRange(listType, slot, out var dbListType, out var start, out var end)
+                || !TryGetAccountId(characterId, out var accountId))
                 return false;
 
             try
             {
-                using (var conn = new SqliteConnection(_config.ConnectionString))
-                {
-                    conn.Open();
-                    using (var tx = conn.BeginTransaction())
-                    {
-                        var lockedSlots = LoadSortLockedSlots(conn, tx, characterId, dbListType, start, end);
-                        var itemUids = new List<long>();
-                        using (var cmd = conn.CreateCommand())
-                        {
-                            cmd.Transaction = tx;
-                            cmd.CommandText = @"
-SELECT item_uid, slot_index
-FROM character_items
-WHERE character_id = @cid
-  AND list_type = @lt
-  AND slot_index >= @start
-  AND slot_index <= @end
-ORDER BY item_kind ASC, item_template_id ASC, slot_index ASC;";
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@lt", (int)dbListType);
-                            cmd.Parameters.AddWithValue("@start", start);
-                            cmd.Parameters.AddWithValue("@end", end);
-                            using (var reader = cmd.ExecuteReader())
-                            {
-                                while (reader.Read())
-                                {
-                                    var currentSlot = reader.GetInt32(1);
-                                    if (!lockedSlots.Contains(currentSlot))
-                                        itemUids.Add(reader.GetInt64(0));
-                                }
-                            }
-                        }
-
-                        var tempSlot = -10000;
-                        foreach (var uid in itemUids)
-                        {
-                            using (var cmd = conn.CreateCommand())
-                            {
-                                cmd.Transaction = tx;
-                                cmd.CommandText = "UPDATE character_items SET slot_index = @slot WHERE item_uid = @uid;";
-                                cmd.Parameters.AddWithValue("@slot", tempSlot--);
-                                cmd.Parameters.AddWithValue("@uid", uid);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-
-                        var targetSlots = new List<int>();
-                        for (var target = start; target <= end; target++)
-                        {
-                            if (!lockedSlots.Contains(target))
-                                targetSlots.Add(target);
-                        }
-
-                        for (var i = 0; i < itemUids.Count && i < targetSlots.Count; i++)
-                        {
-                            using (var cmd = conn.CreateCommand())
-                            {
-                                cmd.Transaction = tx;
-                                cmd.CommandText = @"
-UPDATE character_items
-SET slot_index = @slot, updated_at = CURRENT_TIMESTAMP
-WHERE item_uid = @uid;";
-                                cmd.Parameters.AddWithValue("@slot", targetSlots[i]);
-                                cmd.Parameters.AddWithValue("@uid", itemUids[i]);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-
-                        tx.Commit();
-                        return true;
-                    }
-                }
+                _inventory.SortRange(characterId, accountId, dbListType, (short)start, (short)end);
+                return true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine("[GmService] inventory sort after delete failed: " + ex.Message);
                 return false;
             }
-        }
-
-        private static HashSet<int> LoadSortLockedSlots(
-            SqliteConnection conn,
-            SqliteTransaction tx,
-            int characterId,
-            InventoryListType listType,
-            int start,
-            int end)
-        {
-            var slots = new HashSet<int>();
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = @"
-SELECT slot_index
-FROM character_sort_item_locks
-WHERE character_id = @cid
-  AND list_type = @lt
-  AND slot_index >= @start
-  AND slot_index <= @end;";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@lt", (int)listType);
-                cmd.Parameters.AddWithValue("@start", start);
-                cmd.Parameters.AddWithValue("@end", end);
-                using (var reader = cmd.ExecuteReader())
-                {
-                    while (reader.Read())
-                        slots.Add(reader.GetInt32(0));
-                }
-            }
-
-            return slots;
         }
 
         private static bool TryGetSortRange(
@@ -426,7 +230,7 @@ WHERE character_id = @cid
             out int start,
             out int end)
         {
-            dbListType = SqliteInventoryStore.MapToDbListType(listType);
+            dbListType = listType;
             start = 0;
             end = -1;
 
@@ -442,7 +246,7 @@ WHERE character_id = @cid
                 case InventoryListType.Pet:
                     if (slot >= 0 && slot <= 139) { start = 0; end = 139; return true; }
                     if (slot >= 140 && slot <= 188) { start = 140; end = 188; return true; }
-                    if (slot >= 189 && slot <= 237) { start = 189; end = 237; return true; }
+                    if (slot >= 189 && slot <= 239) { start = 189; end = 239; return true; }
                     return false;
                 case InventoryListType.Avatar:
                     if (slot >= 0 && slot <= 209) { start = 0; end = 209; return true; }
@@ -476,37 +280,33 @@ WHERE character_id = @cid
             if (name == null && pvfIndex.IsReady)
                 return Error("物品 ID " + itemTemplateId + " 在 PVF 中不存在(装备/堆叠表都没有)");
 
-            using (var scope = _assetService.OpenScope(characterId, accountId))
+            var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
+            if (ItemMetadataResolver.IsNameTagMetadata(metadata))
             {
-                var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
-                if (ItemMetadataResolver.IsNameTagMetadata(metadata))
-                {
-                    var nameTagGrant = GrantNameTag(scope.Connection, scope.Transaction, characterId, itemTemplateId, count, options);
-                    if (!nameTagGrant.Success)
-                        return Error(nameTagGrant.Error ?? "名称装饰卡发放失败");
+                var days = options?.ExpirationDays ?? DefaultNameTagGrantDays;
+                if (days <= 0 || days > ItemGrantExpirationOverride.MaximumDays)
+                    return Error("名称装饰卡期限必须在 1-3650 天之间");
+                var previous = _inventory.LoadNameTag(characterId);
+                var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                var baseTime = previous.ItemId == itemTemplateId && previous.ExpireTime > now ? previous.ExpireTime : now;
+                var expire = Math.Min(now + ItemGrantExpirationOverride.MaximumDays * SecondsPerDay, baseTime + days * count * SecondsPerDay);
+                if (expire <= now || expire > int.MaxValue)
+                    return Error("名称装饰卡期限超出服务端可存储范围");
+                _inventory.UpsertNameTag(characterId, itemTemplateId, (int)expire);
+                return new { success = true, characterId, itemTemplateId, name, count, slot = (int)NameTagEquippedSlot, expireTime = (int)expire, slots = new[] { NameTagEquippedSlot }, nameTagEquipped = true };
+            }
 
-                    scope.Commit();
-                    return new
-                    {
-                        success = true,
-                        characterId,
-                        itemTemplateId,
-                        name,
-                        count = nameTagGrant.GrantedCount,
-                        slot = (int)nameTagGrant.AssignedSlot,
-                        expireTime = nameTagGrant.ExpireTime,
-                        slots = nameTagGrant.AffectedSlots,
-                        nameTagEquipped = true,
-                    };
-                }
-
-                if (PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays)
-                    && premiumType > 0
-                    && durationDays > 0)
+            if (PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays)
+                && premiumType > 0
+                && durationDays > 0)
+            {
+                using (var connection = new SqliteConnection(_config.ConnectionString))
                 {
+                    connection.Open();
+                    using var transaction = connection.BeginTransaction();
                     var premiumGrant = GrantAccountPremium(
-                        scope.Connection,
-                        scope.Transaction,
+                        connection,
+                        transaction,
                         accountId,
                         characterId,
                         itemTemplateId,
@@ -515,8 +315,7 @@ WHERE character_id = @cid
                         durationDays);
                     if (!premiumGrant.Success)
                         return Error(premiumGrant.Error ?? "账号契约发放失败");
-
-                    scope.Commit();
+                    transaction.Commit();
                     return new
                     {
                         success = true,
@@ -531,222 +330,43 @@ WHERE character_id = @cid
                         expireTime = premiumGrant.ExpireTime,
                     };
                 }
+            }
 
-                // 账号/钱包类特殊资产沿用既有入口，不进入角色实例期限发放。
-                if (CurrencyService.IsCubeFragment(itemTemplateId)
-                    || ReviveCoinService.IsReviveCoinReward(itemTemplateId))
+            if (CurrencyService.IsCubeFragment(itemTemplateId))
+            {
+                using (var connection = new SqliteConnection(_config.ConnectionString))
                 {
-                    if (!_assetService.TryAddItem(scope, itemTemplateId, count, out var legacySlot))
-                        return Error("发放失败(背包可能已满)");
-
-                    scope.Commit();
-                    return new { success = true, characterId, itemTemplateId, name, count, slot = (int)legacySlot };
+                    connection.Open();
+                    using var transaction = connection.BeginTransaction();
+                    CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, count);
+                    transaction.Commit();
                 }
-
-                var grant = _assetService.TryGrantCharacterItem(scope, itemTemplateId, count, options);
-                if (!grant.Success)
-                    return Error(grant.Error ?? "发放失败(背包可能已满)");
-
-                scope.Commit();
-                return new
-                {
-                    success = true,
-                    characterId,
-                    itemTemplateId,
-                    name,
-                    count = grant.GrantedCount,
-                    slot = (int)grant.AssignedSlot,
-                    expireTime = grant.ExpireTime,
-                    slots = grant.AffectedSlots,
-                };
-            }
-        }
-
-        private static ItemGrantResult GrantNameTag(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            int itemTemplateId,
-            int count,
-            ItemGrantOptions options)
-        {
-            var result = new ItemGrantResult
-            {
-                Success = false,
-                ItemTemplateId = itemTemplateId,
-                RequestedCount = count,
-                ListType = InventoryListType.Equipment,
-                AssignedSlot = NameTagEquippedSlot,
-            };
-
-            if (count <= 0)
-                return FailNameTagGrant(result, "数量必须大于 0");
-
-            var days = options?.ExpirationDays ?? DefaultNameTagGrantDays;
-            if (days <= 0 || days > ItemGrantExpirationOverride.MaximumDays)
-                return FailNameTagGrant(result, "名称装饰卡期限必须在 1-3650 天之间");
-
-            LoadEquippedNameTag(connection, transaction, characterId, out var previousItemId, out var previousExpireTime);
-
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var maxExpireTime = now + ItemGrantExpirationOverride.MaximumDays * SecondsPerDay;
-            var baseExpireTime = previousItemId == itemTemplateId && previousExpireTime > now
-                ? previousExpireTime
-                : now;
-            var addSeconds = (long)days * count * SecondsPerDay;
-            var nextExpireTime = Math.Min(maxExpireTime, baseExpireTime + addSeconds);
-            if (nextExpireTime <= now || nextExpireTime > int.MaxValue)
-                return FailNameTagGrant(result, "名称装饰卡期限超出服务端可存储范围");
-
-            var expireTime = (int)nextExpireTime;
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = @"
-INSERT INTO character_equipped_entries(character_id, slot, item_id, expire_time, equipment_lock_id, raw_entry)
-VALUES(@cid, @slot, @itemId, @expireTime, 0, @raw)
-ON CONFLICT(character_id, slot) DO UPDATE SET
-    item_id = excluded.item_id,
-    expire_time = excluded.expire_time,
-    equipment_lock_id = excluded.equipment_lock_id,
-    raw_entry = excluded.raw_entry;";
-                command.Parameters.AddWithValue("@cid", characterId);
-                command.Parameters.AddWithValue("@slot", (int)NameTagEquippedSlot);
-                command.Parameters.AddWithValue("@itemId", itemTemplateId);
-                command.Parameters.AddWithValue("@expireTime", expireTime);
-                command.Parameters.AddWithValue("@raw", BuildNameTagEquippedRaw(itemTemplateId));
-                command.ExecuteNonQuery();
+                return new { success = true, characterId, itemTemplateId, name, count, slot = CurrencyService.GetCubeFragmentSlot(itemTemplateId) };
             }
 
-            using (var command = connection.CreateCommand())
+            if (ReviveCoinService.IsReviveCoinReward(itemTemplateId))
             {
-                command.Transaction = transaction;
-                command.CommandText = "INSERT OR IGNORE INTO character_subtype1_fields(character_id) VALUES(@cid);";
-                command.Parameters.AddWithValue("@cid", characterId);
-                command.ExecuteNonQuery();
+                if (!_inventory.TryAdjustVirtualCount(characterId, accountId, 1, count, int.MaxValue, out _))
+                    return Error("复活币发放失败");
+                return new { success = true, characterId, itemTemplateId, name, count, slot = 1 };
             }
 
-            using (var command = connection.CreateCommand())
+            if (!TryLoadGrantCharacter(characterId, out var job, out _, out _))
+                return Error("角色不存在: " + characterId);
+            var grant = _inventory.TryGrant(characterId, accountId, job, itemTemplateId, count, options);
+            if (!grant.Success)
+                return Error(grant.Error ?? "发放失败(背包可能已满)");
+            return new
             {
-                command.Transaction = transaction;
-                command.CommandText = @"
-UPDATE character_subtype1_fields
-SET name_tag_item_id = @itemId,
-    name_tag_expire_time = @expireTime
-WHERE character_id = @cid;";
-                command.Parameters.AddWithValue("@cid", characterId);
-                command.Parameters.AddWithValue("@itemId", itemTemplateId);
-                command.Parameters.AddWithValue("@expireTime", expireTime);
-                command.ExecuteNonQuery();
-            }
-
-            result.Success = true;
-            result.GrantedCount = count;
-            result.ExpireTime = expireTime;
-            result.AffectedSlots.Add(NameTagEquippedSlot);
-            WriteNameTagGrantAudit(
-                connection,
-                transaction,
+                success = true,
                 characterId,
-                result,
-                days,
-                previousItemId,
-                previousExpireTime);
-            return result;
-        }
-
-        private static void LoadEquippedNameTag(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            out int itemId,
-            out int expireTime)
-        {
-            itemId = 0;
-            expireTime = 0;
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = @"
-SELECT item_id, expire_time
-FROM character_equipped_entries
-WHERE character_id = @cid AND slot = @slot
-LIMIT 1;";
-                command.Parameters.AddWithValue("@cid", characterId);
-                command.Parameters.AddWithValue("@slot", (int)NameTagEquippedSlot);
-                using (var reader = command.ExecuteReader())
-                {
-                    if (!reader.Read())
-                        return;
-
-                    itemId = reader.GetInt32(0);
-                    expireTime = reader.GetInt32(1);
-                }
-            }
-        }
-
-        private static byte[] BuildNameTagEquippedRaw(int itemTemplateId)
-        {
-            return MakeEquipListCodec.BuildEntryFromDisplayFields(
-                NameTagEquippedSlot,
                 itemTemplateId,
-                new MakeEquipListCodec.DisplayFields
-                {
-                    InstanceValue = ItemQuality.TopQualitySeed,
-                    MagicSealTypes = new byte[3],
-                    MagicSealVal1s = new byte[3],
-                    MagicSealVal2s = new byte[3],
-                    MagicSealTail = Array.Empty<byte>(),
-                    Emblem = Array.Empty<byte>(),
-                    JewelSocket = Array.Empty<byte>(),
-                });
-        }
-
-        private static void WriteNameTagGrantAudit(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            ItemGrantResult grant,
-            int durationDays,
-            int previousItemTemplateId,
-            int previousExpireTime)
-        {
-            if (grant == null || !grant.Success)
-                return;
-
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = @"
-INSERT INTO item_audit_log (
-    owner_scope, owner_id, character_id, action_name, list_type, slot_index,
-    item_template_id, delta_stack_count, payload_json)
-VALUES (
-    'character', @ownerId, @characterId, 'gm_grant', @listType, @slotIndex,
-    @itemTemplateId, @deltaStackCount, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", characterId);
-                command.Parameters.AddWithValue("@characterId", characterId);
-                command.Parameters.AddWithValue("@listType", (int)grant.ListType);
-                command.Parameters.AddWithValue("@slotIndex", grant.AssignedSlot);
-                command.Parameters.AddWithValue("@itemTemplateId", grant.ItemTemplateId);
-                command.Parameters.AddWithValue("@deltaStackCount", grant.GrantedCount);
-                command.Parameters.AddWithValue("@payloadJson",
-                    "{\"source\":\"gm_tool\",\"nameTagEquipped\":true"
-                    + ",\"requestedCount\":" + grant.RequestedCount.ToString(CultureInfo.InvariantCulture)
-                    + ",\"grantedCount\":" + grant.GrantedCount.ToString(CultureInfo.InvariantCulture)
-                    + ",\"durationDays\":" + durationDays.ToString(CultureInfo.InvariantCulture)
-                    + ",\"expireTime\":" + grant.ExpireTime.ToString(CultureInfo.InvariantCulture)
-                    + ",\"previousItemTemplateId\":" + previousItemTemplateId.ToString(CultureInfo.InvariantCulture)
-                    + ",\"previousExpireTime\":" + previousExpireTime.ToString(CultureInfo.InvariantCulture)
-                    + ",\"slots\":[" + string.Join(",", grant.AffectedSlots) + "]}");
-                command.ExecuteNonQuery();
-            }
-        }
-
-        private static ItemGrantResult FailNameTagGrant(ItemGrantResult result, string error)
-        {
-            result.Error = error;
-            return result;
+                name,
+                count = grant.GrantedCount,
+                slot = (int)grant.AssignedSlot,
+                expireTime = grant.ExpireTime,
+                slots = grant.AffectedSlots,
+            };
         }
 
         private sealed class AccountPremiumGrantResult
@@ -1126,16 +746,9 @@ VALUES (
             if (!TryGetAccountId(characterId, out accountId))
                 return Error("角色不存在: " + characterId);
 
-            using (var scope = _assetService.OpenScope(characterId, accountId))
-            {
-                short slot;
-                int remaining;
-                if (!_assetService.TryRemoveItem(scope, itemTemplateId, count, out slot, out remaining))
-                    return Error("移除失败(角色没有该物品或数量不足)");
-
-                scope.Commit();
-                return new { success = true, characterId, itemTemplateId, count, slot = (int)slot, remaining };
-            }
+            if (!_inventory.TryRemoveByTemplateId(characterId, accountId, itemTemplateId, count, out var slot, out var remaining))
+                return Error("移除失败(角色没有该物品或数量不足)");
+            return new { success = true, characterId, itemTemplateId, count, slot = (int)slot, remaining };
         }
 
         public object AdjustGold(int characterId, int amount)
@@ -1158,41 +771,15 @@ VALUES (
             }
 
             var requestedAmount = amount;
-            WalletSnapshot walletAfter;
-            using (var scope = _assetService.OpenScope(characterId, accountId))
-            {
-                var wallet = _assetService.LoadWallet(scope);
-                if (amount > 0)
-                {
-                    // 与服务端 CurrencyService 的 MIN(当前金币 + 增量, 上限) 行为一致。
-                    amount = Math.Min(amount, Math.Max(0, goldLimit.GoldCarryLimit - wallet.Gold));
-                    _assetService.GrantGold(scope, amount);
-                }
-                else if (!_assetService.TrySpendGold(scope, -amount))
-                {
-                    return Error("扣款失败(金币不足)");
-                }
-
-                scope.Commit();
-            }
-
-            using (var scope = _assetService.OpenScope(characterId, accountId))
-            {
-                walletAfter = _assetService.LoadWallet(scope);
-                return new
-                {
-                    success = true,
-                    characterId,
-                    requestedAmount,
-                    amount,
-                    gold = walletAfter.Gold,
-                    goldCarryLimit = goldLimit.GoldCarryLimit,
-                };
-            }
+            var wallet = _inventory.LoadWallet(characterId);
+            if (amount > 0)
+                amount = Math.Min(amount, Math.Max(0, goldLimit.GoldCarryLimit - wallet.Gold));
+            if (!_inventory.TryAdjustVirtualCount(characterId, accountId, 0, amount, goldLimit.GoldCarryLimit, out var gold))
+                return Error("扣款失败(金币不足)");
+            return new { success = true, characterId, requestedAmount, amount, gold, goldCarryLimit = goldLimit.GoldCarryLimit };
         }
 
-        // 三种角色货币覆写: 金币走 CurrencyService 按差额加扣;
-        // 复活币(slot1)/技能点(slot2)是普通计数行, 按服务端 UpdateStackCount 同语义直写
+        // 三种角色货币都写入新版 ItemCore 虚拟钱包槽：金币 slot0、复活币 slot1、技能点 slot2。
         public object SetWalletValue(int characterId, string type, int value)
         {
             if (value < 0)
@@ -1218,20 +805,9 @@ VALUES (
                 if (value > goldLimit.GoldCarryLimit)
                     return Error("金币不能超过当前上限 " + goldLimit.GoldCarryLimit.ToString("N0"));
 
-                WalletSnapshot walletAfter;
-                using (var scope = _assetService.OpenScope(characterId, accountId))
-                {
-                    var wallet = _assetService.LoadWallet(scope);
-                    var delta = value - wallet.Gold;
-                    if (delta > 0)
-                        _assetService.GrantGold(scope, delta);
-                    else if (delta < 0 && !_assetService.TrySpendGold(scope, -delta))
-                        return Error("扣减失败");
-                    scope.Commit();
-                }
-                using (var scope = _assetService.OpenScope(characterId, accountId))
-                    walletAfter = _assetService.LoadWallet(scope);
-                return new { success = true, characterId, type, value = walletAfter.Gold, goldCarryLimit = goldLimit.GoldCarryLimit };
+                if (!_inventory.TrySetVirtualCount(characterId, accountId, 0, value))
+                    return Error("设置失败");
+                return new { success = true, characterId, type, value, goldCarryLimit = goldLimit.GoldCarryLimit };
             }
 
             int slot;
@@ -1242,22 +818,8 @@ VALUES (
                 default: return Error("不支持的类型: " + type + " (可用: gold/revive/sp)");
             }
 
-            using (var conn = new SqliteConnection(_config.ConnectionString))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = @"
-UPDATE character_items
-SET stack_count = @v, instance_value = @v, updated_at = CURRENT_TIMESTAMP
-WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
-                    cmd.Parameters.AddWithValue("@v", value);
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@slot", slot);
-                    if (cmd.ExecuteNonQuery() == 0)
-                        return Error("货币行不存在(slot " + slot + ")");
-                }
-            }
+            if (!_inventory.TrySetVirtualCount(characterId, accountId, (short)slot, value))
+                return Error("货币设置失败(slot " + slot + ")");
             return new { success = true, characterId, type, value };
         }
 
@@ -1272,31 +834,37 @@ WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
                 return Error("角色不存在: " + characterId);
 
             var useToken = string.Equals(type, "token", StringComparison.OrdinalIgnoreCase);
-            using (var scope = _assetService.OpenScope(characterId, accountId))
+            using (var connection = new SqliteConnection(_config.ConnectionString))
             {
+                connection.Open();
+                using var transaction = connection.BeginTransaction();
                 if (amount > 0)
                 {
                     if (useToken)
-                        CurrencyService.GrantTokenCera(scope.Connection, scope.Transaction, characterId, amount);
+                        CurrencyService.GrantTokenCera(connection, transaction, characterId, amount);
                     else
-                        CurrencyService.GrantCera(scope.Connection, scope.Transaction, characterId, amount);
+                        CurrencyService.GrantCera(connection, transaction, characterId, amount);
                 }
                 else
                 {
                     var ok = useToken
-                        ? CurrencyService.TrySpendTokenCera(scope.Connection, scope.Transaction, characterId, -amount)
-                        : CurrencyService.TrySpendCera(scope.Connection, scope.Transaction, characterId, -amount);
+                        ? CurrencyService.TrySpendTokenCera(connection, transaction, characterId, -amount)
+                        : CurrencyService.TrySpendCera(connection, transaction, characterId, -amount);
                     if (!ok)
                         return Error("扣减失败(余额不足)");
                 }
-
-                scope.Commit();
+                transaction.Commit();
             }
 
-            using (var scope = _assetService.OpenScope(characterId, accountId))
+            using (var connection = new SqliteConnection(_config.ConnectionString))
             {
-                var wallet = _assetService.LoadWallet(scope);
-                return new { success = true, characterId, accountId, amount, cera = wallet.Cera, tokenCera = wallet.TokenCera };
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT cera, token_cera FROM accounts WHERE account_id=@aid;";
+                command.Parameters.AddWithValue("@aid", accountId);
+                using var reader = command.ExecuteReader();
+                reader.Read();
+                return new { success = true, characterId, accountId, amount, cera = reader.GetInt32(0), tokenCera = reader.GetInt32(1) };
             }
         }
     }

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using DfoGmTool.ServerCore.Game.Inventory;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.Services
@@ -49,11 +50,11 @@ namespace DfoGmTool.Services
                 ["basic"] = new[] { "character_subtype0_fields", "character_subtype1_fields", "character_init_flags" },
                 ["skills"] = new[] { "character_skills", "character_dark_knight_combo_skill_pages", "character_hotkey_slots" },
                 ["quests"] = new[] { "character_active_quests", "character_invisible_falgs" },
-                ["titlebook"] = new[] { "character_achievement_complete", "character_titlebook", "character_achievement_chunks" },
+                ["titlebook"] = new[] { "character_achievement_complete", "character_new_titlebook" },
                 ["dungeon"] = new[] { "character_dungeon_permissions", "character_dimensions", "character_dimension_flags", "character_growth_weapon_stages", "character_pvp_missions", "character_tower_of_despair_progress" },
                 ["daily"] = new[] { "character_daily_reset", "character_daily_counters", "character_daily_challenge_groups", "character_daily_challenge_entries", "character_daily_challenge_tail_ids", "character_daily_schedule_states", "character_buy_restrict_items", "character_crystal_contract" },
                 ["wallet"] = new[] { "character_gold_limits" },
-                ["equipped"] = new[] { "character_equipped_entries", "character_rental_items", "character_knight_shield_deck" },
+                ["equipped"] = new[] { "character_rental_items", "character_knight_shield_deck" },
                 ["pets"] = new[] { "character_creatures", "character_pet_welcome_cache" },
                 ["locks"] = new[] { "character_item_locks", "character_sort_item_locks" },
                 ["misc"] = new[] { "character_item_values", "character_collectbox_slots", "character_mercenary_support" },
@@ -209,6 +210,7 @@ SELECT last_insert_rowid();";
                         ValidateCloneTableSafety(conn, tx, cloneTables);
 
                         var newCharacterId = CloneCharacterRow(conn, tx, sourceCharacterId, request.TargetAccountId, newName, targetSlotIndex);
+                        DeleteStaleCloneInventory(conn, tx, newCharacterId);
 
                         foreach (var tableName in cloneTables)
                         {
@@ -281,6 +283,8 @@ SELECT last_insert_rowid();";
                 tables.Add(table);
             tables.Remove("characters");
             tables.Remove("character_items");
+            tables.Remove("character_new_items");
+            tables.Remove("character_avatar_detail");
             tables.Remove("character_container_state");
             return tables.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -356,36 +360,114 @@ SELECT last_insert_rowid();";
             int newCharacterId,
             HashSet<string> selected)
         {
-            if (!TableExists(conn, tx, "character_items"))
+            if (!TableExists(conn, tx, "character_new_items"))
                 return;
 
             var ranges = ResolveSelectedItemRanges(selected);
             if (ranges.Count == 0)
                 return;
 
-            var columns = LoadAccountBackupColumns(conn, tx, "character_items").Values.Select(c => c.Name).ToList();
-            var insertColumns = columns.Where(c => !c.Equals("item_uid", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            foreach (var row in LoadRows(conn, tx, "character_items", "(character_id = @cid OR (owner_scope = 'character' AND owner_id = @cid))", ("@cid", sourceCharacterId)))
+            foreach (var row in LoadRows(conn, tx, "character_new_items", "character_id = @cid OR (owner_scope = 'character' AND owner_id = @cid)", ("@cid", sourceCharacterId)))
             {
                 var listType = ToInt(row, "list_type");
                 var slot = ToInt(row, "slot_index");
                 if (!ranges.Any(r => r.Contains(listType, slot)))
                     continue;
-                if (listType == 1)
+
+                var bytes = row["item_core"] as byte[];
+                if (bytes == null || bytes.Length != ItemCore.Size)
+                    throw new InvalidOperationException($"源角色新版物品损坏: list={listType} slot={slot}");
+                var core = ItemCore.FromBytes(bytes);
+                if (core.ItemKind == ItemCore.KindAvatar)
                 {
-                    var kind = row.TryGetValue("item_kind", out var rawKind)
-                        ? Convert.ToString(rawKind, CultureInfo.InvariantCulture)
-                        : string.Empty;
-                    var isAvatar = string.Equals(kind, "avatar", StringComparison.OrdinalIgnoreCase);
-                    if (isAvatar && !selected.Contains("avatars"))
-                        continue;
-                    if (!isAvatar && !selected.Contains("equipped"))
-                        continue;
+                    var oldAvatarUid = core.Value;
+                    var newAvatarUid = AllocateClonedAvatarUid(conn, tx);
+                    CloneAvatarDetail(conn, tx, oldAvatarUid, newAvatarUid, newCharacterId);
+                    core.Value = newAvatarUid;
                 }
 
-                InsertClonedRow(conn, tx, "character_items", insertColumns, row, sourceCharacterId, newCharacterId, 0, cloneAudit: false);
+                using var insert = conn.CreateCommand();
+                insert.Transaction = tx;
+                insert.CommandText = @"INSERT INTO character_new_items
+(owner_scope,owner_id,character_id,list_type,slot_index,item_core,created_at,updated_at)
+VALUES('character',@cid,@cid,@list,@slot,@core,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);";
+                insert.Parameters.AddWithValue("@cid", newCharacterId);
+                insert.Parameters.AddWithValue("@list", listType);
+                insert.Parameters.AddWithValue("@slot", slot);
+                insert.Parameters.AddWithValue("@core", core.ToBytes());
+                try { insert.ExecuteNonQuery(); }
+                catch (SqliteException ex)
+                {
+                    throw new InvalidOperationException($"复制新版物品冲突: source={sourceCharacterId} target={newCharacterId} list={listType} slot={slot}", ex);
+                }
             }
+        }
+
+        private static int AllocateClonedAvatarUid(SqliteConnection connection, SqliteTransaction transaction)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "INSERT INTO character_avatar_uid_sequence DEFAULT VALUES; SELECT last_insert_rowid();";
+            return checked((int)Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture));
+        }
+
+        private static void DeleteStaleCloneInventory(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            var avatarUids = new List<int>();
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"SELECT item_core FROM character_new_items
+WHERE owner_scope='character' AND owner_id=@cid AND character_id IS NULL;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    var bytes = reader.IsDBNull(0) ? null : (byte[])reader.GetValue(0);
+                    if (bytes == null || bytes.Length != ItemCore.Size) continue;
+                    var core = ItemCore.FromBytes(bytes);
+                    if (core.ItemKind == ItemCore.KindAvatar && core.Value > 0) avatarUids.Add(core.Value);
+                }
+            }
+            foreach (var avatarUid in avatarUids)
+            {
+                using var detail = connection.CreateCommand();
+                detail.Transaction = transaction;
+                detail.CommandText = "DELETE FROM character_avatar_detail WHERE item_uid=@uid;";
+                detail.Parameters.AddWithValue("@uid", avatarUid);
+                detail.ExecuteNonQuery();
+            }
+            using var delete = connection.CreateCommand();
+            delete.Transaction = transaction;
+            delete.CommandText = @"DELETE FROM character_new_items
+WHERE owner_scope='character' AND owner_id=@cid AND character_id IS NULL;";
+            delete.Parameters.AddWithValue("@cid", characterId);
+            delete.ExecuteNonQuery();
+        }
+
+        private static void CloneAvatarDetail(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int oldAvatarUid,
+            int newAvatarUid,
+            int newCharacterId)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"INSERT INTO character_avatar_detail
+(item_uid,owner_id,character_id,item_id,expire_date,clear_avatar_id,jewel_socket,color1,color2,delete_date)
+SELECT @newUid,@cid,@cid,item_id,expire_date,clear_avatar_id,jewel_socket,color1,color2,delete_date
+FROM character_avatar_detail WHERE item_uid=@oldUid;";
+            command.Parameters.AddWithValue("@newUid", newAvatarUid);
+            command.Parameters.AddWithValue("@oldUid", oldAvatarUid);
+            command.Parameters.AddWithValue("@cid", newCharacterId);
+            if (command.ExecuteNonQuery() != 0)
+                return;
+
+            command.CommandText = @"INSERT INTO character_avatar_detail
+(item_uid,owner_id,character_id,item_id,expire_date,clear_avatar_id,jewel_socket,color1,color2,delete_date)
+VALUES(@newUid,@cid,@cid,0,0,0,zeroblob(30),0,0,0);";
+            command.ExecuteNonQuery();
         }
 
         private static void CloneSelectedContainerStates(SqliteConnection conn, SqliteTransaction tx, int sourceCharacterId, int newCharacterId, HashSet<string> selected)
@@ -420,7 +502,7 @@ SELECT last_insert_rowid();";
         {
             var ranges = new List<ItemCloneRange>();
             if (selected.Contains("wallet")) ranges.Add(new ItemCloneRange(0, 0, 2));
-            if (selected.Contains("quickSlots")) ranges.Add(new ItemCloneRange(0, 3, 8));
+            if (selected.Contains("quickSlots")) ranges.Add(new ItemCloneRange(29, 0, 5));
             if (selected.Contains("mainEquipment")) ranges.Add(new ItemCloneRange(0, 9, 64));
             if (selected.Contains("consumables")) ranges.Add(new ItemCloneRange(0, 65, 120));
             if (selected.Contains("materials")) ranges.Add(new ItemCloneRange(0, 121, 176));
@@ -430,10 +512,11 @@ SELECT last_insert_rowid();";
             if (selected.Contains("specialMaterials")) ranges.Add(new ItemCloneRange(0, 345, 353));
             if (selected.Contains("mainOther")) ranges.Add(new ItemCloneRange(0, 360, short.MaxValue));
             if (selected.Contains("personalCargo")) ranges.Add(new ItemCloneRange(2, 0, 151));
-            if (selected.Contains("avatars") || selected.Contains("equipped")) ranges.Add(new ItemCloneRange(1, 0, 209));
+            if (selected.Contains("avatars")) ranges.Add(new ItemCloneRange(1, 0, 209));
+            if (selected.Contains("equipped")) ranges.Add(new ItemCloneRange(3, 0, short.MaxValue));
             if (selected.Contains("pets")) ranges.Add(new ItemCloneRange(7, 0, 139));
             if (selected.Contains("petEquipment")) ranges.Add(new ItemCloneRange(7, 140, 188));
-            if (selected.Contains("petConsumables")) ranges.Add(new ItemCloneRange(7, 189, 237));
+            if (selected.Contains("petConsumables")) ranges.Add(new ItemCloneRange(7, 189, 239));
             return ranges;
         }
 
@@ -451,7 +534,8 @@ SELECT last_insert_rowid();";
 
         private static bool ShouldSkipCloneColumn(string tableName, string column, bool cloneAudit)
         {
-            if (tableName.Equals("character_items", StringComparison.OrdinalIgnoreCase)
+            if ((tableName.Equals("character_items", StringComparison.OrdinalIgnoreCase)
+                    || tableName.Equals("character_new_items", StringComparison.OrdinalIgnoreCase))
                 && column.Equals("item_uid", StringComparison.OrdinalIgnoreCase))
                 return true;
             if (tableName.Equals("item_audit_log", StringComparison.OrdinalIgnoreCase)
