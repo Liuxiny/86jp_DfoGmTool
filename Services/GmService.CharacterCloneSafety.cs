@@ -43,6 +43,13 @@ ORDER BY name;";
             {
                 if (known.Contains(table))
                     continue;
+                // Dynamic cloning is intentionally opt-in by table name. A character_id
+                // column is also used by runtime ledgers (outbox/inbox), audit tables,
+                // mailbox delivery state, and other cross-aggregate references. Treating
+                // every such reference as character-owned data can replay work or collide
+                // with event identities when a character is cloned.
+                if (!table.StartsWith("character_", StringComparison.OrdinalIgnoreCase))
+                    continue;
                 var columns = LoadCloneColumns(conn, tx, table);
                 if (columns.Any(c => c.Name.Equals("character_id", StringComparison.OrdinalIgnoreCase))
                     || columns.Any(c => c.Name.Equals("owner_character_id", StringComparison.OrdinalIgnoreCase)))

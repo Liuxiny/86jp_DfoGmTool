@@ -544,6 +544,12 @@ SELECT COUNT(1)
 FROM character_dynamic_clone_selftest target
 JOIN character_dynamic_clone_selftest source ON source.character_id=926014 AND source.marker='dynamic-base'
 WHERE target.character_id={basicOnlyId} AND target.marker='dynamic-base' AND target.row_id<>source.row_id;") == 1);
+            Check("Clone basic-only does not copy dungeon effect outbox records",
+                basicOnlyId > 0 && LoadInt(dbPath, $"SELECT COUNT(1) FROM dungeon_persistent_effect_outbox WHERE character_id={basicOnlyId}") == 0);
+            Check("Clone basic-only does not copy mercenary reward outbox records",
+                basicOnlyId > 0 && LoadInt(dbPath, $"SELECT COUNT(1) FROM mercenary_reward_outbox WHERE character_id={basicOnlyId}") == 0);
+            Check("Clone basic-only does not copy quest progress inbox records",
+                basicOnlyId > 0 && LoadInt(dbPath, $"SELECT COUNT(1) FROM quest_progress_event_inbox WHERE character_id={basicOnlyId}") == 0);
             DeleteCharacterRow(dbPath, basicOnlyId);
 
             CheckCloneOption(gm, dbPath, "skills", "clskil", id =>
@@ -802,6 +808,31 @@ UNIQUE(character_id, marker),
 FOREIGN KEY(character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );");
                 Exec(conn, tx, "INSERT OR IGNORE INTO character_dynamic_clone_selftest(character_id, marker) VALUES(926014, 'dynamic-base');");
+                Exec(conn, tx, @"CREATE TABLE IF NOT EXISTS dungeon_persistent_effect_outbox (
+source_event_id TEXT NOT NULL,
+effect_kind TEXT NOT NULL,
+effect_scope INTEGER NOT NULL,
+scope_target INTEGER NOT NULL,
+character_id INTEGER NOT NULL DEFAULT 0,
+account_id INTEGER NOT NULL DEFAULT 0,
+PRIMARY KEY(source_event_id, effect_kind, effect_scope, scope_target)
+);");
+                Exec(conn, tx, @"INSERT INTO dungeon_persistent_effect_outbox
+(source_event_id,effect_kind,effect_scope,scope_target,character_id,account_id)
+VALUES('clone-event','clone-effect',1,926014,926014,926014);");
+                Exec(conn, tx, @"CREATE TABLE IF NOT EXISTS mercenary_reward_outbox (
+outbox_id INTEGER PRIMARY KEY AUTOINCREMENT,
+assignment_id INTEGER NOT NULL UNIQUE,
+character_id INTEGER NOT NULL
+);");
+                Exec(conn, tx, "INSERT INTO mercenary_reward_outbox(assignment_id,character_id) VALUES(4242,926014);");
+                Exec(conn, tx, @"CREATE TABLE IF NOT EXISTS quest_progress_event_inbox (
+character_id INTEGER NOT NULL,
+event_id TEXT NOT NULL,
+event_kind TEXT NOT NULL,
+PRIMARY KEY(character_id,event_id,event_kind)
+);");
+                Exec(conn, tx, "INSERT INTO quest_progress_event_inbox(character_id,event_id,event_kind) VALUES(926014,'clone-event','clone-kind');");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_skills(character_id, page_index, slot, skill_id, level) VALUES(926014, 0, 44, 4242, 1);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_hotkey_slots(character_id, slot_index, hotkey_value) VALUES(926014, 44, 4242);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_active_quests(character_id, slot, quest_id, trigger_value) VALUES(926014, 44, 42420, 7);");
