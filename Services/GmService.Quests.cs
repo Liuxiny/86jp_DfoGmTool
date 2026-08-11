@@ -22,7 +22,7 @@ namespace DfoGmTool.Services
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
-SELECT slot, quest_id, trigger_value
+SELECT slot, quest_id, trigger_value, version, activation_id
 FROM character_active_quests
 WHERE character_id = @cid
 ORDER BY slot;";
@@ -38,6 +38,8 @@ ORDER BY slot;";
                                 questId,
                                 name = pvfIndex.ResolveQuestName(questId),
                                 triggerValue = reader.GetInt64(2),
+                                version = reader.GetInt64(3),
+                                activationId = reader.GetString(4),
                             });
                         }
                     }
@@ -47,23 +49,49 @@ ORDER BY slot;";
         }
 
         // 把进行中任务的触发计数清零, 客户端回城即可正常交付, 奖励走正常发放流程
-        public object MarkQuestReady(int characterId, int questId)
+        public object MarkQuestReady(
+            int characterId,
+            int questId,
+            string expectedActivationId = null)
         {
+            if (!QuestActivationId.TryParse(expectedActivationId, out var expectedActivation))
+                return Error("任务运行身份无效，请刷新任务列表后重试");
+
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
-                using (var cmd = conn.CreateCommand())
+                using (var tx = conn.BeginTransaction())
                 {
-                    cmd.CommandText = @"
-UPDATE character_active_quests SET trigger_value = 0
-WHERE character_id = @cid AND quest_id = @qid;";
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@qid", questId);
-                    if (cmd.ExecuteNonQuery() == 0)
+                    var activeQuest = QuestRepository.LoadActiveQuests(conn, tx, characterId)
+                        .FirstOrDefault(quest => quest.QuestId == questId);
+                    if (activeQuest == null)
                         return Error("该角色没有进行中的任务 " + questId);
+                    if (!activeQuest.ActivationId.Equals(expectedActivation))
+                        return Error("任务已经重新接取或被服务端替换，请刷新任务列表后重试");
+
+                    if (!QuestRepository.TryUpdateTriggerValueCas(
+                        conn,
+                        tx,
+                        characterId,
+                        activeQuest.QuestId,
+                        activeQuest.ActivationId,
+                        activeQuest.Version,
+                        activeQuest.TriggerValue,
+                        0))
+                    {
+                        return Error("任务状态已被服务端更新，请刷新任务列表后重试");
+                    }
+                    tx.Commit();
+                    return new
+                    {
+                        success = true,
+                        characterId,
+                        questId,
+                        activationId = activeQuest.ActivationId.ToString(),
+                        version = activeQuest.Version + 1,
+                    };
                 }
             }
-            return new { success = true, characterId, questId };
         }
 
         // 客户端词条: epic=主线(dstr 6562), normal=普通任务, daily=每日; 其余保留原始标记
@@ -1232,6 +1260,7 @@ WHERE character_id = @cid AND quest_id = @qid;";
                 return Error("not a daily quest " + questId);
 
             int level = -1, job = -1, grow = -1;
+            var activationId = string.Empty;
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
@@ -1267,15 +1296,32 @@ WHERE character_id = @cid AND quest_id = @qid;";
                     var existing = active.FirstOrDefault(q => q.QuestId == (ushort)questId);
                     if (existing != null)
                     {
-                        QuestRepository.UpdateTriggerValue(conn, tx, characterId, existing.Slot, 0);
+                        if (!QuestRepository.TryUpdateTriggerValueCas(
+                            conn,
+                            tx,
+                            characterId,
+                            existing.QuestId,
+                            existing.ActivationId,
+                            existing.Version,
+                            existing.TriggerValue,
+                            0))
+                        {
+                            return Error("daily quest state changed; refresh and retry");
+                        }
+                        activationId = existing.ActivationId.ToString();
                     }
                     else
                     {
-                        var usedSlots = new HashSet<int>(active.Select(q => q.Slot));
-                        var freeSlot = Enumerable.Range(0, 20).FirstOrDefault(slot => !usedSlots.Contains(slot));
-                        if (usedSlots.Contains(freeSlot))
+                        var freeSlot = QuestActiveListRules.FindFreeSlot(active);
+                        if (freeSlot < 0)
                             return Error("active quest slots are full");
-                        QuestRepository.InsertActiveQuest(conn, tx, characterId, freeSlot, (ushort)questId, 0);
+                        activationId = QuestRepository.InsertActiveQuest(
+                            conn,
+                            tx,
+                            characterId,
+                            freeSlot,
+                            (ushort)questId,
+                            0).ToString();
                     }
 
                     QuestRepository.DeleteClearedFlag(conn, tx, characterId, (ushort)questId);
@@ -1283,7 +1329,7 @@ WHERE character_id = @cid AND quest_id = @qid;";
                 }
             }
 
-            return new { success = true, characterId, questId };
+            return new { success = true, characterId, questId, activationId };
         }
 
         public object ResetVisibleDailyQuests(int characterId, PvfIndexService pvfIndex)
@@ -1472,7 +1518,7 @@ WHERE character_id = @cid AND quest_id = @qid;";
                     return false;
                 }
 
-                unlocked = exEquipSlotStat == 3;
+                unlocked = (exEquipSlotStat & 3) == 3;
                 var cleared = QuestRepository.LoadClearedFlags(conn, null, characterId);
                 foreach (var questId in ExtraEquipmentSlotQuestIds)
                 {

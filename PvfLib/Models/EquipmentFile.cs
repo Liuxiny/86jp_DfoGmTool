@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Text.RegularExpressions;
 
 namespace GmPvfLib
 {
@@ -68,13 +67,20 @@ namespace GmPvfLib
         public int RepairPrice { get; set; } = -1;
         public int AddRepairPrice { get; set; } = -1;
         public int Value { get; set; } = -1;
-        public int AddPrice { get; set; } = -1;
+        // [add price] is a signed purchase-price adjustment.  Zero means the
+        // tag is absent; -1 is a valid adjustment and must not mean "missing".
+        public int AddPrice { get; set; }
         public int AddValue { get; set; } = -1;
         public int CreationRate { get; set; } = -1;
         public int Durability { get; set; } = -1;
         public int Weight { get; set; } = -1;
         public int CoolTime { get; set; } = -1;
         public int InventoryLimit { get; set; } = -1;
+        public string NeedMaterial { get; set; }
+        /// <summary>
+        /// Additive reinforcement/amplification success weight on a 100000-point scale.
+        /// </summary>
+        public int UpgradeProbabilityIncrease { get; set; }
 
         #endregion
 
@@ -93,6 +99,7 @@ namespace GmPvfLib
         public int PartSetIndex { get; set; } = -1;
         public int OutputIndex { get; set; } = -1;
         public int[] ForceResultItemRule { get; set; }
+        public int ClearAvatar { get; set; }
         
         public string UsableJob { get; set; }
         public string ImpossibleContents { get; set; }
@@ -102,10 +109,6 @@ namespace GmPvfLib
         /// PVF [item category] 段值，用于判定克隆装扮等特殊类别。
         /// </summary>
         public string ItemCategory { get; set; }
-
-        public int AbilityCaseIndex { get; set; } = -1;
-
-        public List<AvatarSelectAbilityEntry> AvatarSelectAbilities { get; set; } = new List<AvatarSelectAbilityEntry>();
 
         #endregion
         #region 解析
@@ -175,6 +178,8 @@ namespace GmPvfLib
                     case "weight": equ.Weight = ParseInt(data); break;
                     case "cool time": equ.CoolTime = ParseInt(data); break;
                     case "inventory limit": equ.InventoryLimit = ParseInt(data); break;
+                    case "need material": equ.NeedMaterial = data; break;
+                    case "upgrade prob increase": equ.UpgradeProbabilityIncrease = ParseInt(data); break;
 
                     
                     case "icon": equ.Icon = data; break;
@@ -186,99 +191,17 @@ namespace GmPvfLib
                     case "part set index": equ.PartSetIndex = ParseInt(data); break;
                     case "output index": equ.OutputIndex = ParseInt(data); break;
                     case "force result item rule": equ.ForceResultItemRule = ParseIntArray(data); break;
+                    case "clear avatar": equ.ClearAvatar = ParseInt(data); break;
                     case "usable job": equ.UsableJob = StripBacktick(data); break;
                     case "impossible contents":
                         equ.ImpossibleContents = data;
                         equ.ImpossibleContentItems = ParseStringList(node, content);
                         break;
                     case "item category": equ.ItemCategory = StripBacktick(data); break;
-                    case "ability case index": equ.AbilityCaseIndex = ParseInt(data); break;
-                    case "avatar select ability": equ.AvatarSelectAbilities = ParseAvatarSelectAbilities(node, content); break;
                 }
             }
 
             return equ;
-        }
-
-        private static List<AvatarSelectAbilityEntry> ParseAvatarSelectAbilities(ScriptNode node, string content)
-        {
-            var result = new List<AvatarSelectAbilityEntry>();
-            if (node == null || node.DataItems == null)
-                return result;
-
-            var tokens = new List<string>();
-            foreach (var item in node.DataItems)
-                tokens.AddRange(ReadTokens(item.GetContent(content)));
-
-            var index = 0;
-            while (index + 1 < tokens.Count)
-            {
-                if (!int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var optionValue))
-                {
-                    index++;
-                    continue;
-                }
-
-                var ability = NormalizeToken(tokens[index + 1]);
-                index += 2;
-
-                var entry = new AvatarSelectAbilityEntry
-                {
-                    OptionValue = optionValue,
-                    Ability = ability,
-                };
-
-                if (string.Equals(ability, "SKILL_LEVEL", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (index < tokens.Count)
-                        entry.Job = NormalizeToken(tokens[index++]);
-                    if (index < tokens.Count && int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var skillIndex))
-                    {
-                        entry.SkillIndex = skillIndex;
-                        index++;
-                    }
-                    if (index < tokens.Count && int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var skillLevel))
-                    {
-                        entry.SkillLevel = skillLevel;
-                        index++;
-                    }
-                }
-                else
-                {
-                    if (index < tokens.Count && (tokens[index] == "+" || tokens[index] == "-"))
-                        entry.Operator = tokens[index++];
-                    if (index < tokens.Count && int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var amount))
-                    {
-                        entry.Amount = amount;
-                        index++;
-                    }
-                }
-
-                result.Add(entry);
-            }
-
-            return result;
-        }
-
-        private static IEnumerable<string> ReadTokens(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-                yield break;
-
-            foreach (Match match in Regex.Matches(text, "`([^`]*)`|\\S+"))
-            {
-                var token = match.Groups[1].Success ? match.Groups[1].Value : match.Value;
-                if (!string.IsNullOrWhiteSpace(token))
-                    yield return token.Trim();
-            }
-        }
-
-        private static string NormalizeToken(string value)
-        {
-            var token = (value ?? string.Empty).Trim().Trim('`').Trim();
-            if (token.StartsWith("[", StringComparison.Ordinal) && token.EndsWith("]", StringComparison.Ordinal) && token.Length > 2)
-                token = token.Substring(1, token.Length - 2);
-            return token.Trim();
         }
 
         private static List<string> ParseStringList(ScriptNode node, string content)
@@ -299,22 +222,5 @@ namespace GmPvfLib
         }
 
         #endregion
-    }
-
-    public sealed class AvatarSelectAbilityEntry
-    {
-        public int OptionValue { get; set; }
-
-        public string Ability { get; set; }
-
-        public string Operator { get; set; }
-
-        public int Amount { get; set; }
-
-        public string Job { get; set; }
-
-        public int SkillIndex { get; set; }
-
-        public int SkillLevel { get; set; }
     }
 }

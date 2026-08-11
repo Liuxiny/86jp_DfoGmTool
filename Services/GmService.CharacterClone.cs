@@ -46,16 +46,16 @@ namespace DfoGmTool.Services
             new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
             {
                 ["basic"] = new[] { "character_subtype0_fields", "character_subtype1_fields", "character_init_flags" },
-                ["skills"] = new[] { "character_skills", "character_dark_knight_combo_skill_pages", "character_hotkey_slots" },
-                ["quests"] = new[] { "character_active_quests", "character_invisible_falgs" },
+                ["skills"] = new[] { "character_skills", "character_pvp_skill_state", "character_pvp_skills", "character_dark_knight_combo_skill_pages", "character_hotkey_slots" },
+                ["quests"] = new[] { "character_active_quests", "character_quest_notify_selections", "character_invisible_falgs" },
                 ["titlebook"] = new[] { "character_achievement_complete", "character_new_titlebook" },
                 ["dungeon"] = new[] { "character_dungeon_permissions", "character_dimensions", "character_dimension_flags", "character_growth_weapon_stages", "character_pvp_missions", "character_tower_of_despair_progress" },
-                ["daily"] = new[] { "character_daily_reset", "character_daily_counters", "character_daily_challenge_groups", "character_daily_challenge_entries", "character_daily_challenge_tail_ids", "character_daily_schedule_states", "character_buy_restrict_items", "character_crystal_contract" },
+                ["daily"] = new[] { "character_daily_reset", "character_daily_counters", "character_daily_challenge_groups", "character_daily_challenge_entries", "character_daily_challenge_claims", "character_daily_challenge_tail_ids", "character_daily_schedule_states", "character_buy_restrict_items", "character_crystal_contract" },
                 ["wallet"] = new[] { "character_gold_limits" },
-                ["equipped"] = new[] { "character_rental_items", "character_knight_shield_deck" },
+                ["equipped"] = new[] { "character_rental_items", "character_knight_shield_deck", "character_name_tag_state" },
                 ["pets"] = new[] { "character_creatures", "character_pet_welcome_cache" },
                 ["locks"] = new[] { "character_item_locks", "character_sort_item_locks" },
-                ["misc"] = new[] { "character_item_values", "character_collectbox_slots", "character_mercenary_support" },
+                ["misc"] = new[] { "character_item_values", "character_collectbox_slots", "character_mercenary_support", "character_expert_job", "character_expert_job_recipes" },
                 ["audit"] = new[] { "item_audit_log" },
             };
 

@@ -38,10 +38,40 @@ namespace GmPvfLib
                 lst.Entries.Add(new LstEntry
                 {
                     Id = int.Parse(m.Groups[1].Value),
-                    FilePath = m.Groups[2].Value
+                    FilePath = NormalizeFilePath(m.Groups[2].Value)
                 });
             }
             return lst;
+        }
+
+        private static string NormalizeFilePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return string.Empty;
+
+            var normalized = new StringBuilder(path.Length);
+            for (int i = 0; i < path.Length; i++)
+            {
+                switch (path[i])
+                {
+                    case '\\':
+                        normalized.Append('/');
+                        break;
+                    case '\r':
+                        normalized.Append("/r");
+                        break;
+                    case '\n':
+                        normalized.Append("/n");
+                        break;
+                    case '\t':
+                        normalized.Append("/t");
+                        break;
+                    default:
+                        normalized.Append(path[i]);
+                        break;
+                }
+            }
+            return normalized.ToString();
         }
 
         private Dictionary<int, LstEntry> EnsureIdIndex()

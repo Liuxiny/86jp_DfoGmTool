@@ -11,6 +11,12 @@ namespace DfoGmTool
     {
         public static void Main(string[] args)
         {
+            if (Array.IndexOf(args, "--selftest-database-compatibility") >= 0)
+            {
+                Environment.Exit(
+                    SelfTests.DatabaseCompatibilitySelfTest.Run());
+                return;
+            }
             if (Array.IndexOf(args, "--selftest-item-grant-options") >= 0)
             {
                 Environment.Exit(SelfTests.ItemGrantOptionsSelfTest.Run());
@@ -19,6 +25,11 @@ namespace DfoGmTool
             if (Array.IndexOf(args, "--selftest-character-mutations") >= 0)
             {
                 Environment.Exit(SelfTests.CharacterMutationSelfTest.Run());
+                return;
+            }
+            if (Array.IndexOf(args, "--selftest-inventory-maintenance") >= 0)
+            {
+                Environment.Exit(SelfTests.InventoryMaintenanceSelfTest.Run());
                 return;
             }
 
@@ -76,6 +87,9 @@ namespace DfoGmTool
                     indexError = status.IndexError,
                     error = status.Error,
                     hasError = status.HasError,
+                    schemaVersion = status.SchemaVersion,
+                    minimumSupportedSchemaVersion = status.MinimumSupportedSchemaVersion,
+                    maximumSupportedSchemaVersion = status.MaximumSupportedSchemaVersion,
                     authenticationRequired = accessControl.RequiresAuthentication,
                     authenticated,
                     canChangeSource = !hostConfig.AllowRemoteAccess && authenticated,
@@ -190,6 +204,12 @@ namespace DfoGmTool
             app.MapGet("/api/characters", (int? accountId) => WithRuntime((gm, _) => gm.ListCharacters(accountId ?? -1)));
             app.MapGet("/api/characters/{id:int}", (int id) => WithRuntime((gm, _) => gm.GetCharacter(id)));
             app.MapGet("/api/characters/{id:int}/items", (int id) => WithRuntime((gm, pvfIndex) => gm.ListItems(id, pvfIndex)));
+            app.MapPost("/api/characters/{id:int}/mailbox/clear", (int id) =>
+                WithRuntime((gm, _) => gm.ClearCharacterMailbox(id)));
+            app.MapGet("/api/inventory-anomalies/status", () =>
+                WithRuntime((gm, pvfIndex) => gm.GetInventoryAnomalyStatus(pvfIndex)));
+            app.MapPost("/api/inventory-anomalies/clean", () =>
+                WithRuntime((gm, pvfIndex) => gm.CleanInventoryAnomalies(pvfIndex)));
             app.MapGet("/api/characters/{id:int}/items/{templateId:int}/grant-options", (int id, int templateId) =>
                 WithRuntime((gm, pvfIndex) => gm.GetItemGrantOptions(id, templateId, pvfIndex)));
             app.MapGet("/api/characters/{id:int}/items/config-options", (int id, int listType, int slot) =>
@@ -202,7 +222,14 @@ namespace DfoGmTool
             app.MapGet("/api/characters/name-available", (string name) => WithRuntime((gm, _) => gm.CheckCharacterNameAvailable(name)));
 
             app.MapPost("/api/characters/{id:int}/items", (int id, ItemRequest body) =>
-                WithRuntime((gm, pvfIndex) => gm.GiveItem(id, body.TemplateId, body.Count, body.Options, pvfIndex)));
+                WithRuntime((gm, pvfIndex) => gm.GiveItem(
+                    id,
+                    body.TemplateId,
+                    body.Count,
+                    body.Options,
+                    pvfIndex,
+                    body.RequestId,
+                    body.DeliveryMode)));
             app.MapPost("/api/characters/{id:int}/items/remove", (int id, ItemRequest body) =>
                 WithRuntime((gm, _) => gm.RemoveItem(id, body.TemplateId, body.Count)));
             app.MapPost("/api/characters/{id:int}/items/delete-at", (int id, DeleteAtRequest body) =>
@@ -240,8 +267,8 @@ namespace DfoGmTool
             app.MapGet("/api/characters/{id:int}/growoptions", (int id, int? job) => WithRuntime((gm, _) => gm.GetGrowOptions(id, job)));
             app.MapPost("/api/characters/{id:int}/growtype", (int id, GrowTypeRequest body) =>
                 WithRuntime((gm, _) => gm.SetGrowTypeFixed(id, body.Job, body.First, body.Second)));
-            app.MapPost("/api/characters/{id:int}/quests/{questId:int}/ready", (int id, int questId) =>
-                WithRuntime((gm, _) => gm.MarkQuestReady(id, questId)));
+            app.MapPost("/api/characters/{id:int}/quests/{questId:int}/ready", (int id, int questId, string activationId) =>
+                WithRuntime((gm, _) => gm.MarkQuestReady(id, questId, activationId)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/daily-ready", (int id, int questId) =>
                 WithRuntime((gm, pvfIndex) => gm.MarkVisibleDailyQuestReady(id, questId, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/quests/{questId:int}/complete", (int id, int questId) =>
@@ -351,6 +378,8 @@ namespace DfoGmTool
         public int TemplateId { get; set; }
         public int Count { get; set; }
         public ServerCore.Game.Inventory.ItemGrantOptions Options { get; set; }
+        public string RequestId { get; set; }
+        public string DeliveryMode { get; set; }
     }
 
     public sealed class AmountRequest

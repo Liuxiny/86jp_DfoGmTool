@@ -75,7 +75,7 @@ async function unlockDungeonPermissions() {
 function updateExtraEquipmentSlotButton() {
   const btn = $('#btn-unlock-equipment-slots');
   if (!btn || !currentChar) return;
-  const unlocked = currentChar.extraEquipmentSlotsUnlocked || currentChar.exEquipSlotStat === 3;
+  const unlocked = currentChar.extraEquipmentSlotsUnlocked || (currentChar.exEquipSlotStat & 3) === 3;
   btn.disabled = currentChar.level < 70 || unlocked;
   if (currentChar.level < 70)
     btn.title = '角色达到 70 级后可开启';
@@ -89,7 +89,7 @@ async function deleteCurrentCharacter() {
   if (!currentChar) return;
   const character = currentChar;
   if (!confirmCharacterSwitchedAway(character, '删除')) return;
-  const message = `将彻底删除角色 ${character.name} (#${character.characterId})，并删除背包、任务等关联数据。此操作不可恢复。是否继续？`;
+  const message = `将彻底删除角色 ${character.name} (#${character.characterId})，并删除背包、任务等关联数据。仍在佣兵出战或奖励邮件尚未送达时会拒绝删除。此操作不可恢复。是否继续？`;
   if (!confirm(message)) return;
 
   const confirmText = prompt('请输入 删除角色 以确认彻底删除当前角色');
@@ -109,6 +109,7 @@ async function deleteCurrentCharacter() {
     toast(`已彻底删除角色 ${r.name || character.name} (#${r.characterId})`);
     closeCharacterClonePanel();
     currentChar = null;
+    if (typeof updateCharacterMailboxButton === 'function') updateCharacterMailboxButton();
     selectEpoch++;
     $('#detail').classList.add('hidden');
     await loadAccounts();

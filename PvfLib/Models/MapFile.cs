@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace GmPvfLib
@@ -23,11 +24,15 @@ namespace GmPvfLib
     public class MonsterInfo
     {
         public int? MonsterId { get; set; }
+        public int? NpcId { get; set; }
         public int? AutoLv { get; set; }
         public int? Lv { get; set; }
         public int? X { get; set; }
         public int? Y { get; set; }
         public int? Z { get; set; }
+        public int? ConditionalParam0 { get; set; }
+        public int? ConditionalParam1 { get; set; }
+        public int? ConditionalParam2 { get; set; }
         public int? RandomDropCnt { get; set; }
         public int? SpecifyDropCnt { get; set; }
         public string Fixed { get; set; }
@@ -69,6 +74,22 @@ namespace GmPvfLib
         public int Param2 { get; set; }
     }
 
+    public class EventMonsterPositionInfo
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Z { get; set; }
+    }
+
+    public class MapNpcInfo
+    {
+        public int NpcId { get; set; }
+        public string Direction { get; set; }
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Flags { get; set; }
+    }
+
     public enum ApcFaction
     {
         Character = 0,
@@ -89,8 +110,25 @@ namespace GmPvfLib
         public int X { get; set; }
         public int Y { get; set; }
         public int Direction { get; set; }
-        public ApcFaction Faction { get; set; }
+        public ApcFaction? Faction { get; set; }
         public ApcAIType AIType { get; set; }
+    }
+
+    public class TournamentEnemyInfo
+    {
+        public int PartyCount { get; set; }
+        public bool IsApc { get; set; }
+        public int Code { get; set; }
+        public int Strength { get; set; }
+        public string Name { get; set; }
+    }
+
+    public class TournamentStartAreaInfo
+    {
+        public int PartyCount { get; set; }
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Direction { get; set; }
     }
 
     /// <summary>
@@ -117,11 +155,20 @@ namespace GmPvfLib
         public List<SpecialPassiveObjectInfo> SpecialPassiveObjects { get; set; } = new List<SpecialPassiveObjectInfo>();
         public int MonsterCount { get; set; } = -1;
         public List<MonsterInfo> Monsters { get; set; } = new List<MonsterInfo>();
+        public List<MonsterInfo> MonsterConditionMonsters { get; set; } = new List<MonsterInfo>();
+        public List<MonsterInfo> ConditionalSummonMonsters { get; set; } = new List<MonsterInfo>();
         public int EventMonsterPositionCount { get; set; } = -1;
+        public List<EventMonsterPositionInfo> EventMonsterPositions { get; set; } = new List<EventMonsterPositionInfo>();
         public int NpcCount { get; set; } = -1;
+        public List<MapNpcInfo> Npcs { get; set; } = new List<MapNpcInfo>();
         public string MonsterSpecificAI { get; set; }
         public string Buff { get; set; }
         public List<AICharacterInfo> AICharacters { get; set; } = new List<AICharacterInfo>();
+        public List<TournamentEnemyInfo> TournamentEnemyCandidates { get; set; } =
+            new List<TournamentEnemyInfo>();
+        public List<TournamentStartAreaInfo> TournamentStartAreas { get; set; } =
+            new List<TournamentStartAreaInfo>();
+        public bool TournamentDefinitionMalformed { get; set; }
 
         // --- Simple int properties ---
         public int FixChampion { get; set; } = -1;
@@ -282,14 +329,17 @@ namespace GmPvfLib
                         map.SpecialPassiveObjects = ParseSpecialPassiveObjects(data);
                         break;
                     case "monster":
-                        map.MonsterCount = CountNumberGroups(data, 4);
                         map.Monsters = ParseMonsters(data);
+                        map.MonsterCount = map.Monsters.Count;
                         break;
                     case "event monster position":
                         map.EventMonsterPositionCount = CountNumberGroups(data, 3);
+                        map.EventMonsterPositions = ParseEventMonsterPositions(data);
                         break;
                     case "npc":
-                        map.NpcCount = CountNumberGroups(data, 4);
+                        var npcData = GetAllDataContent(node, content);
+                        map.NpcCount = CountNumberGroups(npcData, 4);
+                        map.Npcs = ParseNpcs(npcData);
                         break;
                     case "monster specific ai":
                         map.MonsterSpecificAI = data;
@@ -412,7 +462,7 @@ namespace GmPvfLib
                         map.PvpPracticeStartArea = ParseIntArray(data);
                         break;
                     case "virtual movable area":
-                        map.VirtualMovableArea = ParseIntArray(data);
+                        map.VirtualMovableArea = ParseIntArray(GetAllDataContent(node, content));
                         break;
                     case "town movable area":
                         map.TownMovableArea = ParseIntArray(data);
@@ -444,6 +494,7 @@ namespace GmPvfLib
                     // --- Complex raw string ---
                     case "monster condition":
                         map.MonsterCondition = data;
+                        map.MonsterConditionMonsters = ParseMonsters(data);
                         break;
                     case "monster spawn pos":
                         map.MonsterSpawnPos = data;
@@ -483,6 +534,7 @@ namespace GmPvfLib
                         break;
                     case "conditional summon monster":
                         map.ConditionalSummonMonster = data;
+                        map.ConditionalSummonMonsters = ParseConditionalSummonMonsters(data);
                         break;
                     case "map over move ani":
                         map.MapOverMoveAni = data;
@@ -501,9 +553,17 @@ namespace GmPvfLib
                         break;
                     case "tournament enemies":
                         map.TournamentEnemies = data;
+                        if (TryParseTournamentEnemies(data, out var enemies))
+                            map.TournamentEnemyCandidates.AddRange(enemies);
+                        else
+                            map.TournamentDefinitionMalformed = true;
                         break;
                     case "tournament start area":
                         map.TournamentStartArea = data;
+                        if (TryParseTournamentStartAreas(data, out var startAreas))
+                            map.TournamentStartAreas.AddRange(startAreas);
+                        else
+                            map.TournamentDefinitionMalformed = true;
                         break;
                     case "before rendering info":
                         map.BeforeRenderingInfo = data;
@@ -592,6 +652,13 @@ namespace GmPvfLib
             return numbers.Length / groupSize;
         }
 
+        private static string GetAllDataContent(ScriptNode node, string content)
+        {
+            return string.Join(" ", node.DataItems
+                .Select(item => item.GetContent(content).Trim())
+                .Where(item => !string.IsNullOrWhiteSpace(item)));
+        }
+
         private static List<AICharacterInfo> ParseAICharacters(string data)
         {
             var result = new List<AICharacterInfo>();
@@ -641,11 +708,29 @@ namespace GmPvfLib
                 return result;
 
             var values = data.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            for (var index = 0; index + 9 < values.Length; index += 10)
+            for (var index = 0; index + 9 < values.Length;)
             {
+                var typeToken = StripBacktick(values[index + 9]);
+                int? npcId = null;
+                var recordLength = 10;
+
+                // Quest maps can bind a monster actor to the NPC it becomes after
+                // the encounter: ... [fixed] [NPC] npcId [boss].
+                if (string.Equals(typeToken, "[NPC]", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(typeToken, "NPC", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (index + 11 >= values.Length)
+                        break;
+
+                    npcId = ParseNullableInt(values[index + 10]);
+                    typeToken = StripBacktick(values[index + 11]);
+                    recordLength = 12;
+                }
+
                 result.Add(new MonsterInfo
                 {
                     MonsterId = ParseNullableInt(values[index]),
+                    NpcId = npcId,
                     Lv = ParseNullableInt(values[index + 1]),
                     AutoLv = ParseNullableInt(values[index + 2]),
                     X = ParseNullableInt(values[index + 3]),
@@ -654,8 +739,47 @@ namespace GmPvfLib
                     RandomDropCnt = ParseNullableInt(values[index + 6]),
                     SpecifyDropCnt = ParseNullableInt(values[index + 7]),
                     Fixed = StripBacktick(values[index + 8]),
+                    Type = ParseMonsterType(typeToken),
+                });
+
+                index += recordLength;
+            }
+
+            return result;
+        }
+
+        private static List<MonsterInfo> ParseConditionalSummonMonsters(string data)
+        {
+            var result = new List<MonsterInfo>();
+            if (string.IsNullOrWhiteSpace(data))
+                return result;
+
+            var values = data.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var index = 0; index + 9 < values.Length;)
+            {
+                var hasTailPosition = index + 12 < values.Length
+                    && int.TryParse(values[index + 10], out _)
+                    && int.TryParse(values[index + 11], out _)
+                    && int.TryParse(values[index + 12], out _);
+
+                result.Add(new MonsterInfo
+                {
+                    MonsterId = ParseNullableInt(values[index]),
+                    Lv = ParseNullableInt(values[index + 1]),
+                    AutoLv = ParseNullableInt(values[index + 2]),
+                    ConditionalParam0 = ParseNullableInt(values[index + 3]),
+                    ConditionalParam1 = ParseNullableInt(values[index + 4]),
+                    ConditionalParam2 = ParseNullableInt(values[index + 5]),
+                    X = hasTailPosition ? ParseNullableInt(values[index + 10]) : ParseNullableInt(values[index + 3]),
+                    Y = hasTailPosition ? ParseNullableInt(values[index + 11]) : ParseNullableInt(values[index + 4]),
+                    Z = hasTailPosition ? ParseNullableInt(values[index + 12]) : ParseNullableInt(values[index + 5]),
+                    RandomDropCnt = ParseNullableInt(values[index + 6]),
+                    SpecifyDropCnt = ParseNullableInt(values[index + 7]),
+                    Fixed = StripBacktick(values[index + 8]),
                     Type = ParseMonsterType(StripBacktick(values[index + 9])),
                 });
+
+                index += hasTailPosition ? 13 : 10;
             }
 
             return result;
@@ -677,6 +801,169 @@ namespace GmPvfLib
                 });
             }
             return result;
+        }
+
+        private static List<EventMonsterPositionInfo> ParseEventMonsterPositions(string data)
+        {
+            var result = new List<EventMonsterPositionInfo>();
+            if (string.IsNullOrWhiteSpace(data))
+                return result;
+
+            var values = ParseIntArray(data);
+            for (var index = 0; index + 2 < values.Length; index += 3)
+            {
+                result.Add(new EventMonsterPositionInfo
+                {
+                    X = values[index],
+                    Y = values[index + 1],
+                    Z = values[index + 2],
+                });
+            }
+
+            return result;
+        }
+
+        private static List<MapNpcInfo> ParseNpcs(string data)
+        {
+            var result = new List<MapNpcInfo>();
+            if (string.IsNullOrWhiteSpace(data))
+                return result;
+
+            var values = data.Split(
+                new[] { ' ', '\t', '\r', '\n' },
+                StringSplitOptions.RemoveEmptyEntries);
+            if (values.Length % 5 != 0)
+                return result;
+
+            for (var index = 0; index < values.Length; index += 5)
+            {
+                if (!int.TryParse(values[index], out var npcId)
+                    || !int.TryParse(values[index + 2], out var x)
+                    || !int.TryParse(values[index + 3], out var y)
+                    || !int.TryParse(values[index + 4], out var flags))
+                {
+                    result.Clear();
+                    return result;
+                }
+
+                result.Add(new MapNpcInfo
+                {
+                    NpcId = npcId,
+                    Direction = StripBacktick(values[index + 1]),
+                    X = x,
+                    Y = y,
+                    Flags = flags,
+                });
+            }
+
+            return result;
+        }
+
+        private static bool TryParseTournamentEnemies(
+            string data,
+            out List<TournamentEnemyInfo> result)
+        {
+            result = new List<TournamentEnemyInfo>();
+            if (!TryTokenize(data, out var tokens) || tokens.Count < 5)
+                return false;
+
+            if (!int.TryParse(tokens[0], out var partyCount)
+                || partyCount <= 0)
+            {
+                return false;
+            }
+
+            var kind = StripBacktick(tokens[1]).Trim();
+            var isApc = string.Equals(
+                kind,
+                "[apc]",
+                StringComparison.OrdinalIgnoreCase);
+            if (!isApc
+                && !string.Equals(
+                    kind,
+                    "[monster]",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if ((tokens.Count - 2) % 3 != 0)
+                return false;
+
+            for (var index = 2; index < tokens.Count; index += 3)
+            {
+                if (!int.TryParse(tokens[index], out var code)
+                    || !int.TryParse(tokens[index + 1], out var strength))
+                {
+                    result.Clear();
+                    return false;
+                }
+
+                var name = StripBacktick(tokens[index + 2]).Trim();
+                if (string.IsNullOrEmpty(name))
+                {
+                    result.Clear();
+                    return false;
+                }
+
+                result.Add(new TournamentEnemyInfo
+                {
+                    PartyCount = partyCount,
+                    IsApc = isApc,
+                    Code = code,
+                    Strength = strength,
+                    Name = name,
+                });
+            }
+
+            return result.Count > 0;
+        }
+
+        private static bool TryParseTournamentStartAreas(
+            string data,
+            out List<TournamentStartAreaInfo> result)
+        {
+            result = new List<TournamentStartAreaInfo>();
+            if (!TryTokenize(data, out var tokens)
+                || tokens.Count == 0
+                || tokens.Count % 4 != 0)
+            {
+                return false;
+            }
+
+            for (var index = 0; index < tokens.Count; index += 4)
+            {
+                if (!int.TryParse(tokens[index], out var partyCount)
+                    || !int.TryParse(tokens[index + 1], out var x)
+                    || !int.TryParse(tokens[index + 2], out var y)
+                    || !int.TryParse(tokens[index + 3], out var direction)
+                    || partyCount <= 0)
+                {
+                    result.Clear();
+                    return false;
+                }
+
+                result.Add(new TournamentStartAreaInfo
+                {
+                    PartyCount = partyCount,
+                    X = x,
+                    Y = y,
+                    Direction = direction,
+                });
+            }
+
+            return result.Count > 0;
+        }
+
+        private static bool TryTokenize(string data, out List<string> tokens)
+        {
+            tokens = new List<string>();
+            if (string.IsNullOrWhiteSpace(data))
+                return false;
+
+            foreach (Match match in SpecialPassiveTokenRx.Matches(data))
+                tokens.Add(match.Value);
+            return tokens.Count > 0;
         }
 
         private static List<SpecialPassiveObjectInfo> ParseSpecialPassiveObjects(string data)

@@ -290,12 +290,13 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 return false;
             }
 
+            var avatarMetadata = AvatarEquipmentMetadataReader.Read(equipment);
             var legalOptions = AvatarGrantPolicy.ResolveOptions(
                 equipment.EquipmentType,
                 equipment.Grade,
-                equipment.AvatarSelectAbilities,
+                avatarMetadata.SelectAbilities,
                 job,
-                equipment.AbilityCaseIndex);
+                avatarMetadata.AbilityCaseIndex);
             var requestedOption = options?.AvatarOptionValue ?? 0;
             if (requestedOption < 0 || requestedOption > byte.MaxValue
                 || !AvatarGrantPolicy.ContainsValue(legalOptions, requestedOption))

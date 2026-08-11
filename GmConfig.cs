@@ -26,7 +26,12 @@ namespace DfoGmTool
                 return Path.Combine(AppContext.BaseDirectory, "ServerCore", "Sqlite", "item_schema.sql");
             }
         }
-        public string ConnectionString => new SqliteConnectionStringBuilder { DataSource = DatabasePath }.ToString();
+        public string ConnectionString => new SqliteConnectionStringBuilder
+        {
+            DataSource = DatabasePath,
+            Mode = SqliteOpenMode.ReadWrite,
+            ForeignKeys = true
+        }.ToString();
 
         private GmConfig(string databasePath, string pvfPath, string serverBinDir)
         {

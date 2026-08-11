@@ -13,6 +13,7 @@ function resetAccountWorkspace() {
   $('#char-count').textContent = '';
   $('#detail').classList.add('hidden');
   $('#account-panel').classList.add('hidden');
+  if (typeof updateCharacterMailboxButton === 'function') updateCharacterMailboxButton();
 }
 
 async function loadAccounts(expectedRuntimeEpoch) {
@@ -89,6 +90,7 @@ function onAccountChanged() {
   $('#detail').classList.add('hidden');
   $('#account-panel').classList.add('hidden');
   currentChar = null;
+  if (typeof updateCharacterMailboxButton === 'function') updateCharacterMailboxButton();
   if (account) {
     loadCharacters(accountId);
   } else {
@@ -106,6 +108,7 @@ async function showAccountPanel() {
     const detail = await api(`/api/accounts/${accountId}/detail`);
     $('#detail').classList.add('hidden');
     currentChar = null;
+    if (typeof updateCharacterMailboxButton === 'function') updateCharacterMailboxButton();
     document.querySelectorAll('#char-list li').forEach((el) => el.classList.remove('active'));
     renderAccountPanel(accountId, detail);
     $('#account-panel').classList.remove('hidden');
@@ -236,7 +239,10 @@ function bindAccountBackupPanel(accountId) {
       link.click();
       link.remove();
       URL.revokeObjectURL(link.href);
-      if (state) state.textContent = `已导出 ${backup.tables?.length || 0} 张表，${backup.characterIDs?.length || 0} 个角色。`;
+      if (state) {
+        state.textContent =
+          `已导出格式 v${backup.version || '?'}：${backup.tables?.length || 0} 张表，${backup.characterIDs?.length || 0} 个角色；包含邮箱与待领取附件。`;
+      }
       toast('账号备份已导出');
     } catch (e) {
       if (state) state.textContent = e.message;
@@ -247,7 +253,7 @@ function bindAccountBackupPanel(accountId) {
   if (fileInput) {
     fileInput.onchange = () => {
       const file = fileInput.files && fileInput.files[0];
-      if (state) state.textContent = file ? `已选择: ${file.name}` : '';
+      if (state) state.textContent = file ? `已选择：${file.name}；恢复前会校验备份版本和服务端结构。` : '';
     };
   }
 
@@ -262,11 +268,17 @@ function bindAccountBackupPanel(accountId) {
     try {
       if (state) state.textContent = '正在读取备份...';
       const backup = JSON.parse(await file.text());
-      if (state) state.textContent = '正在恢复备份...';
+      if (state) state.textContent = `正在校验并恢复格式 v${backup.version || '?'} 的备份...`;
       const result = await post('/api/accounts/restore', backup);
       if (state) {
+        const upgradeText = result.upgradedFromVersion
+          ? `；已从 v${result.upgradedFromVersion} 安全升级到 v2`
+          : '';
+        const remapCount = (result.remappedMailboxMessageIdCount || 0)
+          + (result.remappedMailboxAuditIdCount || 0);
+        const remapText = remapCount ? `；已安全处理 ${remapCount} 个邮件编号冲突` : '';
         state.textContent =
-          `已恢复账号 #${result.accountID}，角色 ${result.restoredCharacterCount} 个，覆盖旧角色 ${result.deletedExistingCharacterCount} 个。`;
+          `已恢复账号 #${result.accountID}，角色 ${result.restoredCharacterCount} 个，覆盖旧角色 ${result.deletedExistingCharacterCount} 个；邮箱和待领取附件已恢复${upgradeText}${remapText}。`;
       }
       toast('账号备份已恢复');
       await loadAccounts(runtimeSourceEpoch);
@@ -394,6 +406,7 @@ async function selectCharacter(id, li) {
     const c = await api('/api/characters/' + id);
     if (epoch !== selectEpoch) return; // 期间又切了别的角色, 本次结果作废
     currentChar = c;
+    if (typeof updateCharacterMailboxButton === 'function') updateCharacterMailboxButton();
     clearGiveConfiguration();
     $('#account-panel').classList.add('hidden');
     $('#detail').classList.remove('hidden');

@@ -25,7 +25,7 @@ async function loadQuests() {
       <td>${escapeHtml(quest.name || '')}</td><td>${quest.triggerValue}</td>
       <td><button class="mini primary">标记可交</button> <button class="mini primary">强制完成</button></td>`;
     const [readyBtn, completeBtn] = tr.querySelectorAll('button');
-    readyBtn.onclick = () => questAction(quest.questId, 'ready', '已标记可交');
+    readyBtn.onclick = () => questAction(quest.questId, 'ready', '已标记可交', quest.activationId);
     completeBtn.onclick = () => questAction(quest.questId, 'complete', '已强制完成(未发奖励)');
     tbody.appendChild(tr);
   }
@@ -96,9 +96,12 @@ function renderClearedQuests() {
   });
 }
 
-async function questAction(questId, action, message) {
+async function questAction(questId, action, message, activationId = null) {
   try {
-    await post(`/api/characters/${currentChar.characterId}/quests/${questId}/${action}`);
+    const activationQuery = action === 'ready'
+      ? `?activationId=${encodeURIComponent(activationId || '')}`
+      : '';
+    await post(`/api/characters/${currentChar.characterId}/quests/${questId}/${action}${activationQuery}`);
     toast(message);
     refreshQuestViews();
   } catch (e) {

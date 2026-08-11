@@ -322,6 +322,133 @@ let givePage = 0; // 从 0 计; 换筛选条件时归零
 let giveConfiguration = null;
 let giveConfigurationEpoch = 0;
 let giveSearchSignature = '';
+let clearingCharacterMailbox = false;
+const GIVE_DELIVERY_MODE_STORAGE_KEY = 'dfogm-give-delivery-mode';
+let giveDeliveryMode = 'mail';
+let giveRequestInFlight = false;
+
+function readGiveDeliveryMode() {
+  try {
+    const value = String(window.localStorage.getItem(GIVE_DELIVERY_MODE_STORAGE_KEY) || '');
+    return value === 'inventory' || value === 'mail' ? value : 'mail';
+  } catch (_) {
+    return 'mail';
+  }
+}
+
+function rememberGiveDeliveryMode() {
+  try {
+    window.localStorage.setItem(GIVE_DELIVERY_MODE_STORAGE_KEY, giveDeliveryMode);
+    return true;
+  } catch (_) {
+    // Storage can be unavailable in private or restricted browsing modes.
+    return false;
+  }
+}
+
+function giveDeliveryLabel(mode = giveDeliveryMode) {
+  return mode === 'inventory' ? '背包发放' : '邮件发放';
+}
+
+function updateGiveDeliveryPresentation() {
+  const control = $('#give-delivery-mode');
+  if (control) {
+    control.dataset.mode = giveDeliveryMode;
+    control.setAttribute('aria-checked', giveDeliveryMode === 'inventory' ? 'true' : 'false');
+    control.setAttribute('aria-label', `发放方式：${giveDeliveryLabel()}`);
+    control.disabled = giveRequestInFlight;
+    control.title = giveRequestInFlight ? '发放进行中，暂不能切换发放方式' : '';
+  }
+
+  document.querySelectorAll('#search-results .give-mode-hint').forEach((cell) => {
+    cell.textContent = `配置后${giveDeliveryLabel()}`;
+  });
+  document.querySelectorAll('#search-results button[data-give-action="grant"]').forEach((button) => {
+    button.textContent = giveDeliveryLabel();
+    button.disabled = giveRequestInFlight;
+  });
+  const submit = $('#give-config-submit');
+  if (submit) {
+    submit.textContent = giveDeliveryLabel();
+    submit.disabled = giveRequestInFlight || submit.dataset.baseDisabled === 'true';
+  }
+}
+
+function setGiveRequestBusy(busy) {
+  giveRequestInFlight = !!busy;
+  updateGiveDeliveryPresentation();
+  document.querySelectorAll('#search-results button[data-give-action="configure"]').forEach((button) => {
+    button.disabled = giveRequestInFlight;
+  });
+}
+
+function bindGiveDeliveryMode() {
+  const control = $('#give-delivery-mode');
+  if (!control || control._giveDeliveryModeBound) return;
+  control._giveDeliveryModeBound = true;
+  giveDeliveryMode = readGiveDeliveryMode();
+  control.onclick = () => {
+    const next = giveDeliveryMode === 'inventory' ? 'mail' : 'inventory';
+    if (giveRequestInFlight) return;
+    if (next === 'inventory'
+        && !confirm('背包发放会直接写入新版背包，确认切换到背包发放吗？')) return;
+    giveDeliveryMode = next;
+    if (!rememberGiveDeliveryMode())
+      toast('当前发放方式已切换，但无法跨刷新记忆。', true);
+    updateGiveDeliveryPresentation();
+    if (giveConfiguration)
+      renderGrantConfiguration();
+  };
+  updateGiveDeliveryPresentation();
+}
+
+function updateCharacterMailboxButton() {
+  const button = $('#btn-clear-character-mailbox');
+  if (!button) return;
+  button.disabled = !currentChar || clearingCharacterMailbox;
+  button.textContent = clearingCharacterMailbox ? '清空中…' : '清空邮箱';
+}
+
+function bindClearCharacterMailbox() {
+  const button = $('#btn-clear-character-mailbox');
+  if (!button || button._mailboxClearBound) {
+    updateCharacterMailboxButton();
+    return;
+  }
+  button._mailboxClearBound = true;
+  button.onclick = clearCurrentCharacterMailbox;
+  updateCharacterMailboxButton();
+}
+
+async function clearCurrentCharacterMailbox() {
+  if (clearingCharacterMailbox || !currentChar) return;
+  const snapshot = {
+    characterId: Number(currentChar.characterId),
+    name: String(currentChar.name ?? ''),
+  };
+  if (!Number.isSafeInteger(snapshot.characterId) || snapshot.characterId <= 0) {
+    toast('当前角色无有效 ID', true);
+    return;
+  }
+  if (!confirm(`是否确认清空当前角色 ${snapshot.name} 的邮箱？`)) return;
+
+  clearingCharacterMailbox = true;
+  updateCharacterMailboxButton();
+  try {
+    const result = await post(`/api/characters/${encodeURIComponent(String(snapshot.characterId))}/mailbox/clear`);
+    const recipientCount = Number(result.recipientCount || 0);
+    const messageCount = Number(result.messageCount || 0);
+    const attachmentCount = Number(result.attachmentCount || 0);
+    const auditCount = Number(result.auditCount || 0);
+    toast(`已清空角色 ${snapshot.name} 的邮箱：收件人 ${recipientCount}、邮件 ${messageCount}、附件 ${attachmentCount}、审计 ${auditCount}`);
+  } catch (e) {
+    toast(`清空角色 ${snapshot.name} 的邮箱失败：${e.message}`, true);
+  } finally {
+    clearingCharacterMailbox = false;
+    updateCharacterMailboxButton();
+  }
+}
+
 const giveConfigMemory = {
   qualityMode: 1,
   upgradeLevel: 0,
@@ -434,6 +561,7 @@ function readAvatarOptionValue(id) {
 }
 
 async function configureGrantItem(item, row) {
+  if (giveRequestInFlight) return;
   if (!currentChar) { toast('请先选择角色', true); return; }
   rememberGiveConfiguration();
   const epoch = ++giveConfigurationEpoch;
@@ -509,9 +637,9 @@ function renderGrantConfiguration() {
       fields.push(`<label id="give-config-expiration-days-field" class="give-config-field${mode === 'custom' ? '' : ' hidden'}"><span>期限天数</span><input id="give-config-expiration-days" type="number" min="1" max="${capability.expiration.maxDays}" value="${giveConfigMemory.expirationDays || 30}"></label>`);
   }
 
-  card.innerHTML = `<div class="give-config-head"><div class="give-config-title rarity-${item.rarity >= 0 && item.rarity <= 6 ? item.rarity : 0}">${escapeHtml(item.name)}</div><div class="give-config-meta">ID ${item.itemId} · ${escapeHtml(tagLabel(item.tag))}</div></div>` +
+  card.innerHTML = `<div class="give-config-head"><div class="give-config-title rarity-${item.rarity >= 0 && item.rarity <= 6 ? item.rarity : 0}">${escapeHtml(item.name)}</div><div class="give-config-meta">ID ${item.itemId} · ${escapeHtml(tagLabel(item.tag))} · 当前${escapeHtml(giveDeliveryLabel())}</div></div>` +
     `<div class="give-config-grid">${fields.join('')}</div>` +
-    `<div class="give-config-actions"><button id="give-config-cancel" type="button">取消</button><button id="give-config-submit" type="button" ${grantDisabled ? 'disabled' : ''}>发放</button></div>`;
+    `<div class="give-config-actions"><button id="give-config-cancel" type="button">取消</button><button id="give-config-submit" type="button" data-base-disabled="${grantDisabled ? 'true' : 'false'}" ${grantDisabled ? 'disabled' : ''}>${escapeHtml(giveDeliveryLabel())}</button></div>`;
   FloatingConfigPanel.show(card, {
     avoidSelector: '#search-results thead th:nth-last-child(2)',
   });
@@ -531,10 +659,11 @@ function renderGrantConfiguration() {
       element.addEventListener(element.tagName === 'INPUT' ? 'input' : 'change', rememberGiveConfiguration);
   });
   $('#give-config-submit').onclick = submitConfiguredGrant;
+  updateGiveDeliveryPresentation();
 }
 
 async function submitConfiguredGrant() {
-  if (!giveConfiguration) return;
+  if (!giveConfiguration || giveRequestInFlight) return;
   const { item, capability } = giveConfiguration;
   rememberGiveConfiguration();
   const count = Math.max(1, parseInt($('#give-config-count').value, 10) || 1);
@@ -616,8 +745,8 @@ async function searchItems(page) {
         <td>${escapeHtml(r.usableJobLabel || '无限制')}</td>
         <td>${templateExpirationLabel(r)}</td>` +
         (configurable
-          ? '<td class="hint">配置后发放</td><td><button class="mini">配置</button></td>'
-          : '<td><input type="number" value="1" min="1"></td><td><button class="mini">发放</button></td>');
+          ? `<td class="hint give-mode-hint">配置后${escapeHtml(giveDeliveryLabel())}</td><td><button class="mini" data-give-action="configure">配置</button></td>`
+          : `<td><input type="number" value="1" min="1"></td><td><button class="mini" data-give-action="grant">${escapeHtml(giveDeliveryLabel())}</button></td>`);
       const usableJobCell = tr.children[5];
       if (usableJobCell) {
         usableJobCell.className = 'usable-job-cell';
@@ -636,6 +765,7 @@ async function searchItems(page) {
     }
     if (data.results.length === 0)
       tbody.innerHTML = '<tr><td colspan="9" class="hint">没有匹配的物品</td></tr>';
+    updateGiveDeliveryPresentation();
 
     const pager = $('#give-pager');
     pager.innerHTML = '';
@@ -676,15 +806,80 @@ function bindGivePageSize() {
 }
 
 async function giveItem(templateId, count, options) {
+  if (giveRequestInFlight) return;
   if (!currentChar) { toast('请先选择角色', true); return; }
+  const characterSnapshot = {
+    characterId: Number(currentChar.characterId),
+    name: String(currentChar.name || ''),
+  };
+  if (!Number.isSafeInteger(characterSnapshot.characterId) || characterSnapshot.characterId <= 0) {
+    toast('当前角色无有效 ID', true);
+    return;
+  }
+  const deliveryModeSnapshot = giveDeliveryMode === 'inventory' ? 'inventory' : 'mail';
+  setGiveRequestBusy(true);
   try {
-    const body = { templateId, count };
+    const requestId = typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+    const body = { templateId, count, requestId, deliveryMode: deliveryModeSnapshot };
     if (options) body.options = options;
-    const r = await post(`/api/characters/${currentChar.characterId}/items`, body);
-    toast(`已发放 ${r.name || r.itemTemplateId} x${r.count} → 槽位 ${r.slot}；在线角色请返回选角后再进入`);
-    if (options) clearGiveConfiguration();
-    loadItems();
+    const r = await post(`/api/characters/${encodeURIComponent(String(characterSnapshot.characterId))}/items`, body);
+    const itemLabel = `${r.name || r.itemTemplateId || templateId} x${r.count ?? count}`;
+    const deliveryHint = String(r.deliveryHint || '').trim();
+    let summary;
+    let fallbackHint = '';
+    switch (r.delivery) {
+      case 'mail': {
+        const attachmentCount = Number(r.attachmentCount || 0);
+        const messageCount = Number(r.messageCount || (r.messageId ? 1 : 0));
+        summary = messageCount > 0
+          ? `邮件发放成功（${messageCount} 封邮件、${attachmentCount} 个附件）`
+          : '邮件发放成功';
+        fallbackHint = '重新打开邮箱即可，无需重新选择角色。';
+        break;
+      }
+      case 'inventory': {
+        const grantedCount = Number(r.grantedCount || r.count || count || 0);
+        const slots = Array.isArray(r.slots) ? r.slots.filter((slot) => Number.isFinite(Number(slot))) : [];
+        const slotText = slots.length ? `，槽位 ${slots.join('、')}` : '';
+        summary = `背包发放成功（${grantedCount} 件${slotText}）`;
+        fallbackHint = '请返回角色选择界面后重新进入以刷新显示。';
+        break;
+      }
+      case 'direct_cube':
+        summary = '晶块发放成功';
+        fallbackHint = '请返回角色选择界面后重新进入以刷新显示。';
+        break;
+      case 'direct_revive':
+        summary = '复活币发放成功';
+        fallbackHint = '请返回角色选择界面后重新进入以刷新显示。';
+        break;
+      case 'direct_name_tag':
+        summary = '名称装饰卡发放成功';
+        fallbackHint = '请返回角色选择界面后重新进入以刷新显示。';
+        break;
+      case 'direct_premium':
+        summary = '账号契约发放成功';
+        fallbackHint = '请返回角色选择界面后重新进入以刷新显示。';
+        break;
+      default:
+        summary = '发放成功';
+        break;
+    }
+    toast(`${itemLabel}：${summary}${deliveryHint || fallbackHint ? `。${deliveryHint || fallbackHint}` : ''}`);
+    if (typeof loadItems === 'function'
+        && currentChar
+        && Number(currentChar.characterId) === characterSnapshot.characterId)
+      loadItems();
+    if (options
+        && currentChar
+        && Number(currentChar.characterId) === characterSnapshot.characterId
+        && giveDeliveryMode === deliveryModeSnapshot)
+      clearGiveConfiguration();
   } catch (e) {
     toast(e.message, true);
+  } finally {
+    setGiveRequestBusy(false);
   }
 }

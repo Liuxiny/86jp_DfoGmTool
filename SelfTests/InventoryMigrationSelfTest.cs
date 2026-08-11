@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using DfoGmTool.ServerCore.Game.Inventory;
+using DfoGmTool.ServerCore.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.SelfTests
@@ -508,7 +509,8 @@ VALUES(1,0,970001,'equipment',1,10000,-1,'{}');");
         private static string CreateDatabase(string root, string name)
         {
             var db = Path.Combine(root, name);
-            var schema = Path.Combine(Directory.GetCurrentDirectory(), "ServerCore", "Sqlite", "item_schema.sql");
+            var schema = Path.Combine(AppContext.BaseDirectory, "ServerCore", "Sqlite", "item_schema.sql");
+            SqliteDatabaseBootstrap.CreateTestDatabase(db, schema);
             _ = new NewInventoryStore(db, schema);
             return db;
         }

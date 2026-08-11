@@ -1,8 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace GmPvfLib
 {
+    public sealed class MonsterCatchItemInfo
+    {
+        public int ItemId { get; set; }
+        public int Count { get; set; }
+        public int DropRate { get; set; }
+    }
+
     
     
     
@@ -14,6 +22,7 @@ namespace GmPvfLib
         public string Name { get; set; }
         public string FaceImage { get; set; }
         public string Category { get; set; }
+        public List<string> Categories { get; set; } = new List<string>();
         
         public string AbilityCategory { get; set; }
         
@@ -66,6 +75,7 @@ namespace GmPvfLib
         public string OverturnAction { get; set; }
         
         public string AttackAction { get; set; }
+        public List<string> EtcActions { get; set; } = new List<string>();
 
         #endregion
 
@@ -111,6 +121,8 @@ namespace GmPvfLib
         public string AttackInfo { get; set; }
         
         public string Item { get; set; }
+        public List<MonsterCatchItemInfo> CatchItems { get; set; }
+            = new List<MonsterCatchItemInfo>();
 
         #endregion
         #region 解析
@@ -131,7 +143,10 @@ namespace GmPvfLib
                     
                     case "name": mob.Name = StripBacktick(data); break;
                     case "face image": mob.FaceImage = data; break;
-                    case "category": mob.Category = StripBacktick(data); break;
+                    case "category":
+                        mob.Category = StripBacktick(data);
+                        AddBacktickValues(node, content, mob.Categories);
+                        break;
                     case "ability category": mob.AbilityCategory = data; break;
                     case "level": mob.Level = ParseIntPair(data); break;
 
@@ -172,6 +187,9 @@ namespace GmPvfLib
                     case "down action": mob.DownAction = StripBacktick(data); break;
                     case "overturn action": mob.OverturnAction = StripBacktick(data); break;
                     case "attack action": mob.AttackAction = data; break;
+                    case "etc action":
+                        AddBacktickValues(node, content, mob.EtcActions);
+                        break;
 
                     
                     case "ai pattern": mob.AiPattern = StripBacktick(data); break;
@@ -203,10 +221,75 @@ namespace GmPvfLib
                     case "die effect": mob.DieEffect = data; break;
                     case "attack info": mob.AttackInfo = data; break;
                     case "item": mob.Item = data; break;
+                    case "catch item":
+                        ParseCatchItems(node, content, mob.CatchItems);
+                        break;
                 }
             }
 
             return mob;
+        }
+
+        private static void ParseCatchItems(
+            ScriptNode node,
+            string content,
+            ICollection<MonsterCatchItemInfo> result)
+        {
+            if (node == null || result == null)
+                return;
+
+            var numbers = new List<int>();
+            foreach (var dataItem in node.DataItems)
+            {
+                var raw = dataItem.GetContent(content) ?? string.Empty;
+                foreach (Match match in Regex.Matches(raw, @"-?\d+"))
+                {
+                    if (int.TryParse(match.Value, out var value))
+                        numbers.Add(value);
+                }
+            }
+
+            for (var index = 0; index + 2 < numbers.Count; index += 3)
+            {
+                result.Add(new MonsterCatchItemInfo
+                {
+                    ItemId = numbers[index],
+                    Count = numbers[index + 1],
+                    DropRate = numbers[index + 2],
+                });
+            }
+        }
+
+        private static void AddBacktickValues(
+            ScriptNode node,
+            string content,
+            ICollection<string> destination)
+        {
+            if (node == null || destination == null)
+                return;
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content) ?? string.Empty;
+                var matches = Regex.Matches(raw, "`([^`]*)`");
+                if (matches.Count > 0)
+                {
+                    foreach (Match match in matches)
+                    {
+                        var value = match.Groups[1].Value.Trim();
+                        if (!string.IsNullOrWhiteSpace(value))
+                            destination.Add(value);
+                    }
+                    continue;
+                }
+
+                foreach (var value in raw.Split(
+                    new[] { ' ', '\t', '\r', '\n' },
+                    StringSplitOptions.RemoveEmptyEntries))
+                {
+                    destination.Add(value.Trim());
+                }
+            }
         }
 
         #endregion

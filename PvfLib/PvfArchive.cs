@@ -31,6 +31,7 @@ namespace GmPvfLib
 
         
         private PvfHeader _header;
+        private bool _headerUsesGuard;
         private byte[] _rawTableBytes;   
         private int _rawTableOffset;     
         private int _rawTableSize;       
@@ -94,7 +95,8 @@ namespace GmPvfLib
             var header = _header;
             byte[] headerBytes = StructToBytes(header);
             PvfDecryptor.Decrypt("HeaD", headerBytes);
-            PvfDecryptor.DecryptGuard(headerBytes);
+            if (_headerUsesGuard)
+                PvfDecryptor.DecryptGuard(headerBytes);
 
             
             int totalSize = 0x30 + tableBytes.Length + hashBytes.Length +
@@ -407,15 +409,26 @@ namespace GmPvfLib
 
         private void Parse(byte[] allBytes)
         {
-            
-            byte[] headerBytes = allBytes.Slice(0, 0x30);
-            PvfDecryptor.DecryptGuard(headerBytes);
-            if (PvfDecryptor.Decrypt("HeaD", headerBytes) != 0)
-                throw new InvalidDataException("PVF 头部解密失败");
+            PvfHeader header = default;
+            bool decoded = false;
+            Exception lastHeaderError = null;
+            foreach (var usesGuard in new[] { true, false })
+            {
+                try
+                {
+                    header = DecodeHeaderCandidate(allBytes, usesGuard);
+                    _headerUsesGuard = usesGuard;
+                    decoded = true;
+                    break;
+                }
+                catch (InvalidDataException ex)
+                {
+                    lastHeaderError = ex;
+                }
+            }
 
-            var header = headerBytes.ToStruct<PvfHeader>();
-            if (header.Signature != MagicSignature)
-                throw new InvalidDataException("无效的 PVF 签名");
+            if (!decoded)
+                throw new InvalidDataException("PVF header did not match a supported format.", lastHeaderError);
             _header = header;
 
             
@@ -463,6 +476,43 @@ namespace GmPvfLib
             ParseFileItemsFast(header.FileCount, allBytes, tableOffset);
             ParseGroupItemsFast(header.GroupCount, grpiBytes);
             _hashTable = PvfHashTable.Parse(hashBytes);
+        }
+
+        private static PvfHeader DecodeHeaderCandidate(byte[] allBytes, bool usesGuard)
+        {
+            byte[] headerBytes = allBytes.Slice(0, 0x30);
+            if (usesGuard)
+                PvfDecryptor.DecryptGuard(headerBytes);
+            if (PvfDecryptor.Decrypt("HeaD", headerBytes) != 0)
+                throw new InvalidDataException("PVF header decryption failed.");
+
+            var header = headerBytes.ToStruct<PvfHeader>();
+            if (header.Signature != MagicSignature)
+                throw new InvalidDataException("PVF signature is invalid.");
+            ValidateHeaderLayout(header, allBytes.Length);
+            return header;
+        }
+
+        private static void ValidateHeaderLayout(PvfHeader header, int dataLength)
+        {
+            if (header.FileCount < 0 || header.GroupCount < 0 ||
+                header.HashTableSize < 0 || header.NameTableSize < 0 || header.BodySize < 0)
+            {
+                throw new InvalidDataException("PVF header contains a negative section size.");
+            }
+
+            try
+            {
+                long declaredLength = checked(
+                    0x30L + (long)header.FileCount * 0x18 + header.HashTableSize +
+                    header.NameTableSize + (long)header.GroupCount * 8 + header.BodySize);
+                if (declaredLength > dataLength)
+                    throw new InvalidDataException("PVF header sections exceed the file boundary.");
+            }
+            catch (OverflowException ex)
+            {
+                throw new InvalidDataException("PVF header section sizes overflowed.", ex);
+            }
         }
 
         private void BuildStringBuffers(byte[] nameBytes)
@@ -1263,7 +1313,8 @@ namespace GmPvfLib
 
                 byte[] headerBytes = StructToBytes(header);
                 PvfDecryptor.Decrypt("HeaD", headerBytes);
-                PvfDecryptor.DecryptGuard(headerBytes);
+                if (_headerUsesGuard)
+                    PvfDecryptor.DecryptGuard(headerBytes);
 
                 using (var outFs = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024))
                 {

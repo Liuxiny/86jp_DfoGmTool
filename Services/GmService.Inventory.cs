@@ -210,12 +210,18 @@ namespace DfoGmTool.Services
             int itemTemplateId,
             int count,
             ItemGrantOptions options,
-            PvfIndexService pvfIndex)
+            PvfIndexService pvfIndex,
+            string requestId = null,
+            string deliveryMode = null)
         {
             if (itemTemplateId <= 0)
                 return Error("itemTemplateId 无效");
             if (count <= 0)
                 return Error("数量必须大于 0");
+            if (string.IsNullOrWhiteSpace(requestId)
+                || requestId.Length < 8
+                || requestId.Length > 128)
+                return Error("发放请求编号无效，请刷新页面后重试");
 
             int accountId;
             if (!TryGetAccountId(characterId, out accountId))
@@ -223,25 +229,52 @@ namespace DfoGmTool.Services
 
             // 名字解析不到通常意味着 ID 不存在, 直接发下去客户端会异常, 先拦住
             var name = pvfIndex.ResolveItemName(itemTemplateId);
-            if (name == null && pvfIndex.IsReady)
+            if (name == null
+                && pvfIndex.IsReady
+                && !CurrencyService.IsCubeFragment(itemTemplateId)
+                && !ReviveCoinService.IsReviveCoinReward(itemTemplateId))
                 return Error("物品 ID " + itemTemplateId + " 在 PVF 中不存在(装备/堆叠表都没有)");
 
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
+            // 名称装饰卡不是普通背包物品：服务端把它写入角色专用状态，
+            // 不能创建一封玩家可领取的邮件，否则在线角色仍看不到已装备的卡。
             if (ItemMetadataResolver.IsNameTagMetadata(metadata))
             {
                 var days = options?.ExpirationDays ?? DefaultNameTagGrantDays;
                 if (days <= 0 || days > ItemGrantExpirationOverride.MaximumDays)
                     return Error("名称装饰卡期限必须在 1-3650 天之间");
+
                 var previous = _inventory.LoadNameTag(characterId);
                 var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                var baseTime = previous.ItemId == itemTemplateId && previous.ExpireTime > now ? previous.ExpireTime : now;
-                var expire = Math.Min(now + ItemGrantExpirationOverride.MaximumDays * SecondsPerDay, baseTime + days * count * SecondsPerDay);
+                var baseTime = previous.ItemId == itemTemplateId && previous.ExpireTime > now
+                    ? previous.ExpireTime
+                    : now;
+                var expire = Math.Min(
+                    now + ItemGrantExpirationOverride.MaximumDays * SecondsPerDay,
+                    baseTime + (long)days * count * SecondsPerDay);
                 if (expire <= now || expire > int.MaxValue)
                     return Error("名称装饰卡期限超出服务端可存储范围");
+
                 _inventory.UpsertNameTag(characterId, itemTemplateId, (int)expire);
-                return new { success = true, characterId, itemTemplateId, name, count, slot = (int)NameTagEquippedSlot, expireTime = (int)expire, slots = new[] { NameTagEquippedSlot }, nameTagEquipped = true };
+                return new
+                {
+                    success = true,
+                    characterId,
+                    itemTemplateId,
+                    name,
+                    count,
+                    delivery = "direct_name_tag",
+                    slot = (int)NameTagEquippedSlot,
+                    slots = new[] { (int)NameTagEquippedSlot },
+                    expireTime = (int)expire,
+                    nameTagEquipped = true,
+                    requiresReselect = true,
+                    deliveryHint = "名称装饰卡已直接写入角色状态；请返回角色选择界面后重新进入以刷新显示。",
+                };
             }
 
+            // premiumlist_new.etc 中的账号契约同样是服务端专用状态，
+            // 复用 GrantAccountPremium 的原子写入与审计，不走邮件。
             if (PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays)
                 && premiumType > 0
                 && durationDays > 0)
@@ -261,6 +294,7 @@ namespace DfoGmTool.Services
                         durationDays);
                     if (!premiumGrant.Success)
                         return Error(premiumGrant.Error ?? "账号契约发放失败");
+
                     transaction.Commit();
                     return new
                     {
@@ -270,49 +304,172 @@ namespace DfoGmTool.Services
                         itemTemplateId,
                         name,
                         count = premiumGrant.GrantedCount,
+                        delivery = "direct_premium",
                         premiumActivated = true,
                         premiumType,
                         durationDays,
                         expireTime = premiumGrant.ExpireTime,
+                        requiresReselect = true,
+                        deliveryHint = "账号契约已直接写入账号状态；请返回角色选择界面后重新进入以刷新显示。",
                     };
                 }
             }
 
-            if (CurrencyService.IsCubeFragment(itemTemplateId))
+            // 只有明确的 inventory 才允许直写新版背包。缺失、空白、mail
+            // 或任何未知值都保持历史邮件语义，避免旧客户端误触发直写。
+            if (NormalizeDeliveryMode(deliveryMode) == "inventory")
             {
-                using (var connection = new SqliteConnection(_config.ConnectionString))
+                options ??= new ItemGrantOptions();
+
+                if (CurrencyService.IsCubeFragment(itemTemplateId))
                 {
-                    connection.Open();
-                    using var transaction = connection.BeginTransaction();
-                    CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, count);
-                    transaction.Commit();
+                    var slot = CurrencyService.GetCubeFragmentSlot(itemTemplateId);
+                    try
+                    {
+                        using var connection = new SqliteConnection(_config.ConnectionString);
+                        connection.Open();
+                        using var transaction = connection.BeginTransaction(deferred: false);
+                        CurrencyService.AddCubeFragment(
+                            connection,
+                            transaction,
+                            accountId,
+                            itemTemplateId,
+                            count);
+                        transaction.Commit();
+                    }
+                    catch (Exception ex)
+                    {
+                        return Error("晶块直充失败: " + ex.Message);
+                    }
+
+                    return new
+                    {
+                        success = true,
+                        characterId,
+                        accountId,
+                        itemTemplateId,
+                        name,
+                        count,
+                        grantedCount = count,
+                        delivery = "direct_cube",
+                        slot,
+                        slots = new[] { slot },
+                        requiresReselect = true,
+                        replayed = false,
+                        deliveryHint = "晶块已直接充入账号共享晶块；请返回角色选择界面后重新进入以刷新显示。",
+                    };
                 }
-                return new { success = true, characterId, itemTemplateId, name, count, slot = CurrencyService.GetCubeFragmentSlot(itemTemplateId) };
+
+                if (ReviveCoinService.IsReviveCoinReward(itemTemplateId))
+                {
+                    if (!_inventory.TryAdjustVirtualCount(
+                            characterId,
+                            accountId,
+                            ReviveCoinService.WalletSlot,
+                            count,
+                            int.MaxValue,
+                            out var walletValue))
+                    {
+                        return Error("复活币直充失败");
+                    }
+
+                    return new
+                    {
+                        success = true,
+                        characterId,
+                        accountId,
+                        itemTemplateId,
+                        name,
+                        count,
+                        grantedCount = count,
+                        walletValue,
+                        delivery = "direct_revive",
+                        slot = (int)ReviveCoinService.WalletSlot,
+                        slots = new[] { (int)ReviveCoinService.WalletSlot },
+                        requiresReselect = true,
+                        replayed = false,
+                        deliveryHint = "复活币已直接充入角色虚拟钱包；请返回角色选择界面后重新进入以刷新显示。",
+                    };
+                }
+
+                if (!TryLoadGrantCharacter(characterId, out var job, out _, out _))
+                    return Error("角色不存在: " + characterId);
+
+                var inventoryGrant = _inventory.TryGrant(
+                    characterId,
+                    accountId,
+                    job,
+                    itemTemplateId,
+                    count,
+                    options);
+                if (!inventoryGrant.Success)
+                    return Error(inventoryGrant.Error ?? "新版背包发放失败");
+
+                return new
+                {
+                    success = true,
+                    characterId,
+                    accountId,
+                    itemTemplateId,
+                    name,
+                    count = inventoryGrant.GrantedCount,
+                    requestedCount = inventoryGrant.RequestedCount,
+                    grantedCount = inventoryGrant.GrantedCount,
+                    delivery = "inventory",
+                    listType = (int)inventoryGrant.ListType,
+                    assignedSlot = (int)inventoryGrant.AssignedSlot,
+                    slot = (int)inventoryGrant.AssignedSlot,
+                    slots = inventoryGrant.AffectedSlots.Select(value => (int)value).ToArray(),
+                    affectedSlots = inventoryGrant.AffectedSlots.Select(value => (int)value).ToArray(),
+                    expireTime = inventoryGrant.ExpireTime,
+                    requiresReselect = true,
+                    replayed = false,
+                    deliveryHint = "物品已直接写入新版角色背包；请返回角色选择界面后重新进入以刷新显示。",
+                };
             }
 
-            if (ReviveCoinService.IsReviveCoinReward(itemTemplateId))
-            {
-                if (!_inventory.TryAdjustVirtualCount(characterId, accountId, 1, count, int.MaxValue, out _))
-                    return Error("复活币发放失败");
-                return new { success = true, characterId, itemTemplateId, name, count, slot = 1 };
-            }
-
-            if (!TryLoadGrantCharacter(characterId, out var job, out _, out _))
-                return Error("角色不存在: " + characterId);
-            var grant = _inventory.TryGrant(characterId, accountId, job, itemTemplateId, count, options);
+            options ??= new ItemGrantOptions();
+            var grant = _systemMail.SendItemGrant(
+                characterId,
+                accountId,
+                itemTemplateId,
+                count,
+                options,
+                requestId,
+                name);
             if (!grant.Success)
-                return Error(grant.Error ?? "发放失败(背包可能已满)");
+                return Error(grant.Error ?? "邮件发放失败");
             return new
             {
                 success = true,
                 characterId,
                 itemTemplateId,
                 name,
-                count = grant.GrantedCount,
-                slot = (int)grant.AssignedSlot,
-                expireTime = grant.ExpireTime,
-                slots = grant.AffectedSlots,
+                count,
+                delivery = "mail",
+                messageId = grant.MessageId,
+                messageIds = grant.MessageIds,
+                messageCount = grant.MessageCount,
+                attachmentCount = grant.AttachmentCount,
+                replayed = grant.Replayed,
+                // The live server reloads mailbox rows whenever the mailbox is
+                // opened. This out-of-process GM tool cannot push the online
+                // 0x0063 alarm or refresh an already-open mailbox, so reopening
+                // the mailbox is sufficient; character re-selection is not.
+                notification = "mailbox_reopen_required",
+                requiresReselect = false,
+                deliveryHint = "在线角色请打开邮箱；如果邮箱已经打开，请关闭后重新打开，无需重新选择角色。",
             };
+        }
+
+        private static string NormalizeDeliveryMode(string deliveryMode)
+        {
+            return string.Equals(
+                    (deliveryMode ?? string.Empty).Trim(),
+                    "inventory",
+                    StringComparison.OrdinalIgnoreCase)
+                ? "inventory"
+                : "mail";
         }
 
         private sealed class AccountPremiumGrantResult
@@ -476,14 +633,15 @@ VALUES (
                 if (!ItemMetadataResolver.TryLoadEquipmentFile(itemTemplateId, out var equipment))
                     return Error("装扮模板无法从 PVF 读取");
 
+                var avatarMetadata = AvatarEquipmentMetadataReader.Read(equipment);
                 var compatible = AvatarGrantPolicy.IsUsableByJob(equipment.UsableJob, job);
                 avatarOptionValues = compatible
                     ? AvatarGrantPolicy.ResolveOptions(
                         equipment.EquipmentType,
                         equipment.Grade,
-                        equipment.AvatarSelectAbilities,
+                        avatarMetadata.SelectAbilities,
                         job,
-                        equipment.AbilityCaseIndex)
+                        avatarMetadata.AbilityCaseIndex)
                     : new List<AvatarGrantOption>();
                 avatarDurationValues = AvatarDurationResolver.Resolve(itemTemplateId);
                 avatar = new

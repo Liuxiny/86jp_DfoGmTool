@@ -12,6 +12,7 @@
     <h1>DFO GM 控制台</h1>
     <div class="header-actions">
       <span id="status" class="status">连接中…</span>
+      <button id="btn-inventory-anomalies" class="mini danger hidden" type="button">异常物品清理</button>
       <button id="btn-runtime-source" class="mini hidden" type="button">数据源</button>
       <button id="btn-inventory-migration" class="mini danger hidden" type="button">背包数据迁移</button>
       <button id="btn-logout" class="mini hidden" type="button">退出</button>
@@ -135,6 +136,7 @@
         <button class="acc-tab tab" data-acc-tab="cargo">账号金库</button>
         <button class="acc-tab tab" data-acc-tab="backup">账号备份</button>
         <button class="acc-tab tab" data-acc-tab="migration">背包数据迁移</button>
+        <button class="acc-tab tab" data-acc-tab="anomalies">异常物品清理</button>
       </nav>
 
       <div id="acc-tab-currency" class="acc-tab-page">
@@ -180,7 +182,7 @@
           <div class="card-title">账号备份</div>
           <div class="row">
             <button id="btn-export-account-backup" class="mini">导出当前账号</button>
-            <span class="hint">包含当前库中可识别的账号、角色、背包、任务、技能、称号簿、金库等账号相关表。</span>
+            <span class="hint">v2 备份包含角色、背包、任务、普通/PVP 技能、称号簿、金库、邮箱待领取附件与系统邮件审计；旧 v1 会在恢复前安全升级。</span>
           </div>
           <div class="row">
             <input id="account-backup-file" type="file" accept="application/json,.json">
@@ -203,6 +205,19 @@
           <div id="inventory-migration-report" class="migration-report hidden"></div>
         </div>
       </div>
+
+      <div id="acc-tab-anomalies" class="acc-tab-page hidden">
+        <div class="card inventory-anomaly-dialog">
+          <div class="card-title">异常物品清理</div>
+          <div class="row inventory-anomaly-actions">
+            <button id="btn-refresh-inventory-anomalies" class="mini" type="button">刷新</button>
+            <button id="btn-clean-inventory-anomalies" class="mini danger" type="button" disabled>清理异常物品</button>
+          </div>
+          <div id="inventory-anomaly-status" class="migration-status" aria-live="polite">正在读取数据状态…</div>
+          <div id="inventory-anomaly-progress" class="hint" aria-live="polite"></div>
+          <div id="inventory-anomaly-details" class="inventory-anomaly-details"></div>
+        </div>
+      </div>
     </section>
 
     <section id="detail" class="hidden">
@@ -217,6 +232,12 @@
 
       <div id="tab-give" class="tab-page">
         <div class="row">
+          <button id="give-delivery-mode" class="give-delivery-mode" type="button"
+            role="switch" aria-checked="false" aria-label="发放方式：邮件发放" data-mode="mail">
+            <span class="give-delivery-mode-thumb" aria-hidden="true"></span>
+            <span class="give-delivery-mode-option give-delivery-mode-mail">邮件</span>
+            <span class="give-delivery-mode-option give-delivery-mode-inventory">背包</span>
+          </button>
           <input id="search-input" type="text" placeholder="物品名或 ID (回车搜索)">
           <label>Lv <input id="give-minlv" type="number" min="0" placeholder="最低" style="width:70px">
             - <input id="give-maxlv" type="number" min="0" placeholder="最高" style="width:70px"></label>
@@ -275,6 +296,7 @@
           <span class="hint">单件删除立即生效；清空需确认；货币行受保护，晶块/金库在"账号数据管理"</span>
           <div class="inventory-toolbar-actions">
             <button id="btn-refresh-items" class="mini">刷新背包</button>
+            <button id="btn-clear-character-mailbox" class="mini danger" type="button" disabled>清空邮箱</button>
             <button id="btn-clear-category" class="mini danger" disabled>清空分类(先选分类)</button>
           </div>
         </div>
@@ -563,6 +585,7 @@
   <script src="js/give.js"></script>
   <script src="js/inventory.js"></script>
   <script src="js/character.js"></script>
+  <script src="js/inventory-anomalies.js"></script>
   <script src="js/character-sp-overrides.js"></script>
   <script src="js/quests.js"></script>
   <script src="js/bindings.js"></script>

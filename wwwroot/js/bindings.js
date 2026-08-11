@@ -6,6 +6,9 @@ if (window.DfoTheme) window.DfoTheme.bind();
 bindRuntimeEnvironment();
 bindGivePageSize();
 bindInventoryPageSize();
+bindClearCharacterMailbox();
+bindGiveDeliveryMode();
+bindInventoryAnomalies();
 
 document.querySelectorAll('.tab[data-tab]').forEach((tab) => {
   tab.onclick = () => {

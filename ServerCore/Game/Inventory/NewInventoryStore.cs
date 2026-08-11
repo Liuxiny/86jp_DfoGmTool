@@ -36,7 +36,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     /// GM 离线仓储。正常业务只读写新版 ItemCore 表；旧表仅由显式迁移服务访问。
     /// 每个写操作均在一个 SQLite 事务内同时维护 core、detail、锁与 v2 审计。
     /// </summary>
-    public sealed class NewInventoryStore
+    public sealed partial class NewInventoryStore
     {
         private readonly string _connectionString;
 
@@ -614,7 +614,13 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
                 error = "该装扮不适用于当前角色职业";
                 return false;
             }
-            var legal = AvatarGrantPolicy.ResolveOptions(equipment.EquipmentType, equipment.Grade, equipment.AvatarSelectAbilities, job, equipment.AbilityCaseIndex);
+            var avatarMetadata = AvatarEquipmentMetadataReader.Read(equipment);
+            var legal = AvatarGrantPolicy.ResolveOptions(
+                equipment.EquipmentType,
+                equipment.Grade,
+                avatarMetadata.SelectAbilities,
+                job,
+                avatarMetadata.AbilityCaseIndex);
             var requested = options?.AvatarOptionValue ?? 0;
             if (requested < 0 || requested > byte.MaxValue || !AvatarGrantPolicy.ContainsValue(legal, requested))
             {

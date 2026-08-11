@@ -2,9 +2,9 @@
 
 > S4A12 (86jp) 服务端的 Web GM 控制台 — 基于 [rewio/DfoGmTool](https://codeberg.org/rewio/DfoGmTool) 深度重构
 >
-> 当前版本 **v260729** · 支持服务端 **2026-07-29 数据库结构更新** · MIT License
+> 当前开发版 · 对齐服务端提交 **25e6f0a**、数据库 **v52** · MIT License
 
-独立进程运行，直接操作服务端部署目录里的 `inventory.db` 和 `Script.pvf`；浏览器打开 `http://localhost:5050` 即可使用。源码自包含，不依赖任何本地相邻仓库即可构建和发布。
+独立进程运行，读取服务端部署目录里的 `inventory.db` 和 `Script.pvf`；浏览器打开 `http://localhost:5050` 即可使用。发放页默认“邮件发放”，搜索框左侧的单按钮可切换“邮件发放/背包发放”并记忆选择；从邮件切入背包只在该次切换确认一次，刷新恢复已记忆的背包模式不再提示，也没有常驻警告，列表和配置提交文案会随模式更新。请求缺失、空白或未知的 `deliveryMode` 安全回退为邮件。邮件模式下普通装备、装扮、宠物、消耗品、晶块和复活币通过系统邮件发放；背包模式下普通物品复用新版背包直写，晶块直充账号共享状态，复活币直充角色虚拟钱包，容量不足会整体失败回滚。名称装饰卡始终直写 `character_name_tag_state`，`PremiumCatalog` 契约始终直写账号契约状态，不受模式切换影响。邮件项目关闭并重新打开邮箱即可，背包和专用直发项目通常需重新选择角色刷新。其他管理功能继续使用经过版本门禁的数据库服务。源码自包含，不依赖任何本地相邻仓库即可构建和发布。
 
 🔗 **仓库地址**
 
@@ -84,6 +84,21 @@
 
 ---
 
+## v260809 服务端兼容更新
+
+- **物品交付边界**：发放页默认邮件，可在搜索框左侧用单按钮切换背包发放；从邮件切入背包仅该次切换确认一次，刷新恢复背包模式不再提示且没有常驻警告，列表/配置提交文案随模式变化。缺失、空白或未知 `deliveryMode` 均安全回退邮件。邮件模式下普通装备、装扮、宠物、消耗品、晶块和复活币走新版系统邮件与附件，背包模式下普通物品复用新版背包直写、晶块直充账号共享状态、复活币直充角色虚拟钱包；背包容量不足整体失败回滚。名称装饰卡始终直写 `character_name_tag_state`，`PremiumCatalog` 契约始终直写账号契约状态，不受模式切换影响。
+- **高级属性完整保留**：品级、强化、增幅、锻造、时限、装扮属性和手工类型提示由 GM 使用同步的服务端/PVF 规则校验；邮件模式编码为服务端可直接领取的 `ItemCore` 附件，背包模式复用同一校验后写入新版 `ItemCore`。
+- **明确的刷新边界**：GM 是独立进程，无法安全访问服务端在线会话内存，因此不会推送新邮件浮标或刷新已经打开的邮箱；新版服务端会在每次打开邮箱时重新查询邮件表，所以邮件发放后在线角色关闭并重新打开邮箱即可领取，不需要重新选择角色。背包直发以及名称装饰卡、契约直写状态通常需要重新选择角色刷新。
+- **邮件堆叠与事务边界**：邮件模式下堆叠物品按当前 PVF 的 stack limit 拆成附件，每封最多 10 个附件；单次最多 10 封、100 个附件。整批邮件在一个 SQLite IMMEDIATE 事务中原子提交并持久化幂等；超过上限会明确拒绝，不会部分发放。背包模式复用新版背包写入，不宣称邮件式跨重启持久幂等。
+- **当前角色清空邮箱**：发放页的“清空邮箱”只删除当前角色的 folder=0 收件人；共享邮件仍保留，只有不再被任何收件人引用的根消息、附件和对应系统审计才会清理。
+- **异常物品维护**：账号数据管理的“背包数据迁移”后常驻“异常物品清理”页，顶部红色快捷按钮仅在发现异常时出现。它按当前 PVF 扫描所有账号的新版 `character_new_items` 与 `account_cargo_new_items`，排除主背包虚拟货币槽，不扫描旧迁移表、邮箱或称号簿；清理前会重新扫描，并在单一事务中整体提交或回滚。
+- **重复提交保护**：浏览器为一次操作生成稳定请求编号并在请求期间锁定发放控件；邮件模式的邮箱事务持久化幂等，相同请求重试返回原邮件，同编号不同内容会被拒绝。背包模式不宣称邮件式跨重启持久幂等，成功提示以服务端 `delivery` 为准。
+- **任务 activation 契约**：进行中任务读取并返回 `activation_id/version`；标记可交使用带 activation 的 CAS，重复激活同一任务会生成新的运行身份，旧事件不会污染新任务运行。
+- **任务契约可复现同步**：`ActiveQuest`、`QuestRepository`、`QuestSlotLayout` 与 schema、PvfLib 一同从服务端实际 HEAD 同步并记录哈希；每日任务使用最新版 30 个固定进行中槽位。
+- **普通/PVP 技能隔离**：转职、觉醒、SP/TP 只重建普通技能方案，不清空或改写 v52 独立 PVP 技能状态。
+- **账号级地下城难度**：一键解锁写入最新版 `account_dungeon_permissions`，同账号角色共享，重复执行幂等；不会再清空角色专属的安图恩等机制记录。
+- **额外装备槽 bitmask**：状态 `7` 正确识别为左右槽与附加槽均已开启，角色详情、任务残留和前端按钮使用一致的位判断。
+
 ## v260729 更新
 
 - **修复新版服务端复制角色回滚**：适配新增的 `dungeon_persistent_effect_outbox`，不再因其事件唯一索引不含角色归属列而中止整个复制事务。
@@ -96,7 +111,9 @@
 - **完善 07-24 新版背包升级**：旧版穿戴中的装扮、装备、宠物和宠物装备会按角色真实开放容量，依次进入各自背包区间的首个空位，不再沿用穿戴槽编号或写入未开放格子。
 - **修复复制角色错误**：复制时重建角色槽位、物品 UID、装扮 UID、宠物 UID 与关联明细；带职业限制的穿戴物自动脱下并进入对应背包，避免复制角色进入客户端后卡死或闪退。
 - **统一背包位置判定**：角色复制、旧版背包升级、物品发放和背包配置统一使用新版 `ItemCore` 类型与角色实际扩展状态校验。
-- **完善删除与账号备份**：删除角色同步清理装扮明细和背包审计数据；账号还原时规避角色槽位、自动主键、装扮及宠物逻辑 UID 冲突。
+- **账号备份格式 v2**：完整覆盖 schema v49-v52 的副职业、任务 activation、账号抽奖、独立 PVP 技能，以及邮箱消息/收件人/附件/系统审计和佣兵奖励明细关系；v1 备份恢复前自动补齐 activation identity，损坏或未来版本会明确拒绝。
+- **安全恢复与删除**：账号还原会重建角色槽位，并重映射冲突的装扮、宠物、邮箱消息及审计编号；永久删除会拒绝仍在佣兵出战或奖励邮件尚未投递的角色，只清理已投递的历史奖励。
+- **复制选项严格隔离**：v52 PVP 技能只属于“技能”，副职业只属于“其他”，任务 activation 可复制但事件 inbox 不复制；遇到未登记的 `character_*` 表默认停止并提示升级 GM。
 
 ## v260725 更新
 
@@ -105,7 +122,7 @@
 - **事务与残余保护**：每次迁移使用完整事务和进程互斥锁，错误整体回滚；普通背包容量不足时保留来源数据并给出具体角色、背包类型、物品数量和所需空槽位。
 - **防止镜像重复**：迁移后完整清理已消费的来源数据；金币、复活币、胜点、晶块及账号金库的旧/新镜像不会再次叠加或复制。
 - **称号簿与名称装饰卡**：新版称号簿按每个称号一条数据处理；冲突时以目标侧为准并清理来源侧，不作为满包残余保留。
-- **离线写入提示**：GM 修改运行中的服务端数据后，角色必须返回选角并重新进入才会生效；背包迁移必须在服务端停止且无人在线时执行。
+- **刷新提示**：名称装饰卡和 `PremiumCatalog` 契约是直写专用状态，发放后角色通常必须返回选角并重新进入；邮件发放只需打开或重新打开邮箱，背包直发通常也需返回选角刷新。背包迁移必须在服务端停止且无人在线时执行。
 
 ## 相较上游的实际代码变更
 
@@ -127,7 +144,7 @@
 | 文件 | 旧 → 新 | 新增内容 |
 |------|---------|----------|
 | `GmService.Characters.cs` | 18KB → 38KB | `DeleteCharacterPermanently`（二次确认 + 种子角色兜底优选同账号角色）、`UnlockExtraEquipmentSlots`、`UnlockDungeonPermissions`、`MaxPersonalCargo`、`SetWalletValue`（金币/复活币/技能点按类型覆写） |
-| `GmService.Inventory.cs` | 19KB → 56KB | `GiveItem` 新增 `ItemGrantOptions` 参数（品级/强化/增幅/锻造/红字/期限），装备发放走 `EquipmentGrantPolicy` 和 `AmplifyInitialValueResolver`，装扮发放按职业过滤走 `AvatarGrantPolicy`，PVF 不存在的物品禁止发放 |
+| `GmService.Inventory.cs` | 19KB → 56KB | `GiveItem` 支持 `ItemGrantOptions` 与 `deliveryMode` 邮件/背包分流；装备发放走 `EquipmentGrantPolicy` 和 `AmplifyInitialValueResolver`，装扮发放按职业过滤走 `AvatarGrantPolicy`，PVF 不存在的物品禁止发放 |
 | `GmService.Quests.cs` | 35KB → 73KB | `AllVisibleQuestOverview`（按区域展示全部可见任务）、`CompleteCurrentLevelMainQuests/SideQuests/SystemQuests/NoItemAchievementQuests`（按当前等级批量完成）、`CompleteProfessionQuests`、`ResetVisibleDailyQuests`、`CompleteVisibleQuestBatch`、`CompleteExtraEquipmentSlotQuests`、`UnclearQuestBatch`、任务搜索增加 `grade`/`region` 过滤 |
 | `GmService.TitleBook.cs` | 4.6KB → 11KB | `CompleteAllTitleBook` 扩展为完整的批量完成实现 |
 | `PvfIndexService.Jobs.cs` | 6KB → 13KB | `TryValidateJobGrowOption` — 转职/觉醒写入前的 PVF 校验 |
@@ -178,6 +195,10 @@ POST /api/accounts/{id}/cargo/max            账号金库一键满级
 GET  /api/inventory-migration/status          查询新旧背包数据与可迁移状态
 POST /api/inventory-migration/legacy-to-new   旧版背包升级新版背包
 POST /api/inventory-migration/new-to-legacy   新版背包还原旧版背包
+POST /api/characters/{id}/mailbox/clear       清空当前角色 folder=0 邮箱
+GET  /api/inventory-anomalies/status          查询全账号异常物品状态
+POST /api/inventory-anomalies/clean           重扫并原子清理全账号异常物品
+POST /api/characters/{id}/items               发放物品（body 含 requestId、deliveryMode、options）
 
 GET  /api/characters/{id}/items/{tid}/grant-options   发放物品配置选项
 GET  /api/characters/{id}/items/config-options        背包物品配置选项
@@ -191,6 +212,7 @@ POST /api/characters/{id}/dungeon-permissions/unlock   解锁地下城难度
 POST /api/characters/{id}/delete                      彻底删除角色
 POST /api/characters/{id}/sp/zero-remaining           SP/TP 剩余归零
 
+POST /api/characters/{id}/quests/{qid}/ready?activationId=...  按当前任务运行身份标记可交
 POST /api/characters/{id}/quests/{qid}/daily-ready    每日任务标记可交
 GET  /api/characters/{id}/quests/all-visible           全部可见任务
 POST /api/characters/{id}/quests/all-visible/complete-batch  批量完成可见任务
@@ -210,7 +232,7 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 
 | 旧签名 | 新签名 | 变更原因 |
 |--------|--------|----------|
-| `GiveItem(id, templateId, count, pvfIndex)` | `GiveItem(id, templateId, count, options, pvfIndex)` | 新增 `ItemGrantOptions`（品级/强化/增幅/锻造/红字/期限/装扮属性） |
+| `GiveItem(id, templateId, count, pvfIndex)` | `GiveItem(id, templateId, count, options, pvfIndex, requestId, deliveryMode)` | 新增 `ItemGrantOptions`，以及邮件/背包模式分流；缺失或未知 `deliveryMode` 安全回退邮件，`requestId` 用于邮件幂等 |
 | `SetGrowType(id, first, second)` | `SetGrowTypeFixed(id, job, first, second)` | 新增职业参数 + PVF 校验 + 技能重建 |
 | `AdjustSpTp(id, sp, tp)` | `AdjustSpTpSynced(id, sp, tp)` | 调整后同步技能点状态 + 负数保护 |
 | `GetGrowOptions(id)` | `GetGrowOptions(id, job)` | 支持指定职业查询 |
@@ -219,13 +241,15 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 
 ### 自测框架
 
-`SelfTests/` 目录包含三个自测入口：
+`SelfTests/` 目录包含五个自测入口：
 
 | 文件 | 行数 | 覆盖范围 |
 |------|------|----------|
+| `DatabaseCompatibilitySelfTest.cs` | — | 数据库 schema/兼容性门禁与迁移前置校验 |
 | `ItemGrantOptionsSelfTest.cs` | ~500 | 装备/装扮/可叠加/期限物品的 `ItemGrantOptions` 处理逻辑 |
-| `CharacterMutationSelfTest.cs` | ~1200 | 等级/经验/转职/觉醒/技能重建/SP·TP 同步/角色复制及运行时账本隔离/角色删除种子兜底 |
+| `CharacterMutationSelfTest.cs` | ~1400 | 等级/经验、转职/觉醒、普通/PVP 技能隔离、任务 activation/CAS/事件隔离、账号级地下城权限、角色复制/备份/删除生命周期；邮件堆叠拆分/多邮件幂等回滚、当前角色邮箱清空与共享邮件安全；GiveItem 的 mail/inventory 分流、普通物品/晶块/复活币直发回滚、名称装饰卡与契约专用直写 |
 | `InventoryMigrationSelfTest.cs` | — | 新旧背包双向迁移、冲突顺延、可堆叠合并拆分、镜像去重、满包残余与事务回滚 |
+| `InventoryMaintenanceSelfTest.cs` | — | PVF 合法 ID、全账号新版角色库存/账号金库异常扫描与清理、虚拟货币槽排除、关联状态精确清理、事务回滚与二次幂等 |
 
 ---
 
@@ -239,6 +263,7 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 - **账号金库**：查看、单删、确认后清空、一键满级
 - **备份与还原**：导出账号全量数据（含所有角色），还原时自动处理外键和主键冲突
 - **背包数据迁移**：旧版/新版双向迁移、事务回滚、容量残余报告与可重试清源
+- **异常物品清理**：在当前 PVF 合法 ID 集下扫描全账号新版角色库存与账号金库，清理前重扫并以单事务整体回滚
 
 ### 🎮 角色
 
@@ -266,16 +291,20 @@ POST /api/characters/{id}/quests/equipment-slots/complete 完成装备栏位任�
 - **装备发放配置**：品级（随机/100% 最上级）、强化/增幅（最高 31）、武器锻造（最高 8）、红字属性（体力/精神/力量/智力，仅 55 级以上紫色及以上装备）
 - **装扮发放配置**：按角色职业过滤 → 上衣技能从 PVF `skill/abilitydatas.dat` 动态读取，其他部位从 `.equ` 的 `[avatar select ability]` 读取
 - **期限道具配置**：在配置卡片中设置期限天数
+- **清空邮箱**：发放页始终提供当前角色邮箱清空按钮，确认角色名后只清理该角色收件箱
 - PVF 不存在的物品禁止发放
 
-**特殊物品发放规则**：以下物品发放时不进入角色背包，而是直接写入正确的数据库字段：
+**物品交付规则**：发放页默认“邮件发放”，搜索框左侧的单按钮可切换“背包发放”；请求缺失、空白或未知 `deliveryMode` 安全回退邮件。名称装饰卡与 `PremiumCatalog` 契约始终使用专用直写状态，不创建邮件：
 
-| 物品类型 | 处理方式 |
-|----------|----------|
-| **名称装饰卡** | 直接写入新版 `character_name_tag_state`。如果同 ID 的名称装饰卡仍未过期，则在剩余期限上叠加天数（默认 30 天/张）；不同 ID 直接替换 |
-| **契约（高级频道等）** | 根据 `PremiumCatalog` 识别契约类型和时长，直接写入 `account_premiums` 表的对应类型期限，多张叠加天数。不占用任何背包槽位 |
-| **晶块（六种）** | 通过 `CurrencyService.IsCubeFragment` 识别后写入账号共享晶块字段，不占用普通背包格 |
-| **复活币道具** | 通过 `ReviveCoinService.IsReviveCoinReward` 识别后写入新版角色虚拟钱包槽 |
+| 物品类型 | 邮件发放（默认） | 背包发放 |
+|----------|------------------|----------|
+| **普通装备、装扮、宠物与消耗品** | GM 按同步的服务端规则创建并冻结 `ItemCore` 邮件附件快照，玩家领取时由服务端校验并写入对应容器 | 复用新版 `NewInventoryStore.TryGrant` 直接写对应容器；背包容量不足整批失败回滚，完成后通常需重新选择角色；不宣称邮件式跨重启持久幂等 |
+| **晶块（六种）** | 通过系统邮件发放，领取附件时进入账号共享晶块槽，不占用普通背包格 | 直接充入账号共享晶块状态，完成后通常需重新选择角色 |
+| **复活币道具** | 通过系统邮件发放，领取附件时进入角色虚拟钱包槽 | 直接充入角色虚拟钱包，完成后通常需重新选择角色 |
+| **名称装饰卡** | 直写 `character_name_tag_state`，不创建邮件；发放后需重新选择角色刷新 | 同左，模式切换不改变专用直写 |
+| **契约（`PremiumCatalog`）** | 直写账号契约状态，不创建邮件；发放后需重新选择角色刷新 | 同左，模式切换不改变专用直写 |
+
+邮件模式的堆叠附件按 PVF stack limit 拆分，每封最多 10 个附件、单次最多 10 封/100 个附件；超过上限会拒绝。整批邮件使用一个 SQLite IMMEDIATE 事务原子提交并按请求编号幂等；背包模式不宣称邮件式持久幂等。
 
 ### 📜 任务
 
@@ -357,7 +386,9 @@ dotnet run
 2. 环境变量 `DFO_GM_SERVER_BIN`
 3. 从工作目录/程序目录逐级向上，找同级的服务端构建输出目录（如 `Server\DfoServer\bin\Debug`）
 
-`item_schema.sql` 优先用服务端目录里的，缺失时回退工具自带拷贝。
+GM 启动时会先以只读方式检查数据库兼容性，当前只接受完整的 **v52** 结构。空库、旧版库、未来版本库或缺少 v52 必需列的伪兼容库都会在任何 GM 服务创建前停止；GM **不会**创建或升级服务端数据库。请先用对应版本服务端完成数据库初始化/升级。
+
+仓库中的 `ServerCore/Sqlite/item_schema.sql`、三个任务运行契约与 `PvfLib/` 由 `sync-server-contracts.ps1` 从指定服务端源码同步，版本、schema 哈希、任务契约哈希和 46 个 PVF 源文件哈希记录在 `server-contract-manifest.json`。服务端提交 `211663c` 与同版本自带 PVF 的包头格式不一致，因此同步流程暂时应用一项显式兼容补丁：同时读取 guarded/unguarded 包头，并在写回时保持原格式。
 
 ---
 
@@ -414,19 +445,23 @@ pvf_path=
 
 ```bash
 DfoGmTool.exe --selftest-item-grant-options
+DfoGmTool.exe --selftest-database-compatibility
 DfoGmTool.exe --selftest-character-mutations
 DfoGmTool.exe --selftest-inventory-migration
+DfoGmTool.exe --selftest-inventory-maintenance
 ```
 
 ---
 
 ## 注意事项
 
-- ⚡ **在线角色需要返回选角再进入才能看到改动**（服务端内存中的会话状态不会自动刷新）。
+- 📬 **邮件发放后请打开邮箱领取；若邮箱已经打开，请关闭后重新打开，无需重新选择角色**。背包直发以及名称装饰卡和 `PremiumCatalog` 契约直写通常需重新选择角色刷新。GM 不修改服务端实现，也不直接访问在线会话内存，因此不会推送新邮件浮标，也不提供已打开邮箱的实时刷新；发放页请求期间会锁定按钮，成功提示以服务端 `delivery` 为准。
+- ⚡ 背包配置、角色属性等直接管理操作仍可能需要返回选角再进入才能看到改动。
 - 🔁 **执行背包数据迁移前必须停止游戏服务端，并确保没有在线角色**；不要在迁移事务执行期间启动服务端。
 - ⏳ 物品/任务索引启动后后台构建（约 15 秒），页面顶部显示状态，构建完成前发放不校验物品 ID。
 - 🎯 强制完成任务不发奖励；想拿奖励用「标记可交」然后回城正常交付。
 - 🗑️ 清空类操作有确认框；单件删除立即生效不可撤销。
+- ⚠️ **异常物品清理是面向全账号的不可撤销数据库操作**，会按当前 PVF 重扫新版角色库存与账号金库；执行前请先备份 `inventory.db`，并停止游戏服务端、确保没有在线角色。
 - 💾 改动前建议备份 `inventory.db`（种子数据不会自动重建）。
 - 🔒 远程模式的密码务必修改，不要使用默认值。
 

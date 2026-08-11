@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace GmPvfLib
 {
@@ -78,6 +79,8 @@ namespace GmPvfLib
         public int PhysicalAttackRate { get; set; } = -1;
         public int MagicalAttackRate { get; set; } = -1;
         public string AppearancePoint { get; set; }
+
+        public List<AiDeathTowerItem> DeathTowerItems { get; set; } = new List<AiDeathTowerItem>();
         
         public List<string> PartyMembers { get; set; } = new List<string>();
 
@@ -138,6 +141,9 @@ namespace GmPvfLib
                     case "physical attack rate": aic.PhysicalAttackRate = ParseInt(data); break;
                     case "magical attack rate": aic.MagicalAttackRate = ParseInt(data); break;
                     case "appearance point": aic.AppearancePoint = data; break;
+                    case "death tower item":
+                        ParseDeathTowerItems(node, content, aic.DeathTowerItems);
+                        break;
                     case "party member": aic.PartyMembers.Add(data); break;
                 }
             }
@@ -145,6 +151,38 @@ namespace GmPvfLib
             return aic;
         }
 
+        private static void ParseDeathTowerItems(
+            ScriptNode node,
+            string content,
+            ICollection<AiDeathTowerItem> result)
+        {
+            var numbers = new List<int>();
+            foreach (var dataItem in node.DataItems)
+            {
+                var raw = dataItem.GetContent(content) ?? string.Empty;
+                foreach (Match match in Regex.Matches(raw, @"-?\d+"))
+                {
+                    if (int.TryParse(match.Value, out var value))
+                        numbers.Add(value);
+                }
+            }
+
+            for (var index = 0; index + 1 < numbers.Count; index += 2)
+            {
+                result.Add(new AiDeathTowerItem
+                {
+                    ItemId = numbers[index],
+                    DropRate = numbers[index + 1],
+                });
+            }
+        }
+
         #endregion
+    }
+
+    public sealed class AiDeathTowerItem
+    {
+        public int ItemId { get; set; }
+        public int DropRate { get; set; }
     }
 }

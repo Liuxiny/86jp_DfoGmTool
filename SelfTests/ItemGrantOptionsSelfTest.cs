@@ -21,6 +21,7 @@ namespace DfoGmTool.SelfTests
             CheckEquipmentLimits();
             CheckQualitySeeds();
             CheckAvatarRules();
+            CheckAvatarEquipmentMetadataAdapter();
             CheckAvatarSkillFiltering();
             CheckAvatarExtraJson();
             CheckAvatarDurationDeduplication();
@@ -402,6 +403,33 @@ namespace DfoGmTool.SelfTests
                 && parsed.Avatar.Reserved1.Length == 71
                 && parsed.Avatar.Reserved2.Length == 30
                 && parsed.Avatar.TailData.Length == 7);
+        }
+
+        private static void CheckAvatarEquipmentMetadataAdapter()
+        {
+            const string pvf = "[ability case index]\n42\n[/ability case index]\n"
+                + "[avatar select ability]\n"
+                + "0 `HP MAX` + 100\n"
+                + "1 `SKILL_LEVEL` `[swordman]` 7 1\n"
+                + "[/avatar select ability]";
+            var equipment = EquipmentFile.Parse(pvf);
+            var metadata = AvatarEquipmentMetadataReader.Read(equipment);
+
+            Check("GM avatar adapter reads ability case index", metadata.AbilityCaseIndex == 42);
+            Check("GM avatar adapter reads exact option count", metadata.SelectAbilities.Count == 2);
+            Check("GM avatar adapter reads ordinary ability",
+                metadata.SelectAbilities.Count > 0
+                && metadata.SelectAbilities[0].OptionValue == 0
+                && metadata.SelectAbilities[0].Ability == "HP MAX"
+                && metadata.SelectAbilities[0].Operator == "+"
+                && metadata.SelectAbilities[0].Amount == 100);
+            Check("GM avatar adapter reads skill ability",
+                metadata.SelectAbilities.Count > 1
+                && metadata.SelectAbilities[1].OptionValue == 1
+                && metadata.SelectAbilities[1].Ability == "SKILL_LEVEL"
+                && metadata.SelectAbilities[1].Job == "swordman"
+                && metadata.SelectAbilities[1].SkillIndex == 7
+                && metadata.SelectAbilities[1].SkillLevel == 1);
         }
 
         private static void CheckAvatarDurationDeduplication()

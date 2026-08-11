@@ -124,7 +124,11 @@ namespace GmPvfLib
                     string tag = trimmed.Substring(1, trimmed.Length - 2);
                     if (tag[0] == '/') { cur++; continue; }
 
-                    var child = ParseNode(tag, cur, endLine);
+                    // ParseNode uses an exclusive end boundary; this method's
+                    // endLine is inclusive. Include the final content line so
+                    // a trailing flag-only node (such as ACT [NOW] or [%])
+                    // cannot leave the cursor parked on the same line.
+                    var child = ParseNode(tag, cur, endLine + 1);
                     if (child != null)
                     {
                         node.Children.Add(child);

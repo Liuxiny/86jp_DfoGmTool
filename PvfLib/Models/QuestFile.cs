@@ -55,6 +55,7 @@ namespace GmPvfLib
         #region 关联
 
         public System.Collections.Generic.List<string> PreRequiredQuestGroups { get; set; }
+        public System.Collections.Generic.List<string> PreRequiredQuestAnswerGroups { get; set; }
         public string PreRequiredQuestAnswer { get; set; }
         public string Dialog { get; set; }
         public string MonsterRewardItem { get; set; }
@@ -66,11 +67,16 @@ namespace GmPvfLib
         public string RelationQuest { get; set; }
         public string ExceptionQuest { get; set; }
         public string CollisionQuest { get; set; }
+        public System.Collections.Generic.List<string> CollisionQuestGroups { get; set; }
+        public string AccountCollisionQuest { get; set; }
+        public System.Collections.Generic.List<string> AccountCollisionQuestGroups { get; set; }
         public string ExposedByNpc { get; set; }
         public string FirstExposedByNpc { get; set; }
         public string TargetCharacter { get; set; }
         public string DependGiveItem { get; set; }
         public string ClearRewardItem { get; set; }
+        public List<ClearRewardItemEntry> ClearRewardItems { get; set; } =
+            new List<ClearRewardItemEntry>();
 
         #endregion
 
@@ -134,6 +140,9 @@ namespace GmPvfLib
                             ? data : qst.PreRequiredQuest + " " + data;
                         break;
                     case "pre required quest answer":
+                        if (qst.PreRequiredQuestAnswerGroups == null)
+                            qst.PreRequiredQuestAnswerGroups = new System.Collections.Generic.List<string>();
+                        qst.PreRequiredQuestAnswerGroups.Add(data);
                         qst.PreRequiredQuestAnswer = string.IsNullOrEmpty(qst.PreRequiredQuestAnswer)
                             ? data : qst.PreRequiredQuestAnswer + " " + data;
                         break;
@@ -151,12 +160,29 @@ namespace GmPvfLib
                     case "substitutive names": qst.SubstitutiveNames = data; break;
                     case "relation quest": qst.RelationQuest = data; break;
                     case "exception quest": qst.ExceptionQuest = data; break;
-                    case "collision quest": qst.CollisionQuest = data; break;
+                    case "collision quest":
+                        if (qst.CollisionQuestGroups == null)
+                            qst.CollisionQuestGroups = new System.Collections.Generic.List<string>();
+                        qst.CollisionQuestGroups.Add(data);
+                        qst.CollisionQuest = string.IsNullOrEmpty(qst.CollisionQuest)
+                            ? data : qst.CollisionQuest + " " + data;
+                        break;
+                    case "account collision quest":
+                        if (qst.AccountCollisionQuestGroups == null)
+                            qst.AccountCollisionQuestGroups = new System.Collections.Generic.List<string>();
+                        qst.AccountCollisionQuestGroups.Add(data);
+                        qst.AccountCollisionQuest = string.IsNullOrEmpty(qst.AccountCollisionQuest)
+                            ? data : qst.AccountCollisionQuest + " " + data;
+                        break;
                     case "exposed by npc": qst.ExposedByNpc = data; break;
                     case "first exposed by npc": qst.FirstExposedByNpc = data; break;
                     case "target character": qst.TargetCharacter = data; break;
                     case "depend give item": qst.DependGiveItem = data; break;
-                    case "clear reward item": qst.ClearRewardItem = data; break;
+                    case "clear reward item":
+                        qst.ClearRewardItem = data;
+                        qst.ClearRewardItems =
+                            ClearRewardItemEntry.ParseList(data);
+                        break;
 
                     case "cant giveup": qst.CantGiveup = true; break;
                     case "job change quest": qst.JobChangeQuestValue = ParseInt(data); break;
@@ -255,6 +281,51 @@ namespace GmPvfLib
                     });
                 }
             }
+            return result;
+        }
+    }
+
+    public class ClearRewardItemEntry
+    {
+        public int DungeonId { get; set; }
+        public int Difficulty { get; set; }
+        public int ItemId { get; set; }
+        public int Count { get; set; }
+        public int DropRate { get; set; }
+        public int MaxStack { get; set; }
+
+        public static List<ClearRewardItemEntry> ParseList(string data)
+        {
+            var result = new List<ClearRewardItemEntry>();
+            if (string.IsNullOrWhiteSpace(data))
+                return result;
+
+            var tokens = data.Split(
+                new[] { ' ', '\t', '\r', '\n' },
+                StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i + 5 < tokens.Length; i += 6)
+            {
+                if (!int.TryParse(tokens[i], out var dungeonId)
+                    || !int.TryParse(tokens[i + 1], out var difficulty)
+                    || !int.TryParse(tokens[i + 2], out var itemId)
+                    || !int.TryParse(tokens[i + 3], out var count)
+                    || !int.TryParse(tokens[i + 4], out var dropRate)
+                    || !int.TryParse(tokens[i + 5], out var maxStack))
+                {
+                    continue;
+                }
+
+                result.Add(new ClearRewardItemEntry
+                {
+                    DungeonId = dungeonId,
+                    Difficulty = difficulty,
+                    ItemId = itemId,
+                    Count = count,
+                    DropRate = dropRate,
+                    MaxStack = maxStack,
+                });
+            }
+
             return result;
         }
     }

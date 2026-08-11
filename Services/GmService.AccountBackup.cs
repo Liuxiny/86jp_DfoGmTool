@@ -11,7 +11,8 @@ namespace DfoGmTool.Services
 {
     public sealed partial class GmService
     {
-        private const int AccountBackupVersion = 1;
+        private const int AccountBackupVersion = 2;
+        private const int MinimumAccountBackupVersion = 1;
 
         private static readonly Regex AccountBackupIdentifier = new Regex(
             @"\A[A-Za-z_][A-Za-z0-9_]*\z",
@@ -22,12 +23,15 @@ namespace DfoGmTool.Services
             "accounts",
             "account_settings",
             "account_premiums",
+            "account_increase_chance_lottery_progress",
             "account_cargo_state",
             "account_cargo_new_items",
             "characters",
             "character_subtype1_fields",
             "character_subtype0_fields",
             "character_skills",
+            "character_pvp_skill_state",
+            "character_pvp_skills",
             "character_dark_knight_combo_skill_pages",
             "character_init_bodies",
             "character_init_flags",
@@ -43,6 +47,7 @@ namespace DfoGmTool.Services
             "character_sort_item_locks",
             "character_hotkey_slots",
             "character_active_quests",
+            "character_quest_notify_selections",
             "character_achievement_complete",
             "character_new_titlebook",
             "character_daily_reset",
@@ -61,6 +66,16 @@ namespace DfoGmTool.Services
             "character_dimension_flags",
             "character_collectbox_slots",
             "character_mercenary_support",
+            "character_expert_job",
+            "character_expert_job_recipes",
+            "mailbox_messages",
+            "mailbox_recipients",
+            "mailbox_attachments",
+            "mailbox_system_mail_audit",
+            "mailbox_system_mail_audit_attachments",
+            "account_mercenary_assignments",
+            "mercenary_reward_outbox",
+            "mercenary_reward_items",
             "item_audit_log",
             "account_character_entries",
         };
@@ -72,6 +87,9 @@ namespace DfoGmTool.Services
                 ["account_cargo_new_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
                 ["item_audit_log"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id", "log_id", "item_uid" },
                 ["inventory_audit_log_v2"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id" },
+                ["mailbox_recipients"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "recipient_id" },
+                ["mailbox_attachments"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "attachment_id" },
+                ["mailbox_system_mail_audit_attachments"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_attachment_id" },
             };
 
         private static readonly HashSet<string> AccountBackupLegacyInventoryTables =
@@ -119,6 +137,9 @@ namespace DfoGmTool.Services
                             dumps.Add(dump);
                     }
 
+                    AppendMailboxRelationDumps(conn, tx, tableInfos, dumps);
+                    dumps = SortAccountBackupDumps(dumps).ToList();
+
                     tx.Commit();
 
                     return new AccountBackupFile
@@ -138,6 +159,18 @@ namespace DfoGmTool.Services
             var validation = ValidateAccountBackupFile(file);
             if (validation != null)
                 return Error(validation);
+            var sourceBackupVersion = file.Version;
+            if (sourceBackupVersion == 1)
+            {
+                try
+                {
+                    UpgradeAccountBackupV1ToV2(file);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Error("备份 v1 升级失败: " + ex.Message);
+                }
+            }
 
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
@@ -176,6 +209,10 @@ namespace DfoGmTool.Services
 
                         NormalizeAccountBackupDumpForTargetSchema(dump, targetTable);
 
+                        var requiredColumnError = ValidateAccountBackupRequiredColumns(dump, targetTable);
+                        if (requiredColumnError != null)
+                            return Error(requiredColumnError);
+
                         foreach (var column in dump.Columns)
                         {
                             if (!targetTable.Columns.ContainsKey(column))
@@ -198,6 +235,10 @@ namespace DfoGmTool.Services
                         conn, tx, tableMap, "character_avatar_detail", "item_uid", ItemCore.KindAvatar);
                     var remappedCreatureUidCount = RemapConflictingBackupLogicalIds(
                         conn, tx, tableMap, "character_creatures", "creature_key", ItemCore.KindCreature);
+                    var remappedMailboxMessageIdCount = RemapConflictingBackupMailboxMessageIds(
+                        conn, tx, tableMap);
+                    var remappedMailboxAuditIdCount = RemapConflictingBackupMailboxAuditIds(
+                        conn, tx, tableMap);
 
                     foreach (var dump in SortAccountBackupDumps(restorableDumps))
                     {
@@ -216,6 +257,10 @@ namespace DfoGmTool.Services
                         CharacterIDs = file.CharacterIDs,
                         RemappedAvatarUidCount = remappedAvatarUidCount,
                         RemappedCreatureUidCount = remappedCreatureUidCount,
+                        SourceBackupVersion = sourceBackupVersion,
+                        UpgradedFromVersion = sourceBackupVersion < AccountBackupVersion ? sourceBackupVersion : 0,
+                        RemappedMailboxMessageIdCount = remappedMailboxMessageIdCount,
+                        RemappedMailboxAuditIdCount = remappedMailboxAuditIdCount,
                     };
                 }
             }
@@ -225,7 +270,7 @@ namespace DfoGmTool.Services
         {
             if (file == null)
                 return "备份文件为空";
-            if (file.Version != AccountBackupVersion)
+            if (file.Version < MinimumAccountBackupVersion || file.Version > AccountBackupVersion)
                 return "不支持的备份文件版本: " + file.Version;
             if (file.AccountID <= 0)
                 return "备份文件中的账号 ID 无效";
@@ -257,6 +302,86 @@ namespace DfoGmTool.Services
             }
 
             NormalizeCharacterBackupSlotIndexes(dump, slotIndex);
+        }
+
+        private static string ValidateAccountBackupRequiredColumns(
+            AccountBackupTableDump dump,
+            AccountBackupTableInfo targetTable)
+        {
+            if (dump == null || targetTable == null)
+                return null;
+
+            if ((dump.Name.Equals("character_active_quests", StringComparison.OrdinalIgnoreCase)
+                    || dump.Name.Equals("quest_progress_event_inbox", StringComparison.OrdinalIgnoreCase))
+                && targetTable.Columns.ContainsKey("activation_id")
+                && !dump.Columns.Any(column => column.Equals("activation_id", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "备份表 " + dump.Name + " 缺少 v52 必需列 activation_id";
+            }
+
+            return null;
+        }
+
+        private static void UpgradeAccountBackupV1ToV2(AccountBackupFile file)
+        {
+            foreach (var dump in file.Tables)
+            {
+                if (dump.Name.Equals("character_active_quests", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddLegacyActivationColumn(
+                        dump,
+                        row => "legacy-active-" + ReadDumpInteger(dump, row, "character_id")
+                            + "-" + ReadDumpInteger(dump, row, "quest_id")
+                            + "-" + ReadDumpInteger(dump, row, "slot"));
+                }
+                else if (dump.Name.Equals("quest_progress_event_inbox", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddLegacyActivationColumn(
+                        dump,
+                        row => "legacy-inbox-" + ReadDumpInteger(dump, row, "character_id")
+                            + "-" + ReadDumpText(dump, row, "event_id")
+                            + "-" + ReadDumpText(dump, row, "event_kind"));
+                }
+            }
+            file.Version = AccountBackupVersion;
+        }
+
+        private static void AddLegacyActivationColumn(
+            AccountBackupTableDump dump,
+            Func<List<AccountBackupValue>, string> valueFactory)
+        {
+            if (dump.Columns.Any(column => column.Equals("activation_id", StringComparison.OrdinalIgnoreCase)))
+                return;
+            var oldColumnCount = dump.Columns.Count;
+            foreach (var row in dump.Rows)
+            {
+                if (row.Count != oldColumnCount)
+                    throw new InvalidOperationException("表 " + dump.Name + " 的行列数不一致");
+                row.Add(new AccountBackupValue { Type = "text", Text = valueFactory(row) });
+            }
+            dump.Columns.Add("activation_id");
+        }
+
+        private static long ReadDumpInteger(
+            AccountBackupTableDump dump,
+            List<AccountBackupValue> row,
+            string columnName)
+        {
+            var index = dump.Columns.FindIndex(column => column.Equals(columnName, StringComparison.OrdinalIgnoreCase));
+            if (index < 0 || index >= row.Count)
+                throw new InvalidOperationException("表 " + dump.Name + " 缺少列 " + columnName);
+            return row[index].ToInt64();
+        }
+
+        private static string ReadDumpText(
+            AccountBackupTableDump dump,
+            List<AccountBackupValue> row,
+            string columnName)
+        {
+            var index = dump.Columns.FindIndex(column => column.Equals(columnName, StringComparison.OrdinalIgnoreCase));
+            if (index < 0 || index >= row.Count)
+                throw new InvalidOperationException("表 " + dump.Name + " 缺少列 " + columnName);
+            return Convert.ToString(row[index].ToDbValue(), CultureInfo.InvariantCulture) ?? string.Empty;
         }
 
         private static void NormalizeCharacterBackupSlotIndexes(AccountBackupTableDump dump, int slotIndex)
@@ -434,6 +559,11 @@ namespace DfoGmTool.Services
                 clauses.Add(QuoteAccountBackupIdentifier("account_id") + " = @aid");
                 parameters.Add(("@aid", accountId));
             }
+            if (table.Columns.ContainsKey("receiver_account_id"))
+            {
+                clauses.Add(QuoteAccountBackupIdentifier("receiver_account_id") + " = @receiverAid");
+                parameters.Add(("@receiverAid", accountId));
+            }
 
             if (table.Name.Equals("characters", StringComparison.OrdinalIgnoreCase)
                 && table.Columns.ContainsKey("delete_flag"))
@@ -447,6 +577,8 @@ namespace DfoGmTool.Services
             {
                 clauses.Add(BuildInClause("character_id", characterIds.Cast<object>().ToList(), parameters, "@cid"));
             }
+            if (table.Columns.ContainsKey("receiver_character_id") && characterIds.Count > 0)
+                clauses.Add(BuildInClause("receiver_character_id", characterIds.Cast<object>().ToList(), parameters, "@receiverCid"));
 
             if (table.Columns.ContainsKey("owner_scope") && table.Columns.ContainsKey("owner_id"))
             {
@@ -474,6 +606,74 @@ namespace DfoGmTool.Services
                 return null;
 
             return new AccountBackupPredicate("(" + string.Join(" OR ", clauses) + ")", parameters);
+        }
+
+        private static void AppendMailboxRelationDumps(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            List<AccountBackupTableInfo> tableInfos,
+            List<AccountBackupTableDump> dumps)
+        {
+            var tables = tableInfos.ToDictionary(table => table.Name, StringComparer.OrdinalIgnoreCase);
+            AppendRelatedDump(
+                connection,
+                transaction,
+                tables,
+                dumps,
+                "mailbox_messages",
+                "message_id",
+                new[] { "mailbox_attachments" },
+                "message_id");
+            AppendRelatedDump(
+                connection,
+                transaction,
+                tables,
+                dumps,
+                "mailbox_system_mail_audit",
+                "audit_id",
+                new[] { "mailbox_system_mail_audit_attachments" },
+                "audit_id");
+            AppendRelatedDump(
+                connection,
+                transaction,
+                tables,
+                dumps,
+                "mercenary_reward_outbox",
+                "outbox_id",
+                new[] { "mercenary_reward_items" },
+                "outbox_id");
+        }
+
+        private static void AppendRelatedDump(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            Dictionary<string, AccountBackupTableInfo> tableInfos,
+            List<AccountBackupTableDump> dumps,
+            string parentTable,
+            string parentIdColumn,
+            IEnumerable<string> childTables,
+            string childIdColumn)
+        {
+            var parentDump = dumps.FirstOrDefault(dump => dump.Name.Equals(parentTable, StringComparison.OrdinalIgnoreCase));
+            if (parentDump == null)
+                return;
+            var ids = ExtractIntColumnValues(parentDump, parentIdColumn).Cast<object>().ToList();
+            if (ids.Count == 0)
+                return;
+
+            foreach (var childTable in childTables)
+            {
+                if (dumps.Any(dump => dump.Name.Equals(childTable, StringComparison.OrdinalIgnoreCase))
+                    || !tableInfos.TryGetValue(childTable, out var tableInfo))
+                    continue;
+                var parameters = new List<(string Name, object Value)>();
+                var predicate = new AccountBackupPredicate(
+                    BuildInClause(childIdColumn, ids, parameters, "@relation"),
+                    parameters);
+                var dump = DumpAccountBackupTable(connection, transaction, tableInfo, predicate);
+                if (dump.Rows.Count > 0)
+                    dumps.Add(dump);
+            }
         }
 
         private static AccountBackupTableDump DumpAccountBackupTable(
@@ -560,8 +760,15 @@ namespace DfoGmTool.Services
                 clauses.Add(QuoteAccountBackupIdentifier("account_id") + " = @aid");
                 parameters.Add(("@aid", accountId));
             }
+            if (table.Columns.ContainsKey("receiver_account_id"))
+            {
+                clauses.Add(QuoteAccountBackupIdentifier("receiver_account_id") + " = @deleteReceiverAid");
+                parameters.Add(("@deleteReceiverAid", accountId));
+            }
             if (table.Columns.ContainsKey("character_id") && characterIds.Count > 0)
                 clauses.Add(BuildInClause("character_id", characterIds.Cast<object>().ToList(), parameters, "@deleteCid"));
+            if (table.Columns.ContainsKey("receiver_character_id") && characterIds.Count > 0)
+                clauses.Add(BuildInClause("receiver_character_id", characterIds.Cast<object>().ToList(), parameters, "@deleteReceiverCid"));
             if (table.Columns.ContainsKey("owner_scope") && table.Columns.ContainsKey("owner_id"))
             {
                 var ownerParts = new List<string>();
@@ -708,6 +915,130 @@ namespace DfoGmTool.Services
                     continue;
                 core.Value = newValue;
                 row[coreIndex] = AccountBackupValue.FromDbValue(core.ToBytes());
+            }
+        }
+
+        private static int RemapConflictingBackupMailboxMessageIds(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            Dictionary<string, AccountBackupTableDump> tableMap)
+        {
+            return RemapConflictingBackupRelationalIds(
+                connection,
+                transaction,
+                tableMap,
+                "mailbox_messages",
+                "message_id",
+                new[]
+                {
+                    ("mailbox_recipients", "message_id"),
+                    ("mailbox_attachments", "message_id"),
+                    ("mailbox_campaign_deliveries", "message_id"),
+                    ("mailbox_system_mail_audit", "message_id"),
+                    ("mercenary_reward_outbox", "mailbox_message_id"),
+                });
+        }
+
+        private static int RemapConflictingBackupMailboxAuditIds(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            Dictionary<string, AccountBackupTableDump> tableMap)
+        {
+            return RemapConflictingBackupRelationalIds(
+                connection,
+                transaction,
+                tableMap,
+                "mailbox_system_mail_audit",
+                "audit_id",
+                new[]
+                {
+                    ("mailbox_system_mail_audit_attachments", "audit_id"),
+                });
+        }
+
+        private static int RemapConflictingBackupRelationalIds(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            Dictionary<string, AccountBackupTableDump> tableMap,
+            string principalTableName,
+            string principalIdColumn,
+            IReadOnlyList<(string Table, string Column)> references)
+        {
+            if (!tableMap.TryGetValue(principalTableName, out var principalDump)
+                || !TableExists(connection, transaction, principalTableName))
+                return 0;
+
+            var principalIndex = principalDump.Columns.FindIndex(column =>
+                column.Equals(principalIdColumn, StringComparison.OrdinalIgnoreCase));
+            if (principalIndex < 0)
+                return 0;
+
+            var backupIds = principalDump.Rows
+                .Where(row => row.Count == principalDump.Columns.Count)
+                .Select(row => row[principalIndex].ToInt64())
+                .Where(value => value > 0)
+                .Distinct()
+                .OrderBy(value => value)
+                .ToList();
+            if (backupIds.Count == 0)
+                return 0;
+
+            var occupied = new HashSet<long>();
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "SELECT " + QuoteAccountBackupIdentifier(principalIdColumn)
+                    + " FROM " + QuoteAccountBackupIdentifier(principalTableName)
+                    + " WHERE " + QuoteAccountBackupIdentifier(principalIdColumn) + " > 0;";
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    occupied.Add(Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture));
+            }
+
+            var conflicts = backupIds.Where(occupied.Contains).ToList();
+            if (conflicts.Count == 0)
+                return 0;
+
+            var nextId = Math.Max(
+                occupied.Count == 0 ? 0 : occupied.Max(),
+                backupIds.Max());
+            var mapping = new Dictionary<long, long>();
+            foreach (var oldId in conflicts)
+            {
+                if (nextId == long.MaxValue)
+                    throw new InvalidOperationException(principalTableName + "." + principalIdColumn + " 已耗尽");
+                mapping[oldId] = ++nextId;
+            }
+
+            RemapBackupDumpColumn(principalDump, principalIdColumn, mapping);
+            foreach (var reference in references)
+            {
+                if (tableMap.TryGetValue(reference.Table, out var referenceDump))
+                    RemapBackupDumpColumn(referenceDump, reference.Column, mapping);
+            }
+
+            return mapping.Count;
+        }
+
+        private static void RemapBackupDumpColumn(
+            AccountBackupTableDump dump,
+            string columnName,
+            IReadOnlyDictionary<long, long> mapping)
+        {
+            if (dump == null || mapping.Count == 0)
+                return;
+            var columnIndex = dump.Columns.FindIndex(column =>
+                column.Equals(columnName, StringComparison.OrdinalIgnoreCase));
+            if (columnIndex < 0)
+                return;
+
+            foreach (var row in dump.Rows)
+            {
+                if (row.Count != dump.Columns.Count)
+                    continue;
+                var oldId = row[columnIndex].ToInt64();
+                if (mapping.TryGetValue(oldId, out var newId))
+                    row[columnIndex] = new AccountBackupValue { Type = "integer", Integer = newId };
             }
         }
 
@@ -968,5 +1299,17 @@ namespace DfoGmTool.Services
 
         [JsonPropertyName("remappedCreatureUidCount")]
         public int RemappedCreatureUidCount { get; set; }
+
+        [JsonPropertyName("sourceBackupVersion")]
+        public int SourceBackupVersion { get; set; }
+
+        [JsonPropertyName("upgradedFromVersion")]
+        public int UpgradedFromVersion { get; set; }
+
+        [JsonPropertyName("remappedMailboxMessageIdCount")]
+        public int RemappedMailboxMessageIdCount { get; set; }
+
+        [JsonPropertyName("remappedMailboxAuditIdCount")]
+        public int RemappedMailboxAuditIdCount { get; set; }
     }
 }

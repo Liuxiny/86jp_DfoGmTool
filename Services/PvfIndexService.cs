@@ -32,6 +32,10 @@ namespace DfoGmTool.Services
         private volatile HashSet<string> _openHubKeys;
         private volatile Dictionary<int, JobNameInfo> _jobNames;
         private volatile List<ItemEntry> _searchList;
+        // 合法物品 ID 来自两个 LST 的原始正整数集合，而不是已成功解析且
+        // 有名称的条目。Build 完成后该 HashSet 不再修改，仅在下一次索引
+        // 生成时以新引用整体替换，读侧 ContainsItemId 为 O(1)。
+        private volatile HashSet<int> _validItemIds;
         private volatile string _buildError;
         // 构建期间解析失败(被跳过)的条目数。数据源可热切换，计数必须归属当前索引实例。
         private int _parseFailures;
@@ -43,6 +47,20 @@ namespace DfoGmTool.Services
 
         public bool IsReady => _itemNames != null;
         public string BuildError => _buildError;
+
+        public bool ContainsItemId(int itemId)
+        {
+            var valid = _validItemIds;
+            return itemId > 0 && valid != null && valid.Contains(itemId);
+        }
+
+        internal HashSet<int> CopyValidItemIds()
+        {
+            var valid = _validItemIds;
+            return valid == null
+                ? new HashSet<int>()
+                : new HashSet<int>(valid);
+        }
 
         public void WarmInBackground()
         {
@@ -65,6 +83,7 @@ namespace DfoGmTool.Services
             Interlocked.Exchange(ref _parseFailures, 0);
             var itemNames = new Dictionary<int, string>();
             var searchList = new List<ItemEntry>();
+            var validItemIds = new HashSet<int>();
 
             using (var archive = PvfArchive.Open(_pvfPath))
             {
@@ -75,8 +94,8 @@ namespace DfoGmTool.Services
                 _mapDungeon = BuildMapDungeonMap(archive);
                 _dungeonPermissionIds = BuildDungeonPermissionIds(archive);
                 _openHubKeys = BuildOpenHubKeys(archive);
-                BuildKind(archive, "equipment/equipment.lst", "equipment", itemNames, searchList);
-                BuildKind(archive, "stackable/stackable.lst", "stackable", itemNames, searchList);
+                BuildKind(archive, "equipment/equipment.lst", "equipment", itemNames, searchList, validItemIds);
+                BuildKind(archive, "stackable/stackable.lst", "stackable", itemNames, searchList, validItemIds);
                 _questMeta = BuildQuestMeta(archive);
             }
 
@@ -103,6 +122,7 @@ namespace DfoGmTool.Services
             _itemKinds = itemKinds;
             _itemRarities = itemRarities;
             _itemExpirations = itemExpirations;
+            _validItemIds = validItemIds;
             _itemNames = itemNames;
             var failures = _parseFailures;
             Console.WriteLine($"[PvfIndex] 索引就绪: 物品 {itemNames.Count}, 任务 {(_questMeta != null ? _questMeta.Count : 0)}"

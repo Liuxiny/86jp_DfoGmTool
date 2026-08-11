@@ -612,6 +612,85 @@ section {
   flex: 1;
 }
 
+.give-delivery-mode {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  align-items: center;
+  width: 168px;
+  height: 34px;
+  padding: 3px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2);
+  transition: border-color .18s ease, background-color .18s ease, opacity .18s ease;
+}
+
+.give-delivery-mode:hover {
+  border-color: var(--accent-border);
+  background: var(--surface-hover);
+}
+
+.give-delivery-mode:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.give-delivery-mode:disabled {
+  cursor: wait;
+  opacity: .62;
+}
+
+.give-delivery-mode-thumb {
+  position: absolute;
+  z-index: -1;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 999px;
+  background: var(--accent-strong);
+  box-shadow: 0 2px 6px var(--shadow);
+  transform: translateX(0);
+  transition: transform .2s cubic-bezier(.2, .8, .2, 1), background-color .18s ease;
+}
+
+.give-delivery-mode[data-mode="inventory"] .give-delivery-mode-thumb {
+  transform: translateX(100%);
+}
+
+.give-delivery-mode-option {
+  position: relative;
+  z-index: 1;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 26px;
+  text-align: center;
+  user-select: none;
+  transition: color .18s ease;
+}
+
+.give-delivery-mode[data-mode="mail"] .give-delivery-mode-mail,
+.give-delivery-mode[data-mode="inventory"] .give-delivery-mode-inventory {
+  color: var(--button-text);
+}
+
+@media (max-width: 700px) {
+  .give-delivery-mode {
+    width: 168px;
+  }
+
+  #search-input {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}
+
 button {
   padding: 7px 14px;
   border: none;
@@ -659,6 +738,26 @@ select:focus-visible,
 
 .inventory-migration-dialog {
   max-width: 780px;
+}
+
+.inventory-anomaly-dialog {
+  max-width: 1180px;
+}
+
+.inventory-anomaly-actions {
+  margin-top: 10px;
+}
+
+.inventory-anomaly-details {
+  margin-top: 14px;
+}
+
+.inventory-anomaly-details .table-scroll {
+  overflow-x: auto;
+}
+
+.inventory-anomaly-table {
+  min-width: 880px;
 }
 
 .migration-warning {

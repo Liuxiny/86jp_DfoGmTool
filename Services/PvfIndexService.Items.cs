@@ -445,7 +445,8 @@ namespace DfoGmTool.Services
         }
 
         private void BuildKind(PvfArchive archive, string lstPath, string kind,
-            Dictionary<int, string> names, List<ItemEntry> searchList)
+            Dictionary<int, string> names, List<ItemEntry> searchList,
+            HashSet<int> validItemIds)
         {
             if (lstPath == null)
                 return;
@@ -459,8 +460,11 @@ namespace DfoGmTool.Services
             foreach (Match match in LstPattern.Matches(lstText))
             {
                 int id;
-                if (int.TryParse(match.Groups[1].Value, out id))
+                if (int.TryParse(match.Groups[1].Value, out id) && id > 0)
+                {
+                    validItemIds?.Add(id);
                     entries.Add(new KeyValuePair<int, string>(id, match.Groups[2].Value));
+                }
             }
 
             var results = new ItemEntry[entries.Count];
@@ -499,9 +503,10 @@ namespace DfoGmTool.Services
                             ItemMetadataResolver.ResolvePvfTypeTag(metadata),
                             "coat avatar",
                             StringComparison.OrdinalIgnoreCase);
+                        var avatarMetadata = AvatarEquipmentMetadataReader.Read(model);
                         var hasAvatarOption = model.Grade > 0
-                            && ((isCoatAvatar && model.AbilityCaseIndex >= 0)
-                                || (model.AvatarSelectAbilities != null && model.AvatarSelectAbilities.Count > 1));
+                            && ((isCoatAvatar && avatarMetadata.AbilityCaseIndex >= 0)
+                                || avatarMetadata.SelectAbilities.Count > 1);
                         var hasAvatarDuration = AvatarDurationResolver.Parse(text).Count > 0;
                         var requiresManual = ItemMetadataResolver.RequiresManualGrantType(metadata);
                         var supportsQuality = isPetArtifact && metadata.SupportsPetEquipmentQuality;

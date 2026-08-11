@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using DfoGmTool.ServerCore.GameWorld;
+using DfoGmTool.ServerCore.Infrastructure;
 using GmPvfLib;
 using Microsoft.Data.Sqlite;
 
@@ -71,7 +72,7 @@ namespace DfoGmTool.Services
             {
                 try
                 {
-                    VerifyDataSource(config);
+                    var databaseCompatibility = VerifyDataSource(config);
 
                     // Construct the new services before replacing the live source.
                     var pvfIndex = new PvfIndexService(config.PvfPath);
@@ -84,7 +85,11 @@ namespace DfoGmTool.Services
                     GmService.ResetPvfStaticData();
                     PvfRuntimeCache.WarmForPvfChange();
 
-                    _active = new ActiveEnvironment(config, gm, pvfIndex);
+                    _active = new ActiveEnvironment(
+                        config,
+                        gm,
+                        pvfIndex,
+                        databaseCompatibility);
                     _startupError = null;
                     pvfIndex.WarmInBackground();
                     return new { success = true, status = BuildStatus() };
@@ -103,13 +108,20 @@ namespace DfoGmTool.Services
             }
         }
 
-        private static void VerifyDataSource(GmConfig config)
+        private static DatabaseCompatibilityReport VerifyDataSource(
+            GmConfig config)
         {
             var errors = new List<string>();
-            AddVerificationError(errors, "数据库", () => VerifyDatabase(config));
+            DatabaseCompatibilityReport databaseCompatibility = null;
+            AddVerificationError(
+                errors,
+                "数据库",
+                () => databaseCompatibility =
+                    DatabaseCompatibilityGuard.Validate(config.DatabasePath));
             AddVerificationError(errors, "PVF", () => VerifyPvf(config));
             if (errors.Count > 0)
                 throw new InvalidOperationException(string.Join(Environment.NewLine, errors));
+            return databaseCompatibility;
         }
 
         private static void AddVerificationError(List<string> errors, string label, Action verify)
@@ -121,19 +133,6 @@ namespace DfoGmTool.Services
             catch (Exception ex)
             {
                 errors.Add(label + "校验失败: " + ex.GetBaseException().Message);
-            }
-        }
-
-        private static void VerifyDatabase(GmConfig config)
-        {
-            using (var connection = new SqliteConnection(config.ConnectionString))
-            {
-                connection.Open();
-                using (var command = connection.CreateCommand())
-                {
-                    command.CommandText = "SELECT 1 FROM sqlite_master LIMIT 1;";
-                    command.ExecuteScalar();
-                }
             }
         }
 
@@ -164,6 +163,11 @@ namespace DfoGmTool.Services
                 IndexError = includeSourceDetails ? indexError : null,
                 Error = includeSourceDetails ? (config == null ? _startupError : indexError) : null,
                 HasError = !string.IsNullOrWhiteSpace(config == null ? _startupError : indexError),
+                SchemaVersion = _active?.DatabaseCompatibility.SchemaVersion,
+                MinimumSupportedSchemaVersion =
+                    DatabaseCompatibilityGuard.MinimumSupportedVersion,
+                MaximumSupportedSchemaVersion =
+                    DatabaseCompatibilityGuard.MaximumSupportedVersion,
             };
         }
 
@@ -174,16 +178,22 @@ namespace DfoGmTool.Services
 
         private sealed class ActiveEnvironment
         {
-            public ActiveEnvironment(GmConfig config, GmService gm, PvfIndexService pvfIndex)
+            public ActiveEnvironment(
+                GmConfig config,
+                GmService gm,
+                PvfIndexService pvfIndex,
+                DatabaseCompatibilityReport databaseCompatibility)
             {
                 Config = config;
                 Gm = gm;
                 PvfIndex = pvfIndex;
+                DatabaseCompatibility = databaseCompatibility;
             }
 
             public GmConfig Config { get; }
             public GmService Gm { get; }
             public PvfIndexService PvfIndex { get; }
+            public DatabaseCompatibilityReport DatabaseCompatibility { get; }
         }
     }
 
@@ -199,5 +209,8 @@ namespace DfoGmTool.Services
         public string IndexError { get; set; }
         public string Error { get; set; }
         public bool HasError { get; set; }
+        public long? SchemaVersion { get; set; }
+        public int MinimumSupportedSchemaVersion { get; set; }
+        public int MaximumSupportedSchemaVersion { get; set; }
     }
 }

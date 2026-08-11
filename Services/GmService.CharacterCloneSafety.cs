@@ -15,6 +15,7 @@ namespace DfoGmTool.Services
                 "characters", "character_items", "character_equipped_entries", "equipped_items",
                 "character_titlebook", "character_achievement_chunks", "character_new_items",
                 "character_avatar_detail", "character_container_state",
+                "character_avatar_uid_sequence", "character_creature_uid_sequence",
             };
             foreach (var group in CharacterCloneTableGroups.Values)
             {
@@ -39,22 +40,27 @@ ORDER BY name;";
                 }
             }
 
+            var unknownCharacterTables = new List<string>();
             foreach (var table in candidateTables)
             {
                 if (known.Contains(table))
                     continue;
-                // Dynamic cloning is intentionally opt-in by table name. A character_id
-                // column is also used by runtime ledgers (outbox/inbox), audit tables,
-                // mailbox delivery state, and other cross-aggregate references. Treating
-                // every such reference as character-owned data can replay work or collide
-                // with event identities when a character is cloned.
                 if (!table.StartsWith("character_", StringComparison.OrdinalIgnoreCase))
                     continue;
                 var columns = LoadCloneColumns(conn, tx, table);
                 if (columns.Any(c => c.Name.Equals("character_id", StringComparison.OrdinalIgnoreCase))
                     || columns.Any(c => c.Name.Equals("owner_character_id", StringComparison.OrdinalIgnoreCase)))
-                    yield return table;
+                    unknownCharacterTables.Add(table);
             }
+
+            if (unknownCharacterTables.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "发现未登记的角色表，已拒绝复制以避免重放运行时账本: "
+                    + string.Join(", ", unknownCharacterTables));
+            }
+
+            return Array.Empty<string>();
         }
 
         private static List<CloneColumnInfo> LoadCloneColumns(SqliteConnection conn, SqliteTransaction tx, string tableName)

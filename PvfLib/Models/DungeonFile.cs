@@ -22,6 +22,7 @@ namespace GmPvfLib
     {
         public int SelectCount { get; set; }
         public bool Regenerate { get; set; }
+        public int MinimapIcon { get; set; } = -1;
         public List<RidableObject> Objects { get; set; } = new List<RidableObject>();
     }
 
@@ -30,6 +31,65 @@ namespace GmPvfLib
         public int Type { get; set; }
         public int TargetId { get; set; }
         public int Count { get; set; }
+        public int GroupId { get; set; }
+        public int GroupRequired { get; set; }
+    }
+
+    public class DungeonRequiredItem
+    {
+        public int ItemId { get; set; }
+        public int Count { get; set; }
+        public bool ConsumeOnEntry { get; set; }
+    }
+
+    public class DeathTowerStage
+    {
+        public int Stage { get; set; }
+        public int MapId { get; set; }
+    }
+
+    public class TournamentRewardExperience
+    {
+        public int CompletedRounds { get; set; }
+        public long Experience { get; set; }
+    }
+
+    public class TournamentResultCard
+    {
+        public int ResultKey { get; set; }
+        public int GoldWeight { get; set; }
+        public int ItemWeight { get; set; }
+        public int EmptyWeight { get; set; }
+    }
+
+    public class TournamentRewardItemRate
+    {
+        public int ItemId { get; set; }
+        public int Weight { get; set; }
+        public int Count { get; set; }
+    }
+
+    public class WarpMapConditionEntry
+    {
+        public int SourceX { get; set; }
+        public int SourceY { get; set; }
+        public int DestinationX { get; set; }
+        public int DestinationY { get; set; }
+    }
+
+    public class NamedMonsterMapPosition
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+    }
+
+    public class MazeMinimapIconInfo
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public string Image { get; set; }
+        public int IconIndex { get; set; }
+        public int Flag { get; set; }
     }
 
     public class MazeInfo
@@ -47,7 +107,11 @@ namespace GmPvfLib
         public int[] SealDoorPos { get; set; }
         public int[] QuestConnection { get; set; }          // [flag, questId, value]
         public RidableObjectScript RidableScript { get; set; }
+        public List<RidableObjectScript> RidableScripts { get; set; } =
+            new List<RidableObjectScript>();
         public List<ClearConditionEntry> ClearConditions { get; set; } = new List<ClearConditionEntry>();
+        public List<MazeMinimapIconInfo> MinimapIcons { get; set; } = new List<MazeMinimapIconInfo>();
+        public int EventMonsterRandomMap { get; set; } = -1;
 
         public string BossMapSpecification { get; set; }
         public string LayeredMapSpecification { get; set; }
@@ -86,6 +150,7 @@ namespace GmPvfLib
         public int[] NamedMonster { get; set; }
         public int[] RecommendedLevel { get; set; }         // [min, max]
         public int LimitPartyCount { get; set; } = -1;
+        public int[] QuestConnection { get; set; }          // DGN 顶层 [flag, questId, value]
 
         // 进本/经济
         public int HellDungeon { get; set; } = -1;
@@ -113,6 +178,7 @@ namespace GmPvfLib
         public int EventDungeonDifficulty { get; set; } = -1;
         public int EventDungeonCof { get; set; } = -1;
         public int AdjustMobExpByLevel { get; set; } = -1;
+        public int BloodDungeonType { get; set; } = -1;
         public int BloodMaxRound { get; set; } = -1;
         public int MobLevelCharacLevelReplaceFlag { get; set; } = -1;
 
@@ -131,7 +197,7 @@ namespace GmPvfLib
         public int BattleSpawnTime { get; set; } = -1;
         public int PlayerKc { get; set; } = -1;
         public int TournamentRoundFatigue { get; set; } = -1;
-        public int TournamentClearRewardGoldRate { get; set; } = -1;
+        public float TournamentClearRewardGoldRate { get; set; } = -1f;
         public int MonsterRandomAppearOnly { get; set; } = -1;
         public int RemainMonsterCountVisible { get; set; } = -1;
 
@@ -182,6 +248,12 @@ namespace GmPvfLib
         public string RequiredItem { get; set; }
         public string EventRequiredItem { get; set; }
         public string AddedRequiredItem { get; set; }
+        public List<DungeonRequiredItem> RequiredItems { get; set; } =
+            new List<DungeonRequiredItem>();
+        public List<DungeonRequiredItem> EventRequiredItems { get; set; } =
+            new List<DungeonRequiredItem>();
+        public List<DungeonRequiredItem> AddedRequiredItems { get; set; } =
+            new List<DungeonRequiredItem>();
         public string CoinInfo { get; set; }
         public string Schedule { get; set; }
         public string EventMonster { get; set; }
@@ -195,14 +267,30 @@ namespace GmPvfLib
         public string TowerHighSkillInitialCoolTime { get; set; }
         public string TowerHighSkillInitialCoolTimeRate { get; set; }
         public string DeathTowerMapIndexes { get; set; }
+        public List<DeathTowerStage> DeathTowerStages { get; set; } =
+            new List<DeathTowerStage>();
+        public bool DeathTowerMapIndexesMalformed { get; set; }
         public string ResultCard { get; set; }
         public string RewardItemRate { get; set; }
+        public List<TournamentResultCard> TournamentResultCards { get; set; } =
+            new List<TournamentResultCard>();
+        public List<TournamentRewardItemRate> TournamentRewardItemRates { get; set; } =
+            new List<TournamentRewardItemRate>();
+        public bool TournamentResultCardMalformed { get; set; }
+        public bool TournamentRewardItemRateMalformed { get; set; }
         public string TournamentClearRewardExp { get; set; }
+        public List<TournamentRewardExperience> TournamentClearRewardExperiences { get; set; } =
+            new List<TournamentRewardExperience>();
+        public bool TournamentRewardExperienceMalformed { get; set; }
         public string ClearMap { get; set; }
         public string ClearRewardItem { get; set; }
         public string BossRoomEntranceCondition { get; set; }
         public string NamedMonsterMapPos { get; set; }
+        public List<NamedMonsterMapPosition> NamedMonsterMapPositions { get; set; } =
+            new List<NamedMonsterMapPosition>();
         public string WarpMapCondition { get; set; }
+        public List<WarpMapConditionEntry> WarpMapConditions { get; set; } =
+            new List<WarpMapConditionEntry>();
         public string DungeonMinimapIconSetting { get; set; }
         public string RealdungeonCheckup { get; set; }
         public string CommonPassiveObject { get; set; }
@@ -275,7 +363,11 @@ namespace GmPvfLib
 
         #endregion
 
-        public List<SpecialPassiveObjectItem> SpecialPassiveObjectItems { get; set; } = new List<SpecialPassiveObjectItem>();
+        public IReadOnlyList<SpecialPassiveObjectItemGroup>
+            SpecialPassiveObjectItemGroups { get; private set; } =
+                Array.Empty<SpecialPassiveObjectItemGroup>();
+        public bool SpecialPassiveObjectItemDefinitionPresent { get; private set; }
+        public bool SpecialPassiveObjectItemDefinitionMalformed { get; private set; }
 
         /// <summary>迷宫变体列表（以 [maze info] 为分隔）</summary>
         public List<MazeInfo> Mazes { get; set; } = new List<MazeInfo>();
@@ -287,7 +379,8 @@ namespace GmPvfLib
             "size", "greed", "map specification", "start map", "boss map",
             "hit count", "seal door appear rate", "seal door map index", "seal door pos", "quest connection",
             "randomized object creation", "clear condition",
-            "boss map specification", "layered map specification"
+            "boss map specification", "layered map specification",
+            "minimap icon"
         };
 
         public static DungeonFile Parse(string content)
@@ -300,6 +393,7 @@ namespace GmPvfLib
             // 遍历所有根节点，按已知迷宫标签区分元数据和迷宫数据
             var metaNodes = new List<ScriptNode>();
             List<ScriptNode> currentMaze = null;
+            var previousNodeWasMazeMinimapIcon = false;
 
             foreach (var child in root.Children)
             {
@@ -309,14 +403,28 @@ namespace GmPvfLib
                     if (currentMaze != null && currentMaze.Count > 0)
                         dgn.Mazes.Add(BuildMazeInfo(currentMaze, content));
                     currentMaze = new List<ScriptNode>();
+                    previousNodeWasMazeMinimapIcon = false;
+                }
+                else if (currentMaze != null
+                    && previousNodeWasMazeMinimapIcon
+                    && child.Tag.Equals("event monster random map", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Some DGN files use this as global event-monster metadata after the
+                    // last maze. Only the direct minimap-icon sequence is maze-scoped.
+                    currentMaze.Add(child);
+                    previousNodeWasMazeMinimapIcon = false;
                 }
                 else if (currentMaze != null && MazeTags.Contains(child.Tag))
                 {
                     currentMaze.Add(child);
+                    previousNodeWasMazeMinimapIcon = child.Tag.Equals(
+                        "minimap icon",
+                        StringComparison.OrdinalIgnoreCase);
                 }
                 else
                 {
                     metaNodes.Add(child);
+                    previousNodeWasMazeMinimapIcon = false;
                 }
             }
 
@@ -400,9 +508,11 @@ namespace GmPvfLib
                     case "limit party count":
                         dgn.LimitPartyCount = ParseInt(data);
                         break;
+                    case "quest connection":
+                        dgn.QuestConnection = ParseIntArray(data);
+                        break;
                     case "special passive object item":
-                        try { ParseSpecialPassiveObjectItem(data, dgn); }
-                        catch { }
+                        ParseSpecialPassiveObjectItem(data, dgn);
                         break;
 
                     // --- int ---
@@ -433,7 +543,9 @@ namespace GmPvfLib
                     case "adjust mob exp by level": dgn.AdjustMobExpByLevel = ParseInt(data); break;
                     case "blood max round": dgn.BloodMaxRound = ParseInt(data); break;
                     case "mob level charac level replace flag": dgn.MobLevelCharacLevelReplaceFlag = ParseInt(data); break;
-                    case "tower of despair": dgn.TowerOfDespair = ParseInt(data); break;
+                    case "tower of despair":
+                        dgn.TowerOfDespair = string.IsNullOrWhiteSpace(data) ? 1 : ParseInt(data);
+                        break;
                     case "tower fp cubepiece": dgn.TowerFpCubepiece = ParseInt(data); break;
                     case "tower limit of stackable item": dgn.TowerLimitOfStackableItem = ParseInt(data); break;
                     case "tower max clear item num": dgn.TowerMaxClearItemNum = ParseInt(data); break;
@@ -444,13 +556,20 @@ namespace GmPvfLib
                     case "battle spawn time": dgn.BattleSpawnTime = ParseInt(data); break;
                     case "player kc": dgn.PlayerKc = ParseInt(data); break;
                     case "tournament round fatigue": dgn.TournamentRoundFatigue = ParseInt(data); break;
-                    case "tournament clear reward gold rate": dgn.TournamentClearRewardGoldRate = ParseInt(data); break;
+                    case "tournament clear reward gold rate":
+                        dgn.TournamentClearRewardGoldRate = ParseFloat(data);
+                        break;
                     case "monster random appear only": dgn.MonsterRandomAppearOnly = ParseInt(data); break;
                     case "remain monster count visible": dgn.RemainMonsterCountVisible = ParseInt(data); break;
 
                     // --- bool ---
                     case "defense dungeon": dgn.DefenseDungeon = true; break;
-                    case "blood dungeon": dgn.BloodDungeon = true; break;
+                    case "blood dungeon":
+                        dgn.BloodDungeon = true;
+                        dgn.BloodDungeonType = string.IsNullOrWhiteSpace(data)
+                            ? 1
+                            : ParseInt(data);
+                        break;
                     case "dimension dungeon": dgn.DimensionDungeon = true; break;
                     case "tournament dungeon": dgn.TournamentDungeon = true; break;
                     case "powerwar dungeon": dgn.PowerwarDungeon = true; break;
@@ -496,9 +615,24 @@ namespace GmPvfLib
                         break;
 
                     // --- complex raw string ---
-                    case "required item": dgn.RequiredItem = data; break;
-                    case "event required item": dgn.EventRequiredItem = data; break;
-                    case "added required item": dgn.AddedRequiredItem = data; break;
+                    case "required item":
+                        dgn.RequiredItem = AppendRequiredItems(
+                            dgn.RequiredItem,
+                            dgn.RequiredItems,
+                            data);
+                        break;
+                    case "event required item":
+                        dgn.EventRequiredItem = AppendRequiredItems(
+                            dgn.EventRequiredItem,
+                            dgn.EventRequiredItems,
+                            data);
+                        break;
+                    case "added required item":
+                        dgn.AddedRequiredItem = AppendRequiredItems(
+                            dgn.AddedRequiredItem,
+                            dgn.AddedRequiredItems,
+                            data);
+                        break;
                     case "coin info": dgn.CoinInfo = data; break;
                     case "schedule": dgn.Schedule = data; break;
                     case "event monster": dgn.EventMonster = data; break;
@@ -511,22 +645,100 @@ namespace GmPvfLib
                     case "tower recovery": dgn.TowerRecovery = data; break;
                     case "tower high skill initial cool time": dgn.TowerHighSkillInitialCoolTime = data; break;
                     case "tower high skill initial cool time rate": dgn.TowerHighSkillInitialCoolTimeRate = data; break;
-                    case "death tower map indexes": dgn.DeathTowerMapIndexes = data; break;
+                    case "death tower map indexes":
+                        dgn.DeathTowerMapIndexes = JoinDirectData(node, text);
+                        if (TryParseDeathTowerStages(
+                                dgn.DeathTowerMapIndexes,
+                                out var towerStages))
+                        {
+                            dgn.DeathTowerStages.AddRange(towerStages);
+                        }
+                        else
+                        {
+                            dgn.DeathTowerMapIndexesMalformed = true;
+                        }
+                        break;
                     case "tower random map indexes": dgn.TowerRandomMapIndexes = ParseInt(data); break;
-                    case "result card": dgn.ResultCard = data; break;
-                    case "reward item rate": dgn.RewardItemRate = data; break;
-                    case "tournament clear reward exp": dgn.TournamentClearRewardExp = data; break;
+                    case "result card":
+                        dgn.ResultCard = JoinDirectData(node, text);
+                        if (TryParseTournamentResultCards(
+                                node,
+                                text,
+                                out var resultCards))
+                        {
+                            dgn.TournamentResultCards.AddRange(resultCards);
+                        }
+                        else
+                        {
+                            dgn.TournamentResultCardMalformed = true;
+                        }
+
+                        foreach (var rewardItemRate in node.GetChildren(
+                            "reward item rate"))
+                        {
+                            dgn.RewardItemRate = JoinDirectData(
+                                rewardItemRate,
+                                text);
+                            if (TryParseTournamentRewardItemRates(
+                                    rewardItemRate,
+                                    text,
+                                    out var nestedRates))
+                            {
+                                dgn.TournamentRewardItemRates.AddRange(
+                                    nestedRates);
+                            }
+                            else
+                            {
+                                dgn.TournamentRewardItemRateMalformed = true;
+                            }
+                        }
+                        break;
+                    case "reward item rate":
+                        dgn.RewardItemRate = JoinDirectData(node, text);
+                        if (TryParseTournamentRewardItemRates(
+                                node,
+                                text,
+                                out var rewardItemRates))
+                        {
+                            dgn.TournamentRewardItemRates.AddRange(
+                                rewardItemRates);
+                        }
+                        else
+                        {
+                            dgn.TournamentRewardItemRateMalformed = true;
+                        }
+                        break;
+                    case "tournament clear reward exp":
+                        dgn.TournamentClearRewardExp = data;
+                        if (TryParseTournamentRewardExperience(
+                                data,
+                                out var tournamentRewards))
+                        {
+                            dgn.TournamentClearRewardExperiences.AddRange(
+                                tournamentRewards);
+                        }
+                        else
+                        {
+                            dgn.TournamentRewardExperienceMalformed = true;
+                        }
+                        break;
                     case "clear map": dgn.ClearMap = data; break;
                     case "clear reward item": dgn.ClearRewardItem = data; break;
-                    case "boss room entrance condition": dgn.BossRoomEntranceCondition = data; break;
-                    case "named monster map pos": dgn.NamedMonsterMapPos = data; break;
-                    case "warp map condition": dgn.WarpMapCondition = data; break;
-                    case "dungeon minimap icon setting": dgn.DungeonMinimapIconSetting = data; break;
+                    case "boss room entrance condition": dgn.BossRoomEntranceCondition = ReadRawNodeData(node, text, data); break;
+                    case "named monster map pos":
+                        dgn.NamedMonsterMapPos = data;
+                        dgn.NamedMonsterMapPositions = ParseNamedMonsterMapPositions(data);
+                        break;
+                    case "warp map condition":
+                        dgn.WarpMapCondition = node.GetContent(text).Trim();
+                        dgn.WarpMapConditions = ParseWarpMapConditions(node, text);
+                        break;
+                    case "dungeon minimap icon setting": dgn.DungeonMinimapIconSetting = ReadRawNodeData(node, text, data); break;
                     case "realdungeon checkup": dgn.RealdungeonCheckup = data; break;
                     case "common passive object": dgn.CommonPassiveObject = data; break;
                     case "on clear add passive object": dgn.OnClearAddPassiveObject = data; break;
                     case "appendage destory object": dgn.AppendageDestoryObject = data; break;
-                    case "linked dungeon": dgn.LinkedDungeon = data; break;
+                    case "linked dungeon": dgn.LinkedDungeon = ReadRawNodeData(node, text, data); break;
                     case "clear action": dgn.ClearAction = data; break;
                     case "point by type": dgn.PointByType = data; break;
                     case "dungeon exp bonus monster": dgn.DungeonExpBonusMonster = data; break;
@@ -600,30 +812,384 @@ namespace GmPvfLib
 
         private static void ParseSpecialPassiveObjectItem(string data, DungeonFile dgn)
         {
-            // Multi-group format: levelOverride flag count [itemId dropRate]... repeated
-            // Each group = one stDungeonAssignItem_t entry
-            var vals = ParseIntArray(data);
-            int pos = 0;
-            int idx = 0;
-            while (pos + 2 < vals.Length)
+            if (dgn == null)
+                return;
+
+            if (dgn.SpecialPassiveObjectItemDefinitionPresent)
             {
-                int levelOverride = vals[pos];
-                int flag = vals[pos + 1];
-                int count = vals[pos + 2];
-                pos += 3;
-                for (int i = 0; i < count && pos + 1 < vals.Length; i++)
-                {
-                    dgn.SpecialPassiveObjectItems.Add(new SpecialPassiveObjectItem
-                    {
-                        Index = idx,
-                        LevelOverride = levelOverride,
-                        ItemId = vals[pos],
-                        DropRate = vals[pos + 1],
-                    });
-                    pos += 2;
-                }
-                idx++;
+                DisableSpecialPassiveObjectItems(dgn);
+                return;
             }
+
+            dgn.SpecialPassiveObjectItemDefinitionPresent = true;
+            if (string.IsNullOrWhiteSpace(data))
+                return;
+
+            var tokens = ScriptValueTokenizer.Tokenize(data);
+            var values = new int[tokens.Count];
+            for (var index = 0; index < tokens.Count; index++)
+            {
+                if (!int.TryParse(
+                        tokens[index],
+                        NumberStyles.Integer,
+                        CultureInfo.InvariantCulture,
+                        out values[index]))
+                {
+                    DisableSpecialPassiveObjectItems(dgn);
+                    return;
+                }
+            }
+
+            var groups = new List<SpecialPassiveObjectItemGroup>();
+            var position = 0;
+            while (position < values.Length)
+            {
+                if (values.Length - position < 3)
+                {
+                    DisableSpecialPassiveObjectItems(dgn);
+                    return;
+                }
+
+                var groupIndex = values[position++];
+                var levelOverride = values[position++];
+                var itemCount = values[position++];
+                if (groupIndex != groups.Count
+                    || levelOverride < -1
+                    || itemCount < 0
+                    || (long)itemCount * 2 > values.Length - position)
+                {
+                    DisableSpecialPassiveObjectItems(dgn);
+                    return;
+                }
+
+                var items = new SpecialPassiveObjectItem[itemCount];
+                for (var itemIndex = 0; itemIndex < itemCount; itemIndex++)
+                {
+                    var itemId = values[position++];
+                    var weight = values[position++];
+                    if (itemId <= 0 || weight < 0)
+                    {
+                        DisableSpecialPassiveObjectItems(dgn);
+                        return;
+                    }
+
+                    items[itemIndex] = new SpecialPassiveObjectItem(
+                        itemId,
+                        weight);
+                }
+
+                groups.Add(new SpecialPassiveObjectItemGroup(
+                    groupIndex,
+                    levelOverride,
+                    items));
+            }
+
+            dgn.SpecialPassiveObjectItemGroups = groups.ToArray();
+        }
+
+        private static void DisableSpecialPassiveObjectItems(DungeonFile dgn)
+        {
+            dgn.SpecialPassiveObjectItemGroups =
+                Array.Empty<SpecialPassiveObjectItemGroup>();
+            dgn.SpecialPassiveObjectItemDefinitionMalformed = true;
+        }
+
+        private static string AppendRequiredItems(
+            string rawValue,
+            List<DungeonRequiredItem> target,
+            string data)
+        {
+            if (string.IsNullOrWhiteSpace(data))
+                return rawValue;
+
+            rawValue = string.IsNullOrWhiteSpace(rawValue)
+                ? data
+                : rawValue + " " + data;
+
+            var values = ParseIntArray(data);
+            for (var index = 0; index + 2 < values.Length; index += 3)
+            {
+                var itemId = values[index];
+                var count = values[index + 1];
+                var consumeOnEntry = values[index + 2] == 1;
+                if (itemId <= 0 || count <= 0)
+                    continue;
+
+                var duplicate = target.Exists(item =>
+                    item.ItemId == itemId
+                    && item.Count == count
+                    && item.ConsumeOnEntry == consumeOnEntry);
+                if (duplicate)
+                    continue;
+
+                target.Add(new DungeonRequiredItem
+                {
+                    ItemId = itemId,
+                    Count = count,
+                    ConsumeOnEntry = consumeOnEntry,
+                });
+            }
+
+            return rawValue;
+        }
+
+        private static bool TryParseDeathTowerStages(
+            string data,
+            out List<DeathTowerStage> stages)
+        {
+            stages = new List<DeathTowerStage>();
+            var values = ParseIntArray(data);
+            if (values == null || values.Length < 3)
+                return false;
+
+            var stageCount = values[0];
+            if (stageCount <= 0 || values.Length != 1 + stageCount * 2)
+                return false;
+
+            var seenStages = new HashSet<int>();
+            for (var offset = 1; offset < values.Length; offset += 2)
+            {
+                var stage = values[offset];
+                var mapId = values[offset + 1];
+                if (stage <= 0 || mapId <= 0 || !seenStages.Add(stage))
+                    return false;
+
+                stages.Add(new DeathTowerStage
+                {
+                    Stage = stage,
+                    MapId = mapId,
+                });
+            }
+
+            stages.Sort((left, right) => left.Stage.CompareTo(right.Stage));
+            for (var index = 0; index < stages.Count; index++)
+            {
+                if (stages[index].Stage != index + 1)
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static float ParseFloat(string data)
+        {
+            if (string.IsNullOrWhiteSpace(data))
+                return -1f;
+
+            var tokens = data.Split(
+                new[] { ' ', '\t', '\r', '\n' },
+                StringSplitOptions.RemoveEmptyEntries);
+            return tokens.Length > 0
+                && float.TryParse(
+                    tokens[0],
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out var value)
+                ? value
+                : -1f;
+        }
+
+        private static string JoinDirectData(ScriptNode node, string text)
+        {
+            if (node?.DataItems == null || node.DataItems.Count == 0)
+                return string.Empty;
+
+            var values = new List<string>(node.DataItems.Count);
+            foreach (var item in node.DataItems)
+            {
+                var value = item.GetContent(text).Trim();
+                if (!string.IsNullOrWhiteSpace(value))
+                    values.Add(value);
+            }
+            return string.Join(" ", values);
+        }
+
+        private static bool TryParseTournamentResultCards(
+            ScriptNode node,
+            string text,
+            out List<TournamentResultCard> result)
+        {
+            result = new List<TournamentResultCard>();
+            if (!TryParseTournamentIntRows(node, text, 4, out var values))
+                return false;
+
+            for (var index = 0; index < values.Count; index += 4)
+            {
+                result.Add(new TournamentResultCard
+                {
+                    ResultKey = values[index],
+                    GoldWeight = values[index + 1],
+                    ItemWeight = values[index + 2],
+                    EmptyWeight = values[index + 3],
+                });
+            }
+            return result.Count > 0;
+        }
+
+        private static bool TryParseTournamentRewardItemRates(
+            ScriptNode node,
+            string text,
+            out List<TournamentRewardItemRate> result)
+        {
+            result = new List<TournamentRewardItemRate>();
+            if (!TryParseTournamentIntRows(node, text, 3, out var values))
+                return false;
+
+            for (var index = 0; index < values.Count; index += 3)
+            {
+                result.Add(new TournamentRewardItemRate
+                {
+                    ItemId = values[index],
+                    Weight = values[index + 1],
+                    Count = values[index + 2],
+                });
+            }
+            return result.Count > 0;
+        }
+
+        private static bool TryParseTournamentIntRows(
+            ScriptNode node,
+            string text,
+            int width,
+            out List<int> values)
+        {
+            values = new List<int>();
+            if (node?.DataItems == null
+                || node.DataItems.Count == 0
+                || width <= 0)
+            {
+                return false;
+            }
+
+            foreach (var item in node.DataItems)
+            {
+                var tokens = item.GetContent(text).Split(
+                    new[] { ' ', '\t', '\r', '\n' },
+                    StringSplitOptions.RemoveEmptyEntries);
+                foreach (var token in tokens)
+                {
+                    if (!int.TryParse(
+                            token,
+                            NumberStyles.Integer,
+                            CultureInfo.InvariantCulture,
+                            out var value))
+                    {
+                        values.Clear();
+                        return false;
+                    }
+                    values.Add(value);
+                }
+            }
+
+            if (values.Count == 0 || values.Count % width != 0)
+            {
+                values.Clear();
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryParseTournamentRewardExperience(
+            string data,
+            out List<TournamentRewardExperience> result)
+        {
+            result = new List<TournamentRewardExperience>();
+            if (string.IsNullOrWhiteSpace(data))
+                return false;
+
+            var values = data.Split(
+                new[] { ' ', '\t', '\r', '\n' },
+                StringSplitOptions.RemoveEmptyEntries);
+            if (values.Length == 0 || values.Length % 2 != 0)
+                return false;
+
+            var rounds = new HashSet<int>();
+            for (var index = 0; index < values.Length; index += 2)
+            {
+                if (!int.TryParse(values[index], out var completedRounds)
+                    || !long.TryParse(values[index + 1], out var experience)
+                    || completedRounds < 0
+                    || experience < 0
+                    || !rounds.Add(completedRounds))
+                {
+                    result.Clear();
+                    return false;
+                }
+
+                result.Add(new TournamentRewardExperience
+                {
+                    CompletedRounds = completedRounds,
+                    Experience = experience,
+                });
+            }
+
+            return result.Count > 0;
+        }
+
+        private static List<WarpMapConditionEntry> ParseWarpMapConditions(
+            ScriptNode node,
+            string text)
+        {
+            var result = new List<WarpMapConditionEntry>();
+            int? sourceX = null;
+            int? sourceY = null;
+
+            for (var childIndex = 0; childIndex < node.Children.Count; childIndex++)
+            {
+                var child = node.Children[childIndex];
+                var childData = child.DataItems.Count > 0
+                    ? child.GetFirstDataContent(text)
+                    : (childIndex == node.Children.Count - 1
+                        && node.DataItems.Count > 0
+                        ? node.GetFirstDataContent(text)
+                        : child.GetContent(text));
+                var values = ParseIntArray(childData);
+                if (values == null || values.Length < 2)
+                    continue;
+
+                if (child.Tag.Equals("source grid pos", StringComparison.OrdinalIgnoreCase))
+                {
+                    sourceX = values[0];
+                    sourceY = values[1];
+                    continue;
+                }
+
+                if (!child.Tag.Equals("dest grid pos", StringComparison.OrdinalIgnoreCase)
+                    || !sourceX.HasValue
+                    || !sourceY.HasValue)
+                {
+                    continue;
+                }
+
+                result.Add(new WarpMapConditionEntry
+                {
+                    SourceX = sourceX.Value,
+                    SourceY = sourceY.Value,
+                    DestinationX = values[0],
+                    DestinationY = values[1],
+                });
+                sourceX = null;
+                sourceY = null;
+            }
+
+            return result;
+        }
+
+        private static List<NamedMonsterMapPosition> ParseNamedMonsterMapPositions(
+            string data)
+        {
+            var result = new List<NamedMonsterMapPosition>();
+            var values = ParseIntArray(data);
+            for (var index = 0; index + 1 < values.Length; index += 2)
+            {
+                result.Add(new NamedMonsterMapPosition
+                {
+                    X = values[index],
+                    Y = values[index + 1],
+                });
+            }
+
+            return result;
         }
 
         private static MazeInfo BuildMazeInfo(List<ScriptNode> nodes, string text)
@@ -639,7 +1205,7 @@ namespace GmPvfLib
                         if (sz.Length >= 2) { maze.Width = sz[0]; maze.Height = sz[1]; }
                         break;
                     case "greed":
-                        maze.Greed = StripBacktick(data);
+                        maze.Greed = StripBacktick(ReadAllNodeData(node, text));
                         break;
                     case "map specification":
                         maze.MapSpecification = string.IsNullOrEmpty(maze.MapSpecification)
@@ -670,6 +1236,7 @@ namespace GmPvfLib
                         break;
                     case "randomized object creation":
                         maze.RidableScript = ParseRidableObjectScript(node, text);
+                        maze.RidableScripts.Add(maze.RidableScript);
                         break;
                     case "clear condition":
                         maze.ClearConditions = ParseClearConditions(node, text);
@@ -682,9 +1249,44 @@ namespace GmPvfLib
                         maze.LayeredMapSpecification = string.IsNullOrEmpty(maze.LayeredMapSpecification)
                             ? data : maze.LayeredMapSpecification + " " + data;
                         break;
+                    case "minimap icon":
+                        maze.MinimapIcons.AddRange(ParseMazeMinimapIcons(data));
+                        break;
+                    case "event monster random map":
+                        var eventMapValues = ParseIntArray(data);
+                        if (eventMapValues.Length > 0)
+                            maze.EventMonsterRandomMap = eventMapValues[0];
+                        break;
                 }
             }
             return maze;
+        }
+
+        private static List<MazeMinimapIconInfo> ParseMazeMinimapIcons(string data)
+        {
+            var result = new List<MazeMinimapIconInfo>();
+            var values = ParseStringArray(data);
+            for (var index = 0; index + 4 < values.Length; index += 5)
+            {
+                if (!int.TryParse(values[index], out var x)
+                    || !int.TryParse(values[index + 1], out var y)
+                    || !int.TryParse(values[index + 3], out var iconIndex)
+                    || !int.TryParse(values[index + 4], out var flag))
+                {
+                    continue;
+                }
+
+                result.Add(new MazeMinimapIconInfo
+                {
+                    X = x,
+                    Y = y,
+                    Image = StripBacktick(values[index + 2]),
+                    IconIndex = iconIndex,
+                    Flag = flag,
+                });
+            }
+
+            return result;
         }
 
         private static RidableObjectScript ParseRidableObjectScript(ScriptNode node, string text)
@@ -701,6 +1303,9 @@ namespace GmPvfLib
                         break;
                     case "regenerate":
                         script.Regenerate = ParseInt(childData) != 0;
+                        break;
+                    case "minimap icon":
+                        script.MinimapIcon = ParseInt(childData);
                         break;
                     case "object":
                         var obj = new RidableObject();
@@ -754,6 +1359,7 @@ namespace GmPvfLib
         private static readonly Dictionary<string, int> ClearConditionTypeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
             { "destroy object", 0 },
+            { "clear map", 1 },
             { "seeking", 1 },
             { "hunt monster", 2 },
             { "hunt apc", 3 },
@@ -763,6 +1369,7 @@ namespace GmPvfLib
         private static List<ClearConditionEntry> ParseClearConditions(ScriptNode node, string text)
         {
             var result = new List<ClearConditionEntry>();
+            var nextGroupId = 1;
             foreach (var child in node.Children)
             {
                 int type;
@@ -773,6 +1380,14 @@ namespace GmPvfLib
                 var data = child.DataItems.Count > 0
                     ? (child.GetFirstDataContent(text) ?? "").Trim()
                     : (node.DataItems.Count > 0 ? (node.GetFirstDataContent(text) ?? "").Trim() : "");
+
+                if (child.Tag.Equals("clear map", StringComparison.OrdinalIgnoreCase)
+                    && TryParseClearMapList(data, nextGroupId, result))
+                {
+                    nextGroupId++;
+                    continue;
+                }
+
                 var vals = ParseIntArray(data);
                 if (vals == null || vals.Length == 0) continue;
                 for (int i = 0; i + 1 < vals.Length; i += 2)
@@ -781,6 +1396,52 @@ namespace GmPvfLib
                 }
             }
             return result;
+        }
+
+        private static bool TryParseClearMapList(
+            string data,
+            int groupId,
+            List<ClearConditionEntry> result)
+        {
+            var parts = ParseStringArray(data);
+            if (parts.Length == 0
+                || !StripBacktick(parts[0]).Equals(
+                    "list",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var values = ParseIntArray(data);
+            if (values == null || values.Length < 3)
+                return false;
+
+            var mapCount = values[0];
+            if (mapCount <= 0 || values.Length < mapCount + 2)
+                return false;
+
+            var required = values[mapCount + 1];
+            if (required <= 0)
+                required = 1;
+
+            var seenMapIds = new HashSet<int>();
+            for (var i = 0; i < mapCount; i++)
+            {
+                var mapId = values[i + 1];
+                if (mapId <= 0 || !seenMapIds.Add(mapId))
+                    continue;
+
+                result.Add(new ClearConditionEntry
+                {
+                    Type = 1,
+                    TargetId = mapId,
+                    Count = 1,
+                    GroupId = groupId,
+                    GroupRequired = required,
+                });
+            }
+
+            return seenMapIds.Count > 0;
         }
 
         private static List<MapSpecificationItem> ParseMapSpecifications(string data)
@@ -894,6 +1555,31 @@ namespace GmPvfLib
 
         #region 辅助
 
+        private static string ReadAllNodeData(ScriptNode node, string text)
+        {
+            if (node?.DataItems == null || node.DataItems.Count == 0)
+                return string.Empty;
+
+            var rows = new List<string>();
+            foreach (var item in node.DataItems)
+            {
+                var row = item.GetContent(text)?.Trim();
+                if (!string.IsNullOrWhiteSpace(row))
+                    rows.Add(row);
+            }
+
+            return string.Join("\n", rows);
+        }
+
+        private static string ReadRawNodeData(ScriptNode node, string text, string data)
+        {
+            if (!string.IsNullOrWhiteSpace(data))
+                return data;
+            if (node == null || node.Children == null || node.Children.Count == 0)
+                return data ?? string.Empty;
+            return node.GetContent(text).Trim();
+        }
+
         private static void ParseCutsceneImage(string data, DungeonFile dgn)
         {
             if (string.IsNullOrEmpty(data)) return;
@@ -928,11 +1614,32 @@ namespace GmPvfLib
         public int[] MapCandidates { get; set; }
     }
 
-    public class SpecialPassiveObjectItem
+    public sealed class SpecialPassiveObjectItemGroup
     {
-        public int Index { get; set; }
-        public int LevelOverride { get; set; }
-        public int ItemId { get; set; }
-        public int DropRate { get; set; }
+        public SpecialPassiveObjectItemGroup(
+            int groupIndex,
+            int levelOverride,
+            IReadOnlyList<SpecialPassiveObjectItem> items)
+        {
+            GroupIndex = groupIndex;
+            LevelOverride = levelOverride;
+            Items = items ?? Array.Empty<SpecialPassiveObjectItem>();
+        }
+
+        public int GroupIndex { get; }
+        public int LevelOverride { get; }
+        public IReadOnlyList<SpecialPassiveObjectItem> Items { get; }
+    }
+
+    public readonly struct SpecialPassiveObjectItem
+    {
+        public SpecialPassiveObjectItem(int itemId, int weight)
+        {
+            ItemId = itemId;
+            Weight = weight;
+        }
+
+        public int ItemId { get; }
+        public int Weight { get; }
     }
 }

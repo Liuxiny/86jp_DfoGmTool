@@ -434,12 +434,13 @@ namespace DfoGmTool.Services
                 NormalizeEquipmentToken(equipment.EquipmentType),
                 "coat avatar",
                 StringComparison.Ordinal);
-            if (isCoat && equipment.AbilityCaseIndex < 0)
+            var avatarMetadata = AvatarEquipmentMetadataReader.Read(equipment);
+            if (isCoat && avatarMetadata.AbilityCaseIndex < 0)
             {
                 error = "该上衣装扮的 .equ 没有 ability case index 配置";
                 return false;
             }
-            if (!isCoat && (equipment.AvatarSelectAbilities == null || equipment.AvatarSelectAbilities.Count == 0))
+            if (!isCoat && avatarMetadata.SelectAbilities.Count == 0)
             {
                 error = "该装扮的 .equ 没有 avatar select ability 配置";
                 return false;
@@ -448,9 +449,9 @@ namespace DfoGmTool.Services
             options = AvatarGrantPolicy.ResolveOptions(
                 equipment.EquipmentType,
                 equipment.Grade,
-                equipment.AvatarSelectAbilities,
+                avatarMetadata.SelectAbilities,
                 job,
-                equipment.AbilityCaseIndex);
+                avatarMetadata.AbilityCaseIndex);
             if (options == null || options.Count == 0)
             {
                 error = "该装扮没有当前职业可选属性";

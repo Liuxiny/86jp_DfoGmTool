@@ -109,7 +109,7 @@ FROM characters WHERE character_id = @cid;";
                             bonusSp = reader.GetInt32(5),
                             bonusTp = reader.GetInt32(6),
                             exEquipSlotStat = reader.GetInt32(7),
-                            extraEquipmentSlotsUnlocked = reader.GetInt32(7) == 3,
+                            extraEquipmentSlotsUnlocked = (reader.GetInt32(7) & 3) == 3,
                             maxLevel = ExpTableProvider.MaxLevel,
                             wallet = new
                             {
@@ -483,13 +483,14 @@ WHERE character_id = @cid;";
         {
             const int MaxClearState = 4;
 
-            if (!TryGetAccountId(characterId, out _))
+            if (!TryGetAccountId(characterId, out var accountId))
                 return Error("角色不存在: " + characterId);
 
             var dungeonIds = pvfIndex.GetDungeonPermissionIds();
             if (dungeonIds.Count == 0)
                 return Error("PVF 中未读取到可开启难度的副本列表");
 
+            var changedCount = 0;
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
@@ -498,29 +499,27 @@ WHERE character_id = @cid;";
                     using (var cmd = conn.CreateCommand())
                     {
                         cmd.Transaction = tx;
-                        cmd.CommandText = "DELETE FROM character_dungeon_permissions WHERE character_id = @cid;";
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.Transaction = tx;
                         cmd.CommandText = @"
-INSERT INTO character_dungeon_permissions(character_id, sort_order, dungeon_id, clear_state)
-VALUES (@cid, @sort, @dungeon, @state);";
-                        var cidParam = cmd.Parameters.Add("@cid", SqliteType.Integer);
-                        var sortParam = cmd.Parameters.Add("@sort", SqliteType.Integer);
+INSERT INTO account_dungeon_permissions(account_id, dungeon_id, clear_state, updated_at)
+VALUES (@aid, @dungeon, @state, CURRENT_TIMESTAMP)
+ON CONFLICT(account_id, dungeon_id) DO UPDATE SET
+    clear_state = MAX(account_dungeon_permissions.clear_state, excluded.clear_state),
+    updated_at = CASE
+        WHEN excluded.clear_state > account_dungeon_permissions.clear_state
+        THEN CURRENT_TIMESTAMP
+        ELSE account_dungeon_permissions.updated_at
+    END
+WHERE excluded.clear_state > account_dungeon_permissions.clear_state;";
+                        var accountParam = cmd.Parameters.Add("@aid", SqliteType.Integer);
                         var dungeonParam = cmd.Parameters.Add("@dungeon", SqliteType.Integer);
                         var stateParam = cmd.Parameters.Add("@state", SqliteType.Integer);
-                        cidParam.Value = characterId;
+                        accountParam.Value = accountId;
                         stateParam.Value = MaxClearState;
 
                         for (var i = 0; i < dungeonIds.Count; i++)
                         {
-                            sortParam.Value = i;
                             dungeonParam.Value = dungeonIds[i];
-                            cmd.ExecuteNonQuery();
+                            changedCount += cmd.ExecuteNonQuery();
                         }
                     }
 
@@ -532,8 +531,11 @@ VALUES (@cid, @sort, @dungeon, @state);";
             {
                 success = true,
                 characterId,
+                accountId,
                 insertedCount = dungeonIds.Count,
+                changedCount,
                 clearState = MaxClearState,
+                scope = "accountDifficulty",
             };
         }
 
@@ -574,12 +576,44 @@ WHERE character_id = @cid;";
                         }
                     }
 
+                    if (TableExists(conn, tx, "account_mercenary_assignments"))
+                    {
+                        var activeMercenaryAssignments = ExecuteScalarInt(conn, tx, @"
+SELECT COUNT(1)
+FROM account_mercenary_assignments
+WHERE character_id = @cid;",
+                            ("@cid", characterId));
+                        if (activeMercenaryAssignments > 0)
+                        {
+                            return Error("角色仍有进行中的佣兵出战任务，请先完成或召回佣兵后再删除（记录数: "
+                                + activeMercenaryAssignments + "）");
+                        }
+                    }
+
+                    if (TableExists(conn, tx, "mercenary_reward_outbox"))
+                    {
+                        var pendingMercenaryRewards = ExecuteScalarInt(conn, tx, @"
+SELECT COUNT(1)
+FROM mercenary_reward_outbox
+WHERE character_id = @cid
+  AND (delivery_status <> 'delivered' OR delivered_at IS NULL);",
+                            ("@cid", characterId));
+                        if (pendingMercenaryRewards > 0)
+                        {
+                            return Error("角色仍有尚未投递完成的佣兵奖励邮件，请等待奖励邮件送达后再删除（记录数: "
+                                + pendingMercenaryRewards + "）");
+                        }
+                    }
+
                     var deletedQuestRows = 0;
                     var deletedAuditRows = 0;
                     var deletedInventoryAuditV2Rows = 0;
                     var deletedItemRows = 0;
                     var deletedAvatarDetailRows = 0;
                     var deletedAccountEntryRows = 0;
+                    var deletedDungeonEffectRows = 0;
+                    var deletedMercenaryRewardRows = 0;
+                    var deletedMercenaryAssignmentRows = 0;
                     var updatedTemplateRows = 0;
                     var replacementSeedCharacterId = ResolveReplacementSeedCharacterId(conn, tx, accountId, characterId);
 
@@ -614,6 +648,23 @@ WHERE character_id = @cid
 DELETE FROM character_new_items
 WHERE character_id = @cid
    OR (owner_scope = 'character' AND owner_id = @cid);",
+                             ("@cid", characterId));
+
+                    // The dungeon outbox has no character FK and must be cleared
+                    // explicitly. Mercenary rows use RESTRICT: the preflight above
+                    // rejects active assignments and undelivered rewards, so only
+                    // delivered reward history may be removed here.
+                    if (TableExists(conn, tx, "dungeon_persistent_effect_outbox"))
+                        deletedDungeonEffectRows = ExecuteNonQuery(conn, tx,
+                            "DELETE FROM dungeon_persistent_effect_outbox WHERE character_id = @cid;",
+                            ("@cid", characterId));
+
+                    if (TableExists(conn, tx, "mercenary_reward_outbox"))
+                        deletedMercenaryRewardRows = ExecuteNonQuery(conn, tx,
+                            @"DELETE FROM mercenary_reward_outbox
+WHERE character_id = @cid
+  AND delivery_status = 'delivered'
+  AND delivered_at IS NOT NULL;",
                             ("@cid", characterId));
 
                     if (TableExists(conn, tx, "account_character_entries"))
@@ -682,6 +733,9 @@ WHERE seed_character_id = @cid
                         deletedItemRows,
                         deletedAvatarDetailRows,
                         deletedAccountEntryRows,
+                        deletedDungeonEffectRows,
+                        deletedMercenaryRewardRows,
+                        deletedMercenaryAssignmentRows,
                         updatedTemplateRows,
                         replacementSeedCharacterId,
                         deletedCharacterRows,

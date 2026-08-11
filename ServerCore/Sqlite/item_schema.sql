@@ -271,6 +271,28 @@ CREATE TABLE IF NOT EXISTS character_skills (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+-- Fair-PvP skills are intentionally isolated from the town/dungeon tree.
+-- The state marker makes an empty PvP tree distinguishable from one that has
+-- never been initialized.
+CREATE TABLE IF NOT EXISTS character_pvp_skill_state (
+    character_id INTEGER PRIMARY KEY,
+    initialized_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_pvp_skills (
+    character_id INTEGER NOT NULL,
+    page_index INTEGER NOT NULL CHECK (page_index >= 0 AND page_index <= 1),
+    slot INTEGER NOT NULL,
+    skill_id INTEGER NOT NULL,
+    level INTEGER NOT NULL,
+    extra_values BLOB,
+    PRIMARY KEY (character_id, page_index, slot),
+    UNIQUE (character_id, page_index, skill_id),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
     character_id INTEGER NOT NULL,
     page_index INTEGER NOT NULL CHECK (page_index >= 0 AND page_index <= 1),
@@ -301,6 +323,69 @@ CREATE TABLE IF NOT EXISTS character_mercenary_support (
     FOREIGN KEY (support_character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+-- 佣兵出战的真实状态，与保存支援兵技能选择的 character_mercenary_support 相互独立。
+CREATE TABLE IF NOT EXISTS account_mercenary_assignments (
+    assignment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    character_id INTEGER NOT NULL UNIQUE,
+    character_level INTEGER NOT NULL,
+    start_time INTEGER NOT NULL,
+    finish_time INTEGER NOT NULL,
+    area_index INTEGER NOT NULL,
+    period_index INTEGER NOT NULL,
+    avatar_bonus_tier INTEGER NOT NULL DEFAULT 0,
+    status INTEGER NOT NULL DEFAULT 1,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_mercenary_assignments_account
+    ON account_mercenary_assignments(account_id, character_id);
+
+-- 奖励事实在出战记录删除后继续保留，供邮件投递器异步消费。
+CREATE TABLE IF NOT EXISTS mercenary_reward_outbox (
+    outbox_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assignment_id INTEGER NOT NULL UNIQUE,
+    mailbox_message_id INTEGER,
+    account_id INTEGER NOT NULL,
+    character_id INTEGER NOT NULL,
+    area_index INTEGER NOT NULL,
+    period_index INTEGER NOT NULL,
+    completed_hours INTEGER NOT NULL DEFAULT 0,
+    is_early_return INTEGER NOT NULL DEFAULT 0,
+    return_purpose INTEGER NOT NULL DEFAULT 0,
+    base_gold INTEGER NOT NULL DEFAULT 0,
+    bonus_gold INTEGER NOT NULL DEFAULT 0,
+    item_template_id INTEGER NOT NULL DEFAULT 0,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    mail_title_key TEXT NOT NULL,
+    mail_message_key TEXT NOT NULL,
+    critical_multiplier_milli INTEGER NOT NULL DEFAULT 1000,
+    delivery_status TEXT NOT NULL DEFAULT 'pending',
+    delivery_attempts INTEGER NOT NULL DEFAULT 0,
+    last_delivery_error TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    delivered_at TEXT,
+    FOREIGN KEY (mailbox_message_id) REFERENCES mailbox_messages(message_id) ON DELETE SET NULL,
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_mercenary_outbox_delivery
+    ON mercenary_reward_outbox(delivery_status, outbox_id);
+
+CREATE TABLE IF NOT EXISTS mercenary_reward_items (
+    outbox_id INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL,
+    item_template_id INTEGER NOT NULL CHECK(item_template_id > 0),
+    item_count INTEGER NOT NULL CHECK(item_count > 0),
+    PRIMARY KEY (outbox_id, ordinal),
+    FOREIGN KEY (outbox_id) REFERENCES mercenary_reward_outbox(outbox_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS character_creatures (
     character_id INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,
@@ -325,6 +410,25 @@ CREATE TABLE IF NOT EXISTS character_creature_uid_sequence (
     creature_uid INTEGER PRIMARY KEY AUTOINCREMENT
 );
 
+-- Current job type/experience remain in character_subtype0_fields. This table owns
+-- profession-specific state and is projected to NOTI 0x00CD at runtime.
+CREATE TABLE IF NOT EXISTS character_expert_job (
+    character_id INTEGER PRIMARY KEY,
+    giveup_count INTEGER NOT NULL DEFAULT 0 CHECK(giveup_count >= 0 AND giveup_count <= 65535),
+    disjoint_machine_grade INTEGER NOT NULL DEFAULT 0 CHECK(disjoint_machine_grade >= 0), -- one-based; 0 means not initialized
+    disjoint_machine_endurance INTEGER NOT NULL DEFAULT 0 CHECK(disjoint_machine_endurance >= 0),
+    enchanter_endurance INTEGER NOT NULL DEFAULT 0 CHECK(enchanter_endurance >= 0),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_expert_job_recipes (
+    character_id INTEGER NOT NULL,
+    recipe_id INTEGER NOT NULL CHECK(recipe_id > 0),
+    PRIMARY KEY (character_id, recipe_id),
+    FOREIGN KEY (character_id) REFERENCES character_expert_job(character_id) ON DELETE CASCADE
+);
+
 -- Removed 18 columns verified via seed DB (DfoDbGenerator) as safe:
 --   A) Overwritten by account_settings/account_premiums: hotkey_key_type, main_game_option_blob,
 --      quickchat_bank0, quickchat_bank1, ack_premium_blob
@@ -335,7 +439,6 @@ CREATE TABLE IF NOT EXISTS character_creature_uid_sequence (
 CREATE TABLE IF NOT EXISTS character_init_flags (
     character_id INTEGER PRIMARY KEY,
     pc_room_state INTEGER NOT NULL DEFAULT 0,                       -- seed=2
-    expert_job_blob BLOB,                                           -- QuestService writes on job change
     champion_break_key_id INTEGER NOT NULL DEFAULT 0,               -- NOTI 0x025B: i32 key + u8 mode + i32 value
     champion_break_mode INTEGER NOT NULL DEFAULT 0,
     champion_break_value INTEGER NOT NULL DEFAULT 0,
@@ -401,6 +504,17 @@ CREATE TABLE IF NOT EXISTS character_dungeon_permissions (
 
 CREATE INDEX IF NOT EXISTS idx_dungeon_permissions_dungeon
     ON character_dungeon_permissions(character_id, dungeon_id);
+
+-- 普通副本难度解锁属于账号。角色表仅保留需要角色隔离的机制状态
+-- （例如安图恩普通征伐链）以及旧版本兼容数据。
+CREATE TABLE IF NOT EXISTS account_dungeon_permissions (
+    account_id INTEGER NOT NULL,
+    dungeon_id INTEGER NOT NULL CHECK (dungeon_id > 0 AND dungeon_id <= 65535),
+    clear_state INTEGER NOT NULL CHECK (clear_state > 0 AND clear_state <= 255),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (account_id, dungeon_id),
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS character_hotkey_slots (
     character_id INTEGER NOT NULL,
@@ -717,7 +831,38 @@ CREATE TABLE IF NOT EXISTS character_active_quests (
     slot INTEGER NOT NULL,
     quest_id INTEGER NOT NULL,
     trigger_value INTEGER NOT NULL DEFAULT 0,
+    version INTEGER NOT NULL DEFAULT 0,
+    activation_id TEXT NOT NULL,
     PRIMARY KEY (character_id, slot),
+    UNIQUE (character_id, quest_id),
+    UNIQUE (character_id, activation_id),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_quest_notify_selections (
+    character_id INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL CHECK (slot_index >= 0 AND slot_index < 4),
+    quest_id INTEGER NOT NULL CHECK (quest_id > 0),
+    PRIMARY KEY (character_id, slot_index),
+    UNIQUE (character_id, quest_id),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_daily_challenge_claims (
+    character_id INTEGER NOT NULL,
+    group_index INTEGER NOT NULL CHECK (group_index >= 0 AND group_index < 6),
+    claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (character_id, group_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS quest_progress_event_inbox (
+    character_id INTEGER NOT NULL,
+    activation_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event_kind TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (character_id, activation_id, event_id, event_kind),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -753,6 +898,182 @@ CREATE TABLE IF NOT EXISTS character_tower_of_despair_progress (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS mailbox_messages (
+    message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender_character_id INTEGER NOT NULL,
+    sender_account_id INTEGER NOT NULL DEFAULT 0,
+    sender_name TEXT NOT NULL DEFAULT '',
+    receiver_character_id INTEGER NOT NULL,
+    receiver_account_id INTEGER NOT NULL DEFAULT 0,
+    receiver_name TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    gold INTEGER NOT NULL DEFAULT 0 CHECK(gold >= 0),
+    fee_gold INTEGER NOT NULL DEFAULT 0 CHECK(fee_gold >= 0),
+    mail_type INTEGER NOT NULL DEFAULT 0,
+    source_protocol INTEGER NOT NULL DEFAULT 0,
+    idempotency_key TEXT,
+    request_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    unlimited_flag INTEGER NOT NULL DEFAULT 0 CHECK(unlimited_flag IN (0, 1)),
+    expire_at TEXT NOT NULL,
+    deleted_by_sender INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (receiver_character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailbox_messages_receiver_created
+    ON mailbox_messages(receiver_character_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mailbox_messages_sender_created
+    ON mailbox_messages(sender_character_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mailbox_messages_expiry
+    ON mailbox_messages(mail_type, expire_at, message_id);
+
+CREATE TABLE IF NOT EXISTS mailbox_recipients (
+    recipient_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL,
+    character_id INTEGER NOT NULL,
+    folder INTEGER NOT NULL DEFAULT 0,
+    read_flag INTEGER NOT NULL DEFAULT 0,
+    saved_flag INTEGER NOT NULL DEFAULT 0,
+    deleted_flag INTEGER NOT NULL DEFAULT 0,
+    received_gold_flag INTEGER NOT NULL DEFAULT 0 CHECK(received_gold_flag IN (0, 1, 2)),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    read_at TEXT,
+    saved_at TEXT,
+    deleted_at TEXT,
+    UNIQUE(message_id, character_id, folder),
+    FOREIGN KEY (message_id) REFERENCES mailbox_messages(message_id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailbox_recipients_character_folder
+    ON mailbox_recipients(character_id, folder, deleted_flag, created_at);
+
+CREATE TABLE IF NOT EXISTS mailbox_attachments (
+    attachment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    item_type INTEGER NOT NULL DEFAULT 0,
+    source_list_type INTEGER NOT NULL DEFAULT 0,
+    source_slot_index INTEGER NOT NULL DEFAULT 0,
+    source_item_uid INTEGER NOT NULL DEFAULT 0,
+    item_template_id INTEGER NOT NULL CHECK(item_template_id > 0),
+    item_kind TEXT NOT NULL DEFAULT 'unknown',
+    item_count INTEGER NOT NULL CHECK(item_count > 0),
+    instance_value INTEGER NOT NULL DEFAULT 0,
+    durability INTEGER NOT NULL DEFAULT 0,
+    seal_flag INTEGER NOT NULL DEFAULT 0,
+    option_value INTEGER NOT NULL DEFAULT 0,
+    equipment_lock_id INTEGER NOT NULL DEFAULT 0,
+    expire_time INTEGER NOT NULL DEFAULT 0,
+    marker_16 INTEGER NOT NULL DEFAULT -1,
+    pet_serial_or_handle INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}',
+    item_core BLOB,
+    detail_json TEXT NOT NULL DEFAULT '',
+    claimed_flag INTEGER NOT NULL DEFAULT 0 CHECK(claimed_flag IN (0, 1, 2)),
+    claimed_at TEXT,
+    FOREIGN KEY (message_id) REFERENCES mailbox_messages(message_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailbox_attachments_message
+    ON mailbox_attachments(message_id, ordinal);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_mailbox_attachments_message_ordinal
+    ON mailbox_attachments(message_id, ordinal);
+
+CREATE TABLE IF NOT EXISTS mailbox_campaigns (
+    campaign_id TEXT PRIMARY KEY,
+    payload_hash TEXT NOT NULL,
+    status INTEGER NOT NULL DEFAULT 0 CHECK(status IN (0, 1)),
+    last_character_id INTEGER NOT NULL DEFAULT 0,
+    max_character_id INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mailbox_campaign_deliveries (
+    campaign_id TEXT NOT NULL,
+    character_id INTEGER NOT NULL,
+    message_id INTEGER,
+    delivered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (campaign_id, character_id),
+    FOREIGN KEY (campaign_id) REFERENCES mailbox_campaigns(campaign_id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE,
+    FOREIGN KEY (message_id) REFERENCES mailbox_messages(message_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS mailbox_system_mail_audit (
+    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL UNIQUE,
+    actor_account_id INTEGER NOT NULL DEFAULT 0,
+    actor_character_id INTEGER NOT NULL DEFAULT 0,
+    actor_name TEXT NOT NULL DEFAULT '',
+    audit_reason TEXT NOT NULL DEFAULT '',
+    receiver_account_id INTEGER NOT NULL DEFAULT 0,
+    receiver_character_id INTEGER NOT NULL,
+    receiver_name TEXT NOT NULL DEFAULT '',
+    gold INTEGER NOT NULL DEFAULT 0 CHECK(gold >= 0),
+    attachment_count INTEGER NOT NULL DEFAULT 0 CHECK(attachment_count >= 0),
+    mail_type INTEGER NOT NULL DEFAULT 0,
+    source_protocol INTEGER NOT NULL DEFAULT 0,
+    idempotency_key TEXT,
+    request_hash TEXT NOT NULL DEFAULT '',
+    unlimited_flag INTEGER NOT NULL DEFAULT 0 CHECK(unlimited_flag IN (0, 1)),
+    expire_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailbox_system_mail_audit_receiver_created
+    ON mailbox_system_mail_audit(receiver_character_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mailbox_system_mail_audit_actor_created
+    ON mailbox_system_mail_audit(actor_account_id, actor_character_id, created_at);
+
+CREATE TABLE IF NOT EXISTS mailbox_system_mail_audit_attachments (
+    audit_attachment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audit_id INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    item_template_id INTEGER NOT NULL CHECK(item_template_id > 0),
+    item_kind TEXT NOT NULL DEFAULT 'unknown',
+    item_count INTEGER NOT NULL CHECK(item_count > 0),
+    instance_value INTEGER NOT NULL DEFAULT 0,
+    seal_flag INTEGER NOT NULL DEFAULT 0,
+    expire_time INTEGER NOT NULL DEFAULT 0,
+    pet_serial_or_handle INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(audit_id, ordinal),
+    FOREIGN KEY (audit_id) REFERENCES mailbox_system_mail_audit(audit_id) ON DELETE CASCADE
+);
+
+-- 副本持久 effect 的幂等/恢复账本。网络通知无 ACK，不使用本表宣称 exactly-once；
+-- 只有 typed dispatcher 注册的数据库/库存 effect 才能进入恢复执行。
+CREATE TABLE IF NOT EXISTS dungeon_persistent_effect_outbox (
+    source_event_id TEXT NOT NULL,
+    effect_kind TEXT NOT NULL,
+    effect_scope INTEGER NOT NULL,
+    scope_target INTEGER NOT NULL,
+    character_id INTEGER NOT NULL DEFAULT 0,
+    account_id INTEGER NOT NULL DEFAULT 0,
+    payload_version INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    state INTEGER NOT NULL DEFAULT 0 CHECK (state >= 0 AND state <= 4),
+    lease_id TEXT,
+    lease_owner TEXT,
+    lease_expires_at INTEGER NOT NULL DEFAULT 0,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    result_version INTEGER,
+    result_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    committed_at INTEGER,
+    PRIMARY KEY (source_event_id, effect_kind, effect_scope, scope_target)
+);
+CREATE INDEX IF NOT EXISTS idx_dungeon_effect_outbox_character_state
+    ON dungeon_persistent_effect_outbox(character_id, state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_dungeon_effect_outbox_account_state
+    ON dungeon_persistent_effect_outbox(account_id, state, updated_at);
+
 CREATE TABLE IF NOT EXISTS account_settings (
     account_id INTEGER PRIMARY KEY,
     main_game_option BLOB,
@@ -760,6 +1081,14 @@ CREATE TABLE IF NOT EXISTS account_settings (
     quickchat_bank1 BLOB,
     hotkey_key_type INTEGER NOT NULL DEFAULT 0,
     hotkey_slots BLOB,
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS account_increase_chance_lottery_progress (
+    account_id INTEGER NOT NULL,
+    item_template_id INTEGER NOT NULL,
+    reward_index INTEGER NOT NULL CHECK(reward_index >= 0 AND reward_index < 20),
+    PRIMARY KEY (account_id, item_template_id, reward_index),
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 );
 
