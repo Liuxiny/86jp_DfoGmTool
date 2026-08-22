@@ -881,8 +881,12 @@ WHERE c.character_id = @cid;";
 
             try
             {
-                var repository = new DfoGmTool.ServerCore.Game.CharacterData.SqliteCharacterProgressRepository(
-                    _config.DatabasePath, _config.SchemaPath);
+                // The GM host has already opened and compatibility-checked this database.
+                // Re-running bootstrap here makes a read-only SP/TP query depend on the
+                // process working directory and schema-file path, which differs in the
+                // deployed systemd service. Reuse the configured connection instead.
+                var repository = DfoGmTool.ServerCore.Game.CharacterData.SqliteCharacterProgressRepository
+                    .FromConnectionString(_config.ConnectionString);
                 DfoGmTool.ServerCore.Game.Characters.CharacterStatComputer.DecodeGrowType(growType, out var firstGrow, out var secondGrow);
                 var synced = DfoGmTool.ServerCore.Game.Skills.SkillStateService.LoadAndSync(
                     repository, characterId, job, level, bonusSp, bonusTp, persist: false, firstGrow, secondGrow);
@@ -911,9 +915,44 @@ WHERE c.character_id = @cid;";
                     bonusTp,
                 };
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return Error("SP/TP 计算失败: " + ex.Message);
+                // A legacy character can contain a skill row which is no longer present
+                // in the current PVF/static skill index. The read-only GM panel must not
+                // become unusable in that case. Return the safe ledger totals (including
+                // explicit GM bonuses) and mark the result as approximate; mutations still
+                // use the strict synchronized path and are not weakened by this fallback.
+                try
+                {
+                    var totalSp = Math.Max(0, DfoGmTool.ServerCore.Game.Skills.SpTableProvider.GetTotalSp(level) + bonusSp);
+                    var totalTp = Math.Max(0, DfoGmTool.ServerCore.Game.Skills.TpTableProvider.GetTotalTp(level) + bonusTp);
+                    return new
+                    {
+                        success = true,
+                        characterId,
+                        skillTreeIndex = skillTreeIndex < 0 ? 255 : skillTreeIndex,
+                        skillTreeUnlocked = skillTreeIndex >= 0,
+                        currentSkillPage = ResolveCurrentSkillPage(skillTreeIndex),
+                        totalSp,
+                        remainingSp = totalSp,
+                        remainingSpPage0 = totalSp,
+                        remainingSpPage1 = totalSp,
+                        currentRemainingSp = totalSp,
+                        totalTp,
+                        remainingTp = totalTp,
+                        remainingTpPage0 = totalTp,
+                        remainingTpPage1 = totalTp,
+                        currentRemainingTp = totalTp,
+                        bonusSp,
+                        bonusTp,
+                        approximate = true,
+                        warning = "当前角色存在旧版技能数据，SP/TP 显示为未扣除技能消耗的安全估算值。",
+                    };
+                }
+                catch
+                {
+                    return Error("SP/TP 数据暂时无法读取，请刷新后重试");
+                }
             }
         }
 

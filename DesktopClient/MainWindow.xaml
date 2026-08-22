@@ -1,0 +1,337 @@
+<Window x:Class="Jp86.GmClient.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="86JP GM" Width="1380" Height="840" MinWidth="1120" MinHeight="700"
+        WindowStartupLocation="CenterScreen" Icon="GM.ico">
+    <Grid>
+        <Grid x:Name="Shell" Visibility="Collapsed">
+            <Grid.RowDefinitions><RowDefinition Height="64"/><RowDefinition Height="*"/><RowDefinition Height="34"/></Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="22,0">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="86JP" FontSize="25" FontWeight="Bold" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
+                        <Border Width="1" Height="24" Background="{StaticResource Line}" Margin="16,0"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="GM 控制台" FontSize="15" FontWeight="SemiBold" Foreground="White"/>
+                            <TextBlock Text="账号与角色实时管理" FontSize="11" Foreground="White"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel Margin="0,0,18,0" VerticalAlignment="Center">
+                            <TextBlock x:Name="UserText" FontWeight="SemiBold" Foreground="White" HorizontalAlignment="Right"/>
+                            <TextBlock x:Name="RoleText" Foreground="White" FontSize="11" HorizontalAlignment="Right"/>
+                        </StackPanel>
+                        <Button Content="刷新" Click="Refresh_Click" Margin="0,0,8,0"/>
+                        <Button Content="退出" Click="Logout_Click" Background="#432A35"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="278"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0" Padding="16">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+
+                        <StackPanel x:Name="AccountChooserPanel">
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="账号" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center"/>
+                                <TextBlock Text="管理员可切换" Foreground="{StaticResource Muted}" FontSize="11" HorizontalAlignment="Right"/>
+                            </DockPanel>
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="查找" Padding="12,8" Margin="7,0,0,0" Click="SearchAccounts_Click"/>
+                                <TextBox x:Name="AccountQuery" ToolTip="输入账号、账号 ID 或角色名" KeyDown="AccountQuery_KeyDown"/>
+                            </DockPanel>
+                            <ComboBox x:Name="AccountList" Margin="0,8,0,0" SelectionChanged="AccountList_SelectionChanged"/>
+                        </StackPanel>
+
+                        <Border Grid.Row="1" Background="{StaticResource Card}" CornerRadius="10" Padding="13" Margin="0,14,0,14">
+                            <StackPanel>
+                                <DockPanel><TextBlock Text="当前账号" Foreground="White"/><TextBlock x:Name="ContextAccountIdText" HorizontalAlignment="Right" Foreground="White"/></DockPanel>
+                                <TextBlock x:Name="ContextAccountText" FontSize="17" FontWeight="SemiBold" Foreground="White" Margin="0,5,0,10" TextTrimming="CharacterEllipsis"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock Text="点券" Foreground="White" FontSize="11"/><TextBlock x:Name="ContextCeraText" Foreground="White" FontWeight="SemiBold"/></StackPanel>
+                                    <StackPanel Grid.Column="1"><TextBlock Text="代币券" Foreground="White" FontSize="11"/><TextBlock x:Name="ContextTokenText" Foreground="White" FontWeight="SemiBold"/></StackPanel>
+                                    <StackPanel Grid.Column="2"><TextBlock Text="幸运星" Foreground="White" FontSize="11"/><TextBlock x:Name="ContextLuckyText" Foreground="White" FontWeight="SemiBold"/></StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <DockPanel Grid.Row="2" Margin="0,0,0,8">
+                            <TextBlock Text="角色" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="CharacterCountText" HorizontalAlignment="Right" Foreground="White"/>
+                        </DockPanel>
+                        <TextBox x:Name="CharacterQuery" Grid.Row="3" ToolTip="筛选角色名、职业或 ID" TextChanged="CharacterQuery_TextChanged" Margin="0,0,0,6"/>
+                        <ListBox x:Name="CharacterList" Grid.Row="4" Background="Transparent" BorderThickness="0" SelectionChanged="CharacterList_SelectionChanged"/>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Column="1" Margin="22,18,22,10">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Border Background="{StaticResource Card}" CornerRadius="11" Padding="18,13" Margin="0,0,0,13">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock x:Name="CurrentCharacterText" Text="请选择角色" FontSize="22" FontWeight="SemiBold" Foreground="White"/>
+                                <TextBlock x:Name="CurrentCharacterMetaText" Text="从左侧选择角色后即可操作" Foreground="White" Margin="0,3,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <StackPanel Margin="18,0"><TextBlock Text="金币" Foreground="White" FontSize="11" HorizontalAlignment="Right"/><TextBlock x:Name="HeaderGoldText" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Right"/></StackPanel>
+                                <StackPanel Margin="18,0"><TextBlock Text="点券" Foreground="White" FontSize="11" HorizontalAlignment="Right"/><TextBlock x:Name="HeaderCeraText" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Right"/></StackPanel>
+                                <StackPanel Margin="18,0"><TextBlock Text="代币券" Foreground="White" FontSize="11" HorizontalAlignment="Right"/><TextBlock x:Name="HeaderTokenText" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Right"/></StackPanel>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <TabControl x:Name="WorkspaceTabs" Grid.Row="1" SelectionChanged="WorkspaceTabs_SelectionChanged">
+                        <TabItem Header="发放物品" x:Name="GrantTab">
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="300"/></Grid.ColumnDefinitions>
+                                <Grid>
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                    <Grid Margin="0,0,12,9">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="ItemCategory" Width="125" SelectedIndex="0" SelectionChanged="ItemCategory_SelectionChanged">
+                                            <ComboBoxItem Content="装备" Tag="equipment"/>
+                                        </ComboBox>
+                                        <TextBox x:Name="ItemQuery" Grid.Column="1" Margin="8,0,0,0" ToolTip="输入物品名称或 ID；留空显示当前分类" KeyDown="ItemQuery_KeyDown"/>
+                                        <Button Grid.Column="2" Content="搜索" Margin="8,0,0,0" Click="SearchItems_Click"/>
+                                    </Grid>
+                                    <Border Grid.Row="1" Margin="0,0,12,9" Padding="10,7" CornerRadius="7" Background="#142031">
+                                        <DockPanel LastChildFill="True">
+                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                                <Button Content="选择资源目录" Padding="11,6" Margin="7,0,0,0" Click="ChoosePvfDirectory_Click"/>
+                                                <Button Content="选择图标目录" Padding="11,6" Margin="7,0,0,0" Click="ChooseImagePacksDirectory_Click"/>
+                                                <Button x:Name="RebuildPvfButton" Content="重建缓存" Padding="11,6" Margin="7,0,0,0" Click="RebuildPvf_Click"/>
+                                            </StackPanel>
+                                            <TextBlock x:Name="PvfStatusText" Text="正在检查本地 PVF…" Foreground="White" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        </DockPanel>
+                                    </Border>
+                                    <DataGrid x:Name="ItemResults" Grid.Row="2" Margin="0,0,12,0" AutoGenerateColumns="False" SelectionMode="Single" RowHeight="42">
+                                        <DataGrid.Columns>
+                                            <DataGridTemplateColumn Header="图标" Width="54">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate><Image Source="{Binding Icon}" Width="32" Height="32" Stretch="Uniform"/></DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTextColumn Header="物品" Binding="{Binding Name}" Width="*"/>
+                                            <DataGridTextColumn Header="分类" Binding="{Binding Category}" Width="72"/>
+                                            <DataGridTextColumn Header="ID" Binding="{Binding ItemId}" Width="90"/>
+                                            <DataGridTextColumn Header="等级" Binding="{Binding MinLevel}" Width="65"/>
+                                            <DataGridTextColumn Header="稀有度" Binding="{Binding Rarity}" Width="68"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                                <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel>
+                                        <Border Background="{StaticResource Card}" CornerRadius="10" Padding="17" Margin="0,0,0,12">
+                                            <StackPanel>
+                                                <TextBlock Text="发放设置" FontSize="17" FontWeight="SemiBold"/>
+                                                <TextBlock Text="选中左侧物品后发送到当前角色" Foreground="{StaticResource Muted}" Margin="0,3,0,12"/>
+                                                <TextBlock Text="数量" Foreground="{StaticResource Muted}"/><TextBox x:Name="ItemCount" Text="1" Margin="0,5,0,10"/>
+                                                <StackPanel x:Name="ItemAdvancedOptions">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                                        <StackPanel Margin="0,0,6,0"><TextBlock Text="强化" Foreground="{StaticResource Muted}"/><TextBox x:Name="UpgradeLevel" Text="0" Margin="0,5,0,0"/></StackPanel>
+                                                        <StackPanel Grid.Column="1" Margin="3,0"><TextBlock Text="增幅" Foreground="{StaticResource Muted}"/><ComboBox x:Name="AmplifyType" SelectedIndex="0" Margin="0,5,0,0"><ComboBoxItem Content="无" Tag="0"/><ComboBoxItem Content="体力" Tag="1"/><ComboBoxItem Content="精神" Tag="2"/><ComboBoxItem Content="力量" Tag="3"/><ComboBoxItem Content="智力" Tag="4"/></ComboBox></StackPanel>
+                                                        <StackPanel Grid.Column="2" Margin="6,0,0,0"><TextBlock Text="锻造" Foreground="{StaticResource Muted}"/><TextBox x:Name="ForgingLevel" Text="0" Margin="0,5,0,0"/></StackPanel>
+                                                    </Grid>
+                                                </StackPanel>
+                                                <Button Content="发送到当前角色" Background="#2B65A0" Margin="0,14,0,0" Click="GrantItem_Click"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Background="{StaticResource Card}" CornerRadius="10" Padding="17">
+                                            <StackPanel>
+                                                <TextBlock Text="点券与代币券" FontSize="17" FontWeight="SemiBold"/>
+                                                <TextBlock Text="支持输入正数增加、负数扣除" Foreground="{StaticResource Muted}" Margin="0,3,0,10"/>
+                                                <ComboBox x:Name="CeraType" SelectedIndex="0"><ComboBoxItem Content="点券" Tag="cera"/><ComboBoxItem Content="代币券" Tag="token"/></ComboBox>
+                                                <TextBox x:Name="CeraAmount" Text="1000" Margin="0,8,0,8"/>
+                                                <Button Content="提交调整" Click="Cera_Click"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="背包" x:Name="InventoryTab">
+                            <Grid Margin="0,12,0,0">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <DockPanel Margin="0,0,0,10">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button Content="删除选中物品" Background="#63313A" Margin="8,0,0,0" Click="DeleteInventoryItem_Click"/>
+                                        <Button Content="刷新背包" Margin="8,0,0,0" Click="LoadInventory_Click"/>
+                                    </StackPanel>
+                                    <ComboBox x:Name="InventoryCategory" Width="145" SelectedIndex="0" SelectionChanged="InventoryFilter_Changed"><ComboBoxItem Content="全部分类" Tag=""/></ComboBox>
+                                    <TextBox x:Name="InventoryQuery" Margin="8,0,0,0" ToolTip="筛选物品名称、ID 或位置" TextChanged="InventoryFilter_Changed"/>
+                                </DockPanel>
+                                <DataGrid x:Name="InventoryGrid" Grid.Row="1" AutoGenerateColumns="False" SelectionMode="Single">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="物品" Binding="{Binding Name}" Width="*"/>
+                                        <DataGridTextColumn Header="ID" Binding="{Binding TemplateId}" Width="95"/>
+                                        <DataGridTextColumn Header="位置" Binding="{Binding Location}" Width="230"/>
+                                        <DataGridTextColumn Header="数量" Binding="{Binding Count}" Width="70"/>
+                                        <DataGridTextColumn Header="耐久" Binding="{Binding Durability}" Width="70"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="角色属性" x:Name="CharacterTab">
+                            <ScrollViewer Margin="0,12,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
+                                <Grid Margin="0,0,8,12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                    <Border Grid.Row="0" Grid.Column="0" Background="{StaticResource Card}" CornerRadius="10" Padding="18" Margin="0,0,6,12">
+                                        <StackPanel>
+                                            <TextBlock Text="等级与金币" FontSize="17" FontWeight="SemiBold"/>
+                                            <TextBlock Text="设置角色等级" Foreground="{StaticResource Muted}" Margin="0,10,0,5"/><DockPanel><Button DockPanel.Dock="Right" Content="设置等级" Margin="8,0,0,0" Click="SetLevel_Click"/><TextBox x:Name="LevelValue" Text="86"/></DockPanel>
+                                            <TextBlock Text="增加或扣除金币" Foreground="{StaticResource Muted}" Margin="0,10,0,5"/><DockPanel><Button DockPanel.Dock="Right" Content="调整金币" Margin="8,0,0,0" Click="AdjustGold_Click"/><TextBox x:Name="GoldValue" Text="1000000"/></DockPanel>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="0" Grid.Column="1" Background="{StaticResource Card}" CornerRadius="10" Padding="18" Margin="6,0,0,12">
+                                        <StackPanel>
+                                            <TextBlock Text="SP / TP" FontSize="17" FontWeight="SemiBold"/>
+                                            <TextBlock x:Name="SpTpSummaryText" Text="读取中…" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,7,0,11"/>
+                                            <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions><TextBox x:Name="SpValue" Text="0" ToolTip="增加 SP" Margin="0,0,4,0"/><TextBox x:Name="TpValue" Grid.Column="1" Text="0" ToolTip="增加 TP" Margin="4,0,0,0"/></Grid>
+                                            <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions><Button Content="增加 SP/TP" Margin="0,0,4,0" Click="AdjustSpTp_Click"/><Button Grid.Column="1" Content="重置剩余点" Margin="4,0,0,0" Click="ZeroSpTp_Click"/></Grid>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="1" Grid.Column="0" Background="{StaticResource Card}" CornerRadius="10" Padding="18" Margin="0,0,6,12">
+                                        <StackPanel>
+                                            <TextBlock Text="容量与限制" FontSize="17" FontWeight="SemiBold"/>
+                                            <UniformGrid Columns="2" Margin="0,10,0,0">
+                                                <Button Content="背包上限 999" Margin="0,0,4,8" Tag="inventory-limit/max" Click="QuickAction_Click"/>
+                                                <Button Content="恢复背包上限" Margin="4,0,0,8" Tag="inventory-limit/restore" Click="QuickAction_Click"/>
+                                                <Button Content="金币上限最大" Margin="0,0,4,8" Tag="gold-limit/max" Click="QuickAction_Click"/>
+                                                <Button Content="个人仓库扩容" Margin="4,0,0,8" Tag="personal-cargo/max" Click="QuickAction_Click"/>
+                                            </UniformGrid>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="1" Grid.Column="1" Background="{StaticResource Card}" CornerRadius="10" Padding="18" Margin="6,0,0,12">
+                                        <StackPanel>
+                                            <TextBlock Text="解锁与维护" FontSize="17" FontWeight="SemiBold"/>
+                                            <UniformGrid Columns="2" Margin="0,10,0,0">
+                                                <Button Content="解锁左右槽" Margin="0,0,4,8" Tag="equipment-slots/unlock" Click="QuickAction_Click"/>
+                                                <Button Content="解锁副本权限" Margin="4,0,0,8" Tag="dungeon-permissions/unlock" Click="QuickAction_Click"/>
+                                                <Button Content="清空角色邮箱" Margin="0,0,4,8" Tag="mailbox/clear" Click="QuickAction_Click"/>
+                                                <Button Content="刷新角色数据" Margin="4,0,0,8" Click="RefreshCharacter_Click"/>
+                                            </UniformGrid>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Background="{StaticResource Card}" CornerRadius="10" Padding="18">
+                                        <StackPanel>
+                                            <TextBlock Text="基础属性预览" FontSize="17" FontWeight="SemiBold"/>
+                                            <TextBlock Text="属性按当前职业、等级与转职状态计算" Foreground="{StaticResource Muted}" Margin="0,3,0,10"/>
+                                            <DataGrid x:Name="StatsGrid" Height="300" MinWidth="500" AutoGenerateColumns="False" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                                <DataGrid.Columns><DataGridTextColumn Header="属性" Binding="{Binding Label}" Width="*"/><DataGridTextColumn Header="数值" Binding="{Binding Value}" Width="150"/></DataGrid.Columns>
+                                            </DataGrid>
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <TabItem Header="任务" x:Name="QuestTab">
+                            <Grid Margin="0,12,0,0">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <DockPanel Margin="0,0,0,10">
+                                    <Button DockPanel.Dock="Right" Content="搜索任务库" Margin="8,0,0,0" Click="SearchQuests_Click"/>
+                                    <ComboBox x:Name="QuestGrade" Width="125" SelectedIndex="0"><ComboBoxItem Content="全部类型" Tag=""/><ComboBoxItem Content="主线" Tag="epic"/><ComboBoxItem Content="普通" Tag="normal"/><ComboBoxItem Content="支线" Tag="sub"/><ComboBoxItem Content="成就" Tag="achievement"/><ComboBoxItem Content="每日" Tag="daily"/></ComboBox>
+                                    <TextBox x:Name="QuestQuery" Margin="8,0,0,0" ToolTip="任务名称或任务 ID；留空显示当前可用任务" KeyDown="QuestQuery_KeyDown"/>
+                                </DockPanel>
+                                <DataGrid x:Name="QuestGrid" Grid.Row="1" AutoGenerateColumns="False" SelectionMode="Single">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="任务" Binding="{Binding Name}" Width="*"/>
+                                        <DataGridTextColumn Header="ID" Binding="{Binding QuestId}" Width="85"/>
+                                        <DataGridTextColumn Header="类型" Binding="{Binding GradeLabel}" Width="90"/>
+                                        <DataGridTextColumn Header="区域" Binding="{Binding RegionLabel}" Width="140"/>
+                                        <DataGridTextColumn Header="等级" Binding="{Binding MinLevel}" Width="70"/>
+                                        <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="90"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                                    <Button Content="标记完成" Click="CompleteQuest_Click"/>
+                                    <Button Content="完成整条前置链" Margin="8,0,0,0" Click="CompleteQuestChain_Click"/>
+                                    <Button Content="取消完成标记" Margin="8,0,0,0" Background="#63313A" Click="UnclearQuest_Click"/>
+                                </StackPanel>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="账号管理" x:Name="AccountTab">
+                            <ScrollViewer Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
+                                <WrapPanel ItemWidth="340">
+                                    <Border Background="{StaticResource Card}" CornerRadius="10" Padding="18" Margin="0,0,12,12" Width="328">
+                                        <StackPanel>
+                                            <TextBlock Text="账号货币" FontSize="17" FontWeight="SemiBold"/>
+                                            <TextBlock Text="类型" Foreground="{StaticResource Muted}" Margin="0,10,0,5"/>
+                                                <ComboBox x:Name="AccountCurrencyType" SelectedIndex="0"><ComboBoxItem Content="点券" Tag="cera"/><ComboBoxItem Content="代币券" Tag="token"/><ComboBoxItem Content="幸运星" Tag="luckystar"/><ComboBoxItem Content="赛丽亚幸运值" Tag="serialuck"/></ComboBox>
+                                            <TextBlock Text="增减数值" Foreground="{StaticResource Muted}" Margin="0,10,0,5"/><TextBox x:Name="AccountCurrencyValue" Text="1000"/>
+                                            <Button Content="提交账号货币调整" Margin="0,10,0,0" Click="AccountCurrency_Click"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Background="{StaticResource Card}" CornerRadius="10" Padding="18" Margin="0,0,12,12" Width="328">
+                                        <StackPanel>
+                                            <TextBlock Text="账号进度" FontSize="17" FontWeight="SemiBold"/>
+                                            <TextBlock Text="荣誉等级" Foreground="{StaticResource Muted}" Margin="0,10,0,5"/><DockPanel><Button DockPanel.Dock="Right" Content="设置" Margin="8,0,0,0" Click="SetHonorLevel_Click"/><TextBox x:Name="HonorLevelValue" Text="1"/></DockPanel>
+                                            <Button Content="荣誉等级设为最高" Margin="0,8,0,0" Tag="honor-level/max" Click="AccountQuickAction_Click"/>
+                                            <Button Content="成长胶囊经验设为最高" Margin="0,8,0,0" Tag="growth-capsule/max" Click="AccountQuickAction_Click"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Background="{StaticResource Card}" CornerRadius="10" Padding="18" Margin="0,0,12,12" Width="328">
+                                        <StackPanel>
+                                            <TextBlock Text="账号金库" FontSize="17" FontWeight="SemiBold"/>
+                                            <TextBlock Text="扩容不会删除现有物品；清空操作不可撤销。" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,7,0,12"/>
+                                            <Button Content="账号金库扩容" Tag="cargo/max" Click="AccountQuickAction_Click"/>
+                                            <Button Content="清空账号金库" Background="#63313A" Margin="0,8,0,0" Tag="cargo/clear" Click="AccountQuickAction_Click"/>
+                                        </StackPanel>
+                                    </Border>
+                                </WrapPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <TabItem Header="日志" x:Name="LogsTab">
+                            <Grid Margin="0,12,0,0">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <WrapPanel Margin="0,0,0,10">
+                                    <ComboBox x:Name="LogCategory" Width="135" SelectedIndex="0" Margin="0,0,8,0"><ComboBoxItem Content="全部" Tag=""/><ComboBoxItem Content="账号与登录" Tag="security"/><ComboBoxItem Content="物品" Tag="inventory"/><ComboBoxItem Content="消费" Tag="consumption"/><ComboBoxItem Content="副本" Tag="dungeon"/><ComboBoxItem Content="通关" Tag="clear"/><ComboBoxItem Content="技能" Tag="skill"/></ComboBox>
+                                    <TextBox x:Name="LogAccount" Width="150" Margin="0,0,8,0" ToolTip="账号或 ID"/>
+                                    <TextBox x:Name="LogCharacter" Width="150" Margin="0,0,8,0" ToolTip="角色或 ID"/>
+                                    <TextBox x:Name="LogQuery" Width="210" Margin="0,0,8,0" ToolTip="关键词"/>
+                                    <Button Content="筛选" Click="LoadLogs_Click"/>
+                                </WrapPanel>
+                                <DataGrid x:Name="LogsGrid" Grid.Row="1" AlternationCount="2"/>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="权限" x:Name="PermissionsTab">
+                            <Grid Margin="0,12,0,0">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <DockPanel Margin="0,0,0,10"><Button DockPanel.Dock="Right" Content="搜索" Margin="8,0,0,0" Click="LoadPermissions_Click"/><TextBox x:Name="PermissionQuery" ToolTip="账号或 ID"/></DockPanel>
+                                <DataGrid x:Name="PermissionsGrid" Grid.Row="1" SelectionMode="Single" AlternationCount="2"/>
+                                <DockPanel Grid.Row="2" Margin="0,10,0,0"><Button DockPanel.Dock="Right" Content="保存等级" Margin="8,0,0,0" Click="SetPermission_Click"/><ComboBox x:Name="PermissionRole" Width="180" HorizontalAlignment="Right" SelectedIndex="0"><ComboBoxItem Content="1 级 · 基础" Tag="1"/><ComboBoxItem Content="2 级 · 完整" Tag="2"/><ComboBoxItem Content="3 级 · 管理员" Tag="3"/></ComboBox><TextBlock Text="选择账号后设置权限" VerticalAlignment="Center" Foreground="{StaticResource Muted}"/></DockPanel>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </Grid>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="16,0"><TextBlock x:Name="StatusText" Text="就绪" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/></Border>
+        </Grid>
+
+        <Grid x:Name="LoginPanel" Background="{StaticResource Bg}">
+            <Border Width="410" Padding="34" Background="{StaticResource Panel}" CornerRadius="16" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="86JP" FontSize="34" FontWeight="Bold" Foreground="{StaticResource Accent}" HorizontalAlignment="Center"/>
+                    <TextBlock Text="GM CONTROL" FontSize="12" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,0,0,28"/>
+                    <TextBlock Text="游戏账号" Foreground="{StaticResource Muted}"/><TextBox x:Name="LoginAccount" Margin="0,7,0,14"/>
+                    <TextBlock Text="游戏密码" Foreground="{StaticResource Muted}"/><PasswordBox x:Name="LoginPassword" Margin="0,7,0,22" KeyDown="LoginPassword_KeyDown"/>
+                    <Button x:Name="LoginButton" Content="安全登录" Background="#2B65A0" Click="Login_Click"/>
+                    <TextBlock x:Name="LoginStatus" TextWrapping="Wrap" TextAlignment="Center" Foreground="#F08A8A" Margin="0,14,0,0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

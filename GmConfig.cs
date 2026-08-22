@@ -11,6 +11,7 @@ namespace DfoGmTool
         public string ServerBinDir { get; }
         public string DatabasePath { get; }
         public string PvfPath { get; }
+        public bool IsMySql { get; }
 
         // schema 优先用服务端目录里的；自选数据源则使用工具自带的当前 schema。
         public string SchemaPath
@@ -26,22 +27,34 @@ namespace DfoGmTool
                 return Path.Combine(AppContext.BaseDirectory, "ServerCore", "Sqlite", "item_schema.sql");
             }
         }
-        public string ConnectionString => new SqliteConnectionStringBuilder
-        {
-            DataSource = DatabasePath,
-            Mode = SqliteOpenMode.ReadWrite,
-            ForeignKeys = true
-        }.ToString();
+        public string ConnectionString => IsMySql
+            ? DatabasePath
+            : new SqliteConnectionStringBuilder
+            {
+                DataSource = DatabasePath,
+                Mode = SqliteOpenMode.ReadWrite,
+                ForeignKeys = true
+            }.ToString();
 
-        private GmConfig(string databasePath, string pvfPath, string serverBinDir)
+        private GmConfig(string databasePath, string pvfPath, string serverBinDir, bool isMySql = false)
         {
             DatabasePath = databasePath;
             PvfPath = pvfPath;
             ServerBinDir = serverBinDir;
+            IsMySql = isMySql;
         }
 
         public static GmConfig TryResolve(string[] args)
         {
+            var mysql = Environment.GetEnvironmentVariable("DFO_GM_MYSQL_CONNECTION_STRING");
+            var mysqlPvf = Environment.GetEnvironmentVariable("DFO_GM_PVF_PATH");
+            if (!string.IsNullOrWhiteSpace(mysql))
+            {
+                if (!TryCreateMySql(mysql, mysqlPvf, out var mysqlConfig, out var mysqlError))
+                    throw new InvalidOperationException(mysqlError);
+                return mysqlConfig;
+            }
+
             var candidates = new List<string>();
 
             for (var i = 0; args != null && i < args.Length - 1; i++)
@@ -67,6 +80,25 @@ namespace DfoGmTool
             }
 
             return null;
+        }
+
+        public static bool TryCreateMySql(
+            string connectionString,
+            string pvfPath,
+            out GmConfig config,
+            out string error)
+        {
+            config = null;
+            error = null;
+            if (!SqliteConnection.IsMySql(connectionString))
+            {
+                error = "DFO_GM_MYSQL_CONNECTION_STRING 不是有效的 MySQL 连接字符串。";
+                return false;
+            }
+            if (!TryGetExistingFilePath(pvfPath, "PVF", out var fullPvfPath, out error))
+                return false;
+            config = new GmConfig(connectionString.Trim(), fullPvfPath, null, true);
+            return true;
         }
 
         public static bool TryCreate(

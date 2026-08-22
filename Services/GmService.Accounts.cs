@@ -13,7 +13,7 @@ namespace DfoGmTool.Services
 {
     public sealed partial class GmService
     {
-        public object ListAccounts()
+        public object ListAccounts(int accountId = -1)
         {
             var result = new List<object>();
             using (var conn = new SqliteConnection(_config.ConnectionString))
@@ -27,8 +27,10 @@ SELECT a.account_id, a.m_id, a.cera, a.token_cera, a.lucky_star,
        COUNT(c.character_id), COALESCE(GROUP_CONCAT(c.name, char(10)), '')
 FROM accounts a
 LEFT JOIN characters c ON c.account_id = a.account_id AND c.delete_flag = 0
+WHERE (@aid < 0 OR a.account_id = @aid)
 GROUP BY a.account_id
 ORDER BY a.account_id;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
                     using (var reader = cmd.ExecuteReader())
                     {
                         while (reader.Read())

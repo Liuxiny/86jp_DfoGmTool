@@ -22,7 +22,7 @@ namespace DfoGmTool.ServerCore.Infrastructure
     public static class DatabaseCompatibilityGuard
     {
         public const int MinimumSupportedVersion = 52;
-        public const int MaximumSupportedVersion = 52;
+        public const int MaximumSupportedVersion = 56;
 
         private static readonly (string Table, string Column)[] RequiredColumns =
         {
@@ -45,19 +45,22 @@ namespace DfoGmTool.ServerCore.Infrastructure
             if (string.IsNullOrWhiteSpace(databasePath))
                 throw new InvalidOperationException("数据库路径不能为空。");
 
-            var fullPath = Path.GetFullPath(databasePath);
-            if (!File.Exists(fullPath) || new FileInfo(fullPath).Length == 0)
+            var isMySql = SqliteConnection.IsMySql(databasePath);
+            var fullPath = isMySql ? databasePath : Path.GetFullPath(databasePath);
+            if (!isMySql && (!File.Exists(fullPath) || new FileInfo(fullPath).Length == 0))
             {
                 throw new InvalidOperationException(
                     "所选数据库为空或不存在；GM 不会创建服务端数据库。请先启动最新版服务端完成初始化。");
             }
 
-            var connectionString = new SqliteConnectionStringBuilder
-            {
-                DataSource = fullPath,
-                Mode = SqliteOpenMode.ReadOnly,
-                ForeignKeys = true
-            }.ConnectionString;
+            var connectionString = isMySql
+                ? fullPath
+                : new SqliteConnectionStringBuilder
+                {
+                    DataSource = fullPath,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    ForeignKeys = true
+                }.ConnectionString;
             using (var connection = new SqliteConnection(connectionString))
             {
                 connection.Open();
@@ -68,12 +71,14 @@ namespace DfoGmTool.ServerCore.Infrastructure
                     throw new InvalidOperationException(
                         "所选数据库尚未由服务端初始化（schema version 为 0）。");
                 }
-                if (version < MinimumSupportedVersion)
+                // MySQL and SQLite have independent migration number spaces. For
+                // MySQL, the concrete table/column contract below is authoritative.
+                if (!isMySql && version < MinimumSupportedVersion)
                 {
                     throw new InvalidOperationException(
                         $"数据库 schema v{version} 过旧；当前 GM 仅支持 v{MinimumSupportedVersion}。请先用最新版服务端升级数据库。");
                 }
-                if (version > MaximumSupportedVersion)
+                if (!isMySql && version > MaximumSupportedVersion)
                 {
                     throw new InvalidOperationException(
                         $"数据库 schema v{version} 高于当前 GM 支持的 v{MaximumSupportedVersion}；请先升级 GM，禁止继续写入未知结构。");

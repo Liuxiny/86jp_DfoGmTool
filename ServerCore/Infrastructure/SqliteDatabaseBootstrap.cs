@@ -15,7 +15,8 @@ namespace DfoGmTool.ServerCore.Infrastructure
         public static string Initialize(string databasePath, string schemaFilePath)
         {
             var connectionString = BuildConnectionString(databasePath);
-            var key = Path.GetFullPath(databasePath);
+            var mysql = SqliteConnection.IsMySql(databasePath);
+            var key = mysql ? databasePath : Path.GetFullPath(databasePath);
 
             lock (InitLock)
             {
@@ -32,6 +33,8 @@ namespace DfoGmTool.ServerCore.Infrastructure
 
         public static string BuildConnectionString(string databasePath)
         {
+            if (SqliteConnection.IsMySql(databasePath))
+                return databasePath;
             return new SqliteConnectionStringBuilder
             {
                 DataSource = databasePath,
@@ -46,6 +49,8 @@ namespace DfoGmTool.ServerCore.Infrastructure
             string databasePath,
             string schemaFilePath)
         {
+            if (SqliteConnection.IsMySql(databasePath))
+                throw new InvalidOperationException("测试数据库不能指向生产 MySQL。");
             var directory = Path.GetDirectoryName(databasePath);
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);

@@ -1,0 +1,36 @@
+[Unit]
+Description=86JP Secure GM Service
+After=network-online.target mysql.service dfo-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/dfo-gm
+EnvironmentFile=/etc/dfo-gm/dfo-gm.env
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/dfo-gm-bundle
+ExecStart=/opt/dfo-gm/DfoGmTool
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+UMask=0077
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ReadOnlyPaths=/opt/dfo-server /etc/dfo-gateway/tls
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

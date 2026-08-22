@@ -15,13 +15,18 @@
   <ItemGroup>
     <!-- PvfLib 是子目录里的独立工程, 不让本工程把它的源码再编译一遍 -->
     <Compile Remove="PvfLib\**" />
+    <Compile Remove="DesktopClient\**" />
     <Content Remove="PvfLib\**" />
+    <Content Remove="DesktopClient\**" />
+    <Content Remove="wwwroot\**" />
     <None Remove="PvfLib\**" />
+    <None Remove="DesktopClient\**" />
+    <None Remove="wwwroot\**" />
+    <Resource Remove="DesktopClient\**" />
   </ItemGroup>
   <ItemGroup>
     <!-- ServerCore\ 是服务端业务源码: 发物品/改等级等操作走服务端同一套业务代码, 代码随工具入库 -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <PackageReference Include="MySqlConnector" Version="2.4.0" />
     <ProjectReference Include="PvfLib\PvfLib.csproj" />
   </ItemGroup>
   <ItemGroup>

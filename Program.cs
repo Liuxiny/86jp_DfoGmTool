@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using DfoGmTool.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -11,6 +12,11 @@ namespace DfoGmTool
     {
         public static void Main(string[] args)
         {
+            if (Array.IndexOf(args, "--selftest-mysql-translation") >= 0)
+            {
+                Environment.Exit(SelfTests.MySqlTranslationSelfTest.Run());
+                return;
+            }
             if (Array.IndexOf(args, "--selftest-database-compatibility") >= 0)
             {
                 Environment.Exit(
@@ -60,7 +66,12 @@ namespace DfoGmTool
                 return;
             }
 
-            var accessControl = new GmAccessControl(hostConfig);
+            if (initialConfig == null || !initialConfig.IsMySql)
+            {
+                ReportStartupFailure("安全 GM 服务必须通过 DFO_GM_MYSQL_CONNECTION_STRING 连接 MySQL。");
+                return;
+            }
+            var accessControl = new GmAccessControl(initialConfig.ConnectionString);
 
             var builder = WebApplication.CreateBuilder(args);
             builder.Logging.ClearProviders();
@@ -74,7 +85,8 @@ namespace DfoGmTool
             IResult RuntimeStatus(HttpContext context)
             {
                 var authenticated = accessControl.IsAuthenticated(context);
-                var status = runtime.GetStatus(!hostConfig.AllowRemoteAccess);
+                var status = runtime.GetStatus(includeSourceDetails: false);
+                var session = accessControl.GetSession(context);
                 return Results.Json(new
                 {
                     configured = status.Configured,
@@ -87,12 +99,15 @@ namespace DfoGmTool
                     indexError = status.IndexError,
                     error = status.Error,
                     hasError = status.HasError,
-                    schemaVersion = status.SchemaVersion,
-                    minimumSupportedSchemaVersion = status.MinimumSupportedSchemaVersion,
-                    maximumSupportedSchemaVersion = status.MaximumSupportedSchemaVersion,
+                    schemaVersion = session?.Role >= 3 ? status.SchemaVersion : null,
+                    minimumSupportedSchemaVersion = session?.Role >= 3 ? (int?)status.MinimumSupportedSchemaVersion : null,
+                    maximumSupportedSchemaVersion = session?.Role >= 3 ? (int?)status.MaximumSupportedSchemaVersion : null,
                     authenticationRequired = accessControl.RequiresAuthentication,
                     authenticated,
-                    canChangeSource = !hostConfig.AllowRemoteAccess && authenticated,
+                    canChangeSource = false,
+                    accountId = session?.AccountId,
+                    accountName = session?.AccountName,
+                    role = session?.Role,
                 });
             }
 
@@ -103,30 +118,20 @@ namespace DfoGmTool
                 {
                     await next(context);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    context.Response.StatusCode = 200;
+                    context.Response.StatusCode = 500;
                     context.Response.ContentType = "application/json; charset=utf-8";
                     await context.Response.WriteAsJsonAsync(new
                     {
                         success = false,
-                        error = ex.GetBaseException().Message,
-                        where = ex.GetBaseException().StackTrace?.Split('\n')[0]?.Trim(),
+                        error = "操作失败，请稍后重试。",
                     });
                 }
             });
 
-            app.UseDefaultFiles();
-            // 本地工具禁用静态文件缓存, 避免改了前端浏览器还跑旧脚本
-            app.UseStaticFiles(new StaticFileOptions
-            {
-                OnPrepareResponse = ctx =>
-                {
-                    ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
-                    ctx.Context.Response.Headers["Pragma"] = "no-cache";
-                    ctx.Context.Response.Headers["Expires"] = "0";
-                },
-            });
+            // This deployment is API-only. The end-user surface is the native WPF
+            // executable; no browser GM page is published or served.
 
             app.Use(async (context, next) =>
             {
@@ -153,18 +158,76 @@ namespace DfoGmTool
                 await next(context);
             });
 
+            // Every account/character identifier is checked on the server. Levels 1 and 2
+            // cannot escape their own account by editing HTTP requests.
+            app.Use(async (context, next) =>
+            {
+                var path = context.Request.Path.Value ?? string.Empty;
+                if (!path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase)
+                    || path.Equals("/api/status", StringComparison.OrdinalIgnoreCase)
+                    || path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase)
+                    || path.Equals("/api/auth/logout", StringComparison.OrdinalIgnoreCase))
+                {
+                    await next(context);
+                    return;
+                }
+
+                var session = accessControl.GetSession(context);
+                if (session == null) return;
+                if (session.Role == 1 && !IsLevelOneEndpoint(context.Request.Method, path))
+                {
+                    await WriteDenied(context);
+                    return;
+                }
+
+                if (session.Role < 3)
+                {
+                    var accountMatch = Regex.Match(path, @"^/api/accounts/(?<id>\d+)(?:/|$)", RegexOptions.IgnoreCase);
+                    if (accountMatch.Success && !accessControl.CanUseAccount(session, int.Parse(accountMatch.Groups["id"].Value)))
+                    {
+                        await WriteDenied(context); return;
+                    }
+                    var characterMatch = Regex.Match(path, @"^/api/characters/(?<id>\d+)(?:/|$)", RegexOptions.IgnoreCase);
+                    if (characterMatch.Success && !accessControl.CanUseCharacter(session, int.Parse(characterMatch.Groups["id"].Value)))
+                    {
+                        await WriteDenied(context); return;
+                    }
+                    if (context.Request.Query.TryGetValue("accountId", out var queryAccount)
+                        && int.TryParse(queryAccount, out var queryAccountId)
+                        && queryAccountId != session.AccountId)
+                    {
+                        await WriteDenied(context); return;
+                    }
+                    if (path.Equals("/api/accounts/restore", StringComparison.OrdinalIgnoreCase)
+                        || path.Equals("/api/accounts/create-for-clone", StringComparison.OrdinalIgnoreCase)
+                        || path.StartsWith("/api/inventory-migration", StringComparison.OrdinalIgnoreCase)
+                        || path.StartsWith("/api/inventory-anomalies", StringComparison.OrdinalIgnoreCase)
+                        || Regex.IsMatch(path, @"^/api/characters/\d+/clone$", RegexOptions.IgnoreCase))
+                    {
+                        await WriteDenied(context); return;
+                    }
+                }
+                await next(context);
+            });
+
+            app.Use(async (context, next) =>
+            {
+                var session = accessControl.GetSession(context);
+                await next(context);
+                if (session != null && !HttpMethods.IsGet(context.Request.Method))
+                    accessControl.AuditOperation(session, context.Request.Method + " " + context.Request.Path,
+                        context.Response.StatusCode < 400, context);
+            });
+
             app.MapGet("/api/status", RuntimeStatus);
             app.MapPost("/api/auth/login", (LoginRequest body, HttpContext context) =>
-                Results.Json(accessControl.Login(context, body?.Password)));
+                Results.Json(accessControl.Login(context, body?.AccountName, body?.Password)));
             app.MapPost("/api/auth/logout", (HttpContext context) =>
             {
                 accessControl.Logout(context);
                 return Results.Json(new { success = true });
             });
-            app.MapPost("/api/environment", (RuntimeEnvironmentRequest body) =>
-                Results.Json(hostConfig.AllowRemoteAccess
-                    ? new { success = false, error = "远程访问模式下请在 config.ini 修改数据库和 PVF 路径。" }
-                    : runtime.Configure(body.DatabasePath, body.PvfPath)));
+            app.MapPost("/api/environment", () => Results.Json(new { success = false, error = "运行时数据源已锁定。" }));
 
             app.MapGet("/api/inventory-migration/status", () =>
                 WithRuntime((gm, _) => gm.GetInventoryMigrationStatus()));
@@ -173,7 +236,11 @@ namespace DfoGmTool
             app.MapPost("/api/inventory-migration/new-to-legacy", () =>
                 WithRuntime((gm, _) => gm.MigrateNewInventoryToLegacy()));
 
-            app.MapGet("/api/accounts", () => WithRuntime((gm, _) => gm.ListAccounts()));
+            app.MapGet("/api/accounts", (HttpContext context) =>
+            {
+                var session = accessControl.GetSession(context);
+                return WithRuntime((gm, _) => gm.ListAccounts(session.Role >= 3 ? -1 : session.AccountId));
+            });
             app.MapGet("/api/accounts/{id:int}/detail", (int id) => WithRuntime((gm, pvfIndex) => gm.GetAccountDetail(id, pvfIndex)));
             app.MapPost("/api/accounts/{id:int}/backup", (int id) =>
                 WithRuntime((gm, _) => gm.ExportAccountBackup(id)));
@@ -201,7 +268,11 @@ namespace DfoGmTool
                 WithRuntime((gm, _) => gm.ClearAccountCargo(id)));
             app.MapPost("/api/accounts/{id:int}/cargo/max", (int id) =>
                 WithRuntime((gm, _) => gm.MaxAccountCargo(id)));
-            app.MapGet("/api/characters", (int? accountId) => WithRuntime((gm, _) => gm.ListCharacters(accountId ?? -1)));
+            app.MapGet("/api/characters", (int? accountId, HttpContext context) =>
+            {
+                var session = accessControl.GetSession(context);
+                return WithRuntime((gm, _) => gm.ListCharacters(session.Role >= 3 ? accountId ?? -1 : session.AccountId));
+            });
             app.MapGet("/api/characters/{id:int}", (int id) => WithRuntime((gm, _) => gm.GetCharacter(id)));
             app.MapGet("/api/characters/{id:int}/items", (int id) => WithRuntime((gm, pvfIndex) => gm.ListItems(id, pvfIndex)));
             app.MapPost("/api/characters/{id:int}/mailbox/clear", (int id) =>
@@ -221,15 +292,18 @@ namespace DfoGmTool
             app.MapGet("/api/characters/{id:int}/clone-plan", (int id) => WithRuntime((gm, _) => gm.GetCharacterClonePlan(id)));
             app.MapGet("/api/characters/name-available", (string name) => WithRuntime((gm, _) => gm.CheckCharacterNameAvailable(name)));
 
-            app.MapPost("/api/characters/{id:int}/items", (int id, ItemRequest body) =>
-                WithRuntime((gm, pvfIndex) => gm.GiveItem(
-                    id,
-                    body.TemplateId,
-                    body.Count,
-                    body.Options,
-                    pvfIndex,
-                    body.RequestId,
-                    body.DeliveryMode)));
+            app.MapPost("/api/characters/{id:int}/items", (int id, ItemRequest body, HttpContext context) =>
+                WithRuntime((gm, pvfIndex) =>
+                {
+                    var session = accessControl.GetSession(context);
+                    if (session.Role == 1 && !string.Equals(pvfIndex.ResolveItemKind(body.TemplateId), "equipment", StringComparison.Ordinal))
+                        return new { success = false, error = "1 级账号仅可发送装备。" };
+                    var options = session.Role == 1
+                        ? new ServerCore.Game.Inventory.ItemGrantOptions()
+                        : body.Options;
+                    var result = gm.GiveItem(id, body.TemplateId, body.Count, options, pvfIndex, body.RequestId, body.DeliveryMode);
+                    return result;
+                }));
             app.MapPost("/api/characters/{id:int}/items/remove", (int id, ItemRequest body) =>
                 WithRuntime((gm, _) => gm.RemoveItem(id, body.TemplateId, body.Count)));
             app.MapPost("/api/characters/{id:int}/items/delete-at", (int id, DeleteAtRequest body) =>
@@ -318,21 +392,41 @@ namespace DfoGmTool
             app.MapGet("/api/items/browse", (string q, string kind, string tag, string segment, string special, int? minLevel, int? maxLevel, int? rarity, int? limit, int? offset, int? usableJob, string expiration = null) =>
                 WithRuntime((_, pvfIndex) => pvfIndex.SearchItems(q, kind, tag, segment, special, minLevel ?? 0, maxLevel ?? 0, rarity ?? -1, limit ?? 100, offset ?? 0, expiration, usableJob ?? -1)));
 
-            Console.WriteLine("GM Tool 监听: " + hostConfig.ListenUrl);
-            Console.WriteLine("配置文件: " + hostConfig.ConfigPath);
-            if (hostConfig.AllowRemoteAccess)
-                Console.WriteLine("远程模式已启用：请通过服务器 IP 和端口访问，数据库与 PVF 路径由 config.ini 锁定。");
-            else
-                Console.WriteLine("本地模式：未自动发现数据源时，请在页面选择数据库和 PVF。");
-            Console.WriteLine("注意: 服务器运行中的改动, 在线角色需要返回选角再进入才会生效。");
+            app.MapGet("/api/admin/permissions", (string q, int? limit, HttpContext context) =>
+                Results.Json(accessControl.ListPermissions(accessControl.GetSession(context), q, limit ?? 100)));
+            app.MapPost("/api/admin/permissions/{accountId:int}", (int accountId, PermissionRequest body, HttpContext context) =>
+                Results.Json(accessControl.SetPermission(accessControl.GetSession(context), accountId, body.Role, context.Connection.RemoteIpAddress?.ToString())));
+            app.MapGet("/api/admin/logs", (string category, string account, string character, string q, DateTime? from, DateTime? to, int? limit, HttpContext context) =>
+                Results.Json(accessControl.SearchLogs(accessControl.GetSession(context), category, account, character, q, from, to, limit ?? 200)));
+
+            var listenUrl = Environment.GetEnvironmentVariable("DFO_GM_LISTEN_URL") ?? "http://127.0.0.1:5051";
             try
             {
-                app.Run(hostConfig.ListenUrl);
+                app.Run(listenUrl);
             }
             catch (Exception ex)
             {
-                ReportStartupFailure("无法监听 " + hostConfig.ListenUrl + ":\r\n" + ex.GetBaseException().Message);
+                ReportStartupFailure("GM 服务监听失败：" + ex.GetBaseException().Message);
             }
+        }
+
+        private static bool IsLevelOneEndpoint(string method, string path)
+        {
+            if (HttpMethods.IsGet(method))
+                return path.Equals("/api/accounts", StringComparison.OrdinalIgnoreCase)
+                    || path.StartsWith("/api/accounts/", StringComparison.OrdinalIgnoreCase)
+                    || path.Equals("/api/characters", StringComparison.OrdinalIgnoreCase)
+                    || Regex.IsMatch(path, @"^/api/characters/\d+(?:/items(?:/\d+/grant-options)?|)?$", RegexOptions.IgnoreCase)
+                    || path.StartsWith("/api/items/", StringComparison.OrdinalIgnoreCase);
+            return HttpMethods.IsPost(method)
+                && (Regex.IsMatch(path, @"^/api/characters/\d+/items$", RegexOptions.IgnoreCase)
+                    || Regex.IsMatch(path, @"^/api/characters/\d+/cera$", RegexOptions.IgnoreCase));
+        }
+
+        private static async System.Threading.Tasks.Task WriteDenied(HttpContext context)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { success = false, error = "当前账号没有此权限。" });
         }
 
         private static void ReportStartupFailure(string error)
@@ -408,7 +502,13 @@ namespace DfoGmTool
 
     public sealed class LoginRequest
     {
+        public string AccountName { get; set; }
         public string Password { get; set; }
+    }
+
+    public sealed class PermissionRequest
+    {
+        public int Role { get; set; }
     }
 
     public sealed class CubeRequest

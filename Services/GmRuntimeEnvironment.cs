@@ -79,7 +79,10 @@ namespace DfoGmTool.Services
                     var gm = new GmService(config, pvfIndex);
 
                     Environment.SetEnvironmentVariable("PVF_ARCHIVE_PATH", config.PvfPath);
-                    Environment.SetEnvironmentVariable("INVENTORY_DATABASE_PATH", config.DatabasePath);
+                    // Never place a production connection string in a child-process-visible
+                    // path variable. Services receive it through GmConfig only.
+                    if (!config.IsMySql)
+                        Environment.SetEnvironmentVariable("INVENTORY_DATABASE_PATH", config.DatabasePath);
                     PvfArchiveAccessor.Configure(config.PvfPath);
                     PvfRuntimeCache.ResetForPvfChange();
                     GmService.ResetPvfStaticData();
@@ -117,7 +120,7 @@ namespace DfoGmTool.Services
                 errors,
                 "数据库",
                 () => databaseCompatibility =
-                    DatabaseCompatibilityGuard.Validate(config.DatabasePath));
+                    DatabaseCompatibilityGuard.Validate(config.ConnectionString));
             AddVerificationError(errors, "PVF", () => VerifyPvf(config));
             if (errors.Count > 0)
                 throw new InvalidOperationException(string.Join(Environment.NewLine, errors));
