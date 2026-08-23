@@ -37,3 +37,4 @@ Dockerfile
 DOCKER-README.md
 docker-entrypoint.sh
 my-DfoGmTool.xml
+docker-compose.yml
