@@ -10,7 +10,7 @@ namespace DfoGmTool
 {
     public static class Program
     {
-        public const string ToolVersion = "v260822";
+        public const string ToolVersion = "v260823";
 
         public static void Main(string[] args)
         {
@@ -514,3 +514,4 @@ namespace DfoGmTool
         public string ConfirmPassword { get; set; }
     }
 }
+
