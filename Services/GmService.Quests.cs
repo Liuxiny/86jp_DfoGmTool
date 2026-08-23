@@ -54,6 +54,8 @@ ORDER BY slot;";
             int questId,
             string expectedActivationId = null)
         {
+            if (questId < QuestRepository.MinimumQuestId || questId > QuestRepository.MaximumQuestId)
+                return Error("questId 必须在 1-29999 之间: " + questId);
             if (!QuestActivationId.TryParse(expectedActivationId, out var expectedActivation))
                 return Error("任务运行身份无效，请刷新任务列表后重试");
 
@@ -62,6 +64,16 @@ ORDER BY slot;";
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
+                    if (!TryValidateQuestWrite(
+                        conn,
+                        tx,
+                        characterId,
+                        questId,
+                        _pvfIndex,
+                        out _,
+                        out var validationError))
+                        return Error(validationError);
+
                     var activeQuest = QuestRepository.LoadActiveQuests(conn, tx, characterId)
                         .FirstOrDefault(quest => quest.QuestId == questId);
                     if (activeQuest == null)
@@ -650,45 +662,71 @@ ORDER BY slot;";
 
         private static bool MatchesJobTag(string tagString, int job)
         {
-            if (string.IsNullOrEmpty(tagString))
-                return false;
-
-            var normalized = tagString
-                .ToLowerInvariant()
-                .Replace("_", " ")
-                .Replace("\t", " ")
-                .Replace("\r", " ")
-                .Replace("\n", " ");
-            if (normalized.Contains("[all]", StringComparison.Ordinal))
-                return true;
-            var tokens = GetJobTags(job);
-            foreach (var token in tokens)
-            {
-                if (normalized.Contains(token, StringComparison.Ordinal))
-                    return true;
-            }
-            return false;
+            return PvfCharacterJobCatalog.Current.MatchesJobTag(tagString, job);
         }
 
-        private static string[] GetJobTags(int job)
+        // Every GM path that writes A21 quest state goes through this gate.
+        // Repository guards remain the final protocol boundary; this layer
+        // also binds the task to the selected PVF and current character.
+        private bool TryValidateQuestWrite(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            int questId,
+            PvfIndexService pvfIndex,
+            out PvfIndexService.QuestMeta meta,
+            out string error)
         {
-            switch (job)
+            meta = null;
+            error = null;
+            if (questId < QuestRepository.MinimumQuestId || questId > QuestRepository.MaximumQuestId)
             {
-                case 0: return new[] { "[swordman]" };
-                case 1: return new[] { "[fighter]" };
-                case 2: return new[] { "[gunner]" };
-                case 3: return new[] { "[mage]" };
-                case 4: return new[] { "[priest]" };
-                case 5: return new[] { "[at gunner]" };
-                case 6: return new[] { "[thief]" };
-                case 7: return new[] { "[at fighter]" };
-                case 8: return new[] { "[at mage]" };
-                case 9: return new[] { "[demonic swordman]", "[demonicswordman]" };
-                case 10: return new[] { "[creator mage]", "[creatormage]" };
-                case 11: return new[] { "[at swordman]" };
-                case 12: return new[] { "[knight]" };
-                default: return Array.Empty<string>();
+                error = "questId 必须在 1-29999 之间: " + questId;
+                return false;
             }
+
+            var index = pvfIndex ?? _pvfIndex;
+            meta = index?.GetQuestMeta(questId);
+            if (meta == null)
+            {
+                error = "当前 PVF 不存在任务: " + questId;
+                return false;
+            }
+
+            int job;
+            int grow;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT job, grow_type FROM characters WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    if (!reader.Read())
+                    {
+                        error = "角色不存在: " + characterId;
+                        return false;
+                    }
+                    job = reader.GetInt32(0);
+                    grow = reader.GetInt32(1);
+                }
+            }
+
+            if (!QuestMatchesCharacter(meta, job, grow))
+            {
+                error = "任务与当前角色职业/转职不匹配: " + questId;
+                return false;
+            }
+            return true;
+        }
+
+        private static string ResultError(object result)
+        {
+            if (result == null)
+                return "任务写入失败";
+            var property = result.GetType().GetProperty("error");
+            var value = property?.GetValue(result, null)?.ToString();
+            return string.IsNullOrWhiteSpace(value) ? "任务写入失败" : value;
         }
 
         // jcq=1: 一转任务不查growType; jcq=2: 觉醒任务只比转职位; jcq=10/20: 跳过
@@ -834,8 +872,10 @@ ORDER BY slot;";
             var all = pvfIndex.AllQuestMeta;
             if (all == null)
                 return Error("任务索引还在构建中, 稍等几秒");
+            if (questId < QuestRepository.MinimumQuestId || questId > QuestRepository.MaximumQuestId)
+                return Error("questId 必须在 1-29999 之间: " + questId);
             if (!all.ContainsKey(questId))
-                return Error("任务不存在: " + questId);
+                return Error("当前 PVF 不存在任务: " + questId);
 
             // 闭包按角色职业选前置组(组间OR只需满足一组, 补其它职业的组是多余写入)
             int chainJob = -1, chainGrow = -1;
@@ -884,6 +924,7 @@ ORDER BY slot;";
             }
 
             var completed = new List<int>();
+            var skipped = new List<object>();
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
@@ -892,8 +933,20 @@ ORDER BY slot;";
                     var cleared = QuestRepository.LoadClearedFlags(conn, tx, characterId);
                     foreach (var id in closure)
                     {
-                        if (id <= 0 || id > ushort.MaxValue)
+                        if (!TryValidateQuestWrite(
+                            conn,
+                            tx,
+                            characterId,
+                            id,
+                            pvfIndex,
+                            out _,
+                            out var validationError))
+                        {
+                            if (id == questId)
+                                return Error(validationError);
+                            skipped.Add(new { questId = id, reason = validationError });
                             continue;
+                        }
                         int flag;
                         if (cleared.TryGetValue(id, out flag) && flag != 0)
                             continue;
@@ -925,7 +978,18 @@ ORDER BY slot;";
                     growChanged |= ApplyGrowTypeFromQuest(characterId, completedMeta);
             }
 
-            return new { success = true, characterId, questId, chainSize = closure.Count, completedCount = completed.Count, completed, titlesDelivered = titles.Count, growChanged };
+            return new
+            {
+                success = true,
+                characterId,
+                questId,
+                chainSize = closure.Count,
+                completedCount = completed.Count,
+                completed,
+                skipped,
+                titlesDelivered = titles.Count,
+                growChanged,
+            };
         }
 
         // 撤销完成标记(位图逻辑), 任务可重新接取
@@ -1143,19 +1207,36 @@ ORDER BY slot;";
         // 强制完成: 从进行中移除并用服务端的位图逻辑写入已完成标记(不发奖励)
         public object ForceCompleteQuest(int characterId, int questId)
         {
-            if (questId <= 0 || questId > ushort.MaxValue)
-                return Error("questId 无效");
+            if (questId < QuestRepository.MinimumQuestId || questId > QuestRepository.MaximumQuestId)
+                return Error("questId 必须在 1-29999 之间: " + questId);
 
-            var boundQuestIds = ResolveTitleBoundQuestIds(questId);
+            var boundQuestIds = ResolveTitleBoundQuestIds(questId)
+                .Distinct()
+                .ToList();
+            if (!boundQuestIds.Contains(questId))
+                boundQuestIds.Insert(0, questId);
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
+                    var validBoundQuestIds = new List<int>();
                     foreach (var boundId in boundQuestIds)
                     {
-                        if (boundId <= 0 || boundId > ushort.MaxValue)
-                            continue;
+                        if (!TryValidateQuestWrite(
+                            conn,
+                            tx,
+                            characterId,
+                            boundId,
+                            _pvfIndex,
+                            out _,
+                            out var validationError))
+                            return Error(validationError + " (关联任务 " + boundId + ")");
+                        validBoundQuestIds.Add(boundId);
+                    }
+
+                    foreach (var boundId in boundQuestIds)
+                    {
                         using (var cmd = conn.CreateCommand())
                         {
                             cmd.Transaction = tx;
@@ -1170,6 +1251,7 @@ WHERE character_id = @cid AND quest_id = @qid;";
                         QuestRepository.MarkQuestCleared(conn, tx, characterId, (ushort)boundId, 1);
                     }
                     tx.Commit();
+                    boundQuestIds = validBoundQuestIds;
                 }
             }
 
@@ -1195,14 +1277,16 @@ WHERE character_id = @cid AND quest_id = @qid;";
                 return Error("一次最多 1000 个任务");
 
             var completed = new List<int>();
+            var skipped = new List<object>();
             foreach (var qid in questIds.Distinct())
             {
-                if (qid <= 0 || qid > ushort.MaxValue)
-                    continue;
-                ForceCompleteQuest(characterId, qid);
-                completed.Add(qid);
+                var result = ForceCompleteQuest(characterId, qid);
+                if (ResultInt(result, "success") > 0)
+                    completed.Add(qid);
+                else
+                    skipped.Add(new { questId = qid, reason = ResultError(result) });
             }
-            return new { success = true, characterId, completedCount = completed.Count };
+            return new { success = true, characterId, completedCount = completed.Count, completed, skipped };
         }
 
         public object CompleteVisibleQuestBatch(int characterId, List<int> questIds, PvfIndexService pvfIndex)
@@ -1218,20 +1302,28 @@ WHERE character_id = @cid AND quest_id = @qid;";
 
             var completed = new List<int>();
             var skippedDaily = new List<int>();
+            var skipped = new List<object>();
             foreach (var qid in questIds.Distinct())
             {
-                if (qid <= 0 || qid > ushort.MaxValue)
+                if (qid < QuestRepository.MinimumQuestId || qid > QuestRepository.MaximumQuestId)
+                {
+                    skipped.Add(new { questId = qid, reason = "questId 必须在 1-29999 之间" });
                     continue;
+                }
 
                 PvfIndexService.QuestMeta meta;
                 if (all.TryGetValue(qid, out meta) && IsDailyQuestGrade(meta.Grade))
                 {
                     skippedDaily.Add(qid);
+                    skipped.Add(new { questId = qid, reason = "每日任务不在批量完成范围内" });
                     continue;
                 }
 
-                ForceCompleteQuest(characterId, qid);
-                completed.Add(qid);
+                var result = ForceCompleteQuest(characterId, qid);
+                if (ResultInt(result, "success") > 0)
+                    completed.Add(qid);
+                else
+                    skipped.Add(new { questId = qid, reason = ResultError(result) });
             }
 
             return new
@@ -1239,6 +1331,8 @@ WHERE character_id = @cid AND quest_id = @qid;";
                 success = true,
                 characterId,
                 completedCount = completed.Count,
+                completed = completed.ToArray(),
+                skipped,
                 skippedDailyCount = skippedDaily.Count,
                 skippedDaily = skippedDaily.ToArray(),
             };
@@ -1246,8 +1340,8 @@ WHERE character_id = @cid AND quest_id = @qid;";
 
         public object MarkVisibleDailyQuestReady(int characterId, int questId, PvfIndexService pvfIndex)
         {
-            if (questId <= 0 || questId > ushort.MaxValue)
-                return Error("questId invalid");
+            if (questId < QuestRepository.MinimumQuestId || questId > QuestRepository.MaximumQuestId)
+                return Error("questId 必须在 1-29999 之间: " + questId);
 
             var all = pvfIndex.AllQuestMeta;
             if (all == null)
@@ -1266,6 +1360,16 @@ WHERE character_id = @cid AND quest_id = @qid;";
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
+                    if (!TryValidateQuestWrite(
+                        conn,
+                        tx,
+                        characterId,
+                        questId,
+                        pvfIndex,
+                        out _,
+                        out var validationError))
+                        return Error(validationError);
+
                     using (var cmd = conn.CreateCommand())
                     {
                         cmd.Transaction = tx;
@@ -1474,13 +1578,14 @@ WHERE character_id = @cid AND quest_id = @qid;";
             if (residual.Count == 0)
                 return Error("左右槽相关任务没有残留");
 
-            var completed = MarkQuestIdsCleared(characterId, residual);
+            var completed = MarkQuestIdsCleared(characterId, residual, out var skipped);
             return new
             {
                 success = true,
                 characterId,
                 completedCount = completed.Count,
                 questIds = completed.ToArray(),
+                skipped,
             };
         }
 
@@ -1559,21 +1664,27 @@ WHERE character_id = @cid AND quest_id = @qid;";
             }
             if (level < 0)
                 return Error("角色不存在: " + characterId);
-            if (level < 15)
-                return Error("角色达到 15 级后才能完成转职任务");
-            if (job == 9 || job == 10)
-                return Error(PvfIndexService.GetFrontJobLabel(job) + "没有转职/觉醒分支");
-
             var currentFirst = grow & 0xF;
             var currentSecond = (grow >> 4) & 0xF;
+            var directAwakening = currentFirst == 0
+                && pvfIndex.TryValidateJobGrowOption(job, 0, 1, out _);
+            if (level < 15 && !directAwakening)
+                return Error("角色达到 15 级后才能完成转职任务");
             var targetFirst = currentFirst;
             var selectedByUser = false;
             if (targetFirst <= 0)
             {
-                if (!firstChoice.HasValue || firstChoice.Value <= 0)
+                if (directAwakening)
+                {
+                    targetFirst = 0;
+                }
+                else if (!firstChoice.HasValue || firstChoice.Value <= 0)
                     return Error("未转职角色需要先选择目标转职");
-                targetFirst = firstChoice.Value;
-                selectedByUser = true;
+                else
+                {
+                    targetFirst = firstChoice.Value;
+                    selectedByUser = true;
+                }
             }
 
             string error;
@@ -1595,13 +1706,14 @@ WHERE character_id = @cid AND quest_id = @qid;";
             }
 
             var closure = new HashSet<int>();
-            AddProfessionQuestClosure(closure, pvfIndex, job, targetFirst, stage: 1);
+            if (targetFirst > 0)
+                AddProfessionQuestClosure(closure, pvfIndex, job, targetFirst, stage: 1);
             if (targetSecond >= 1)
                 AddProfessionQuestClosure(closure, pvfIndex, job, targetFirst, stage: 2);
             if (targetSecond >= 2)
                 AddProfessionQuestClosure(closure, pvfIndex, job, targetFirst, stage: 3);
 
-            var completed = MarkQuestIdsCleared(characterId, closure);
+            var completed = MarkQuestIdsCleared(characterId, closure, out var skipped);
 
             var changed = false;
             if (targetFirst != currentFirst || targetSecond != currentSecond)
@@ -1623,6 +1735,7 @@ WHERE character_id = @cid AND quest_id = @qid;";
                 characterId,
                 completedCount = completed.Count,
                 questIds = completed.ToArray(),
+                skipped,
                 job,
                 first = targetFirst,
                 second = targetSecond,
@@ -1681,19 +1794,33 @@ WHERE character_id = @cid AND quest_id = @qid;";
             return closure;
         }
 
-        private List<int> MarkQuestIdsCleared(int characterId, IEnumerable<int> questIds)
+        private List<int> MarkQuestIdsCleared(
+            int characterId,
+            IEnumerable<int> questIds,
+            out List<object> skipped)
         {
             var completed = new List<int>();
+            skipped = new List<object>();
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
                     var cleared = QuestRepository.LoadClearedFlags(conn, tx, characterId);
-                    foreach (var id in questIds.Distinct().OrderBy(id => id))
+                    foreach (var id in (questIds ?? Enumerable.Empty<int>()).Distinct().OrderBy(id => id))
                     {
-                        if (id <= 0 || id > ushort.MaxValue)
+                        if (!TryValidateQuestWrite(
+                            conn,
+                            tx,
+                            characterId,
+                            id,
+                            _pvfIndex,
+                            out _,
+                            out var validationError))
+                        {
+                            skipped.Add(new { questId = id, reason = validationError });
                             continue;
+                        }
                         int flag;
                         if (cleared.TryGetValue(id, out flag) && flag != 0)
                             continue;
@@ -1761,13 +1888,24 @@ WHERE character_id = @cid AND quest_id = @qid;";
                 return new { success = true, characterId, completedCount = 0, questIds = Array.Empty<int>() };
 
             var completed = new List<int>();
+            var skipped = new List<object>();
             foreach (var qid in targets)
             {
-                ForceCompleteQuest(characterId, qid);
-                completed.Add(qid);
+                var result = ForceCompleteQuest(characterId, qid);
+                if (ResultInt(result, "success") > 0)
+                    completed.Add(qid);
+                else
+                    skipped.Add(new { questId = qid, reason = ResultError(result) });
             }
 
-            return new { success = true, characterId, completedCount = completed.Count, questIds = completed.ToArray() };
+            return new
+            {
+                success = true,
+                characterId,
+                completedCount = completed.Count,
+                questIds = completed.ToArray(),
+                skipped,
+            };
         }
     }
 }

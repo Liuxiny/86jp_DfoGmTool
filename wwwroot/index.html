@@ -14,7 +14,6 @@
       <span id="status" class="status">连接中…</span>
       <button id="btn-inventory-anomalies" class="mini danger hidden" type="button">异常物品清理</button>
       <button id="btn-runtime-source" class="mini hidden" type="button">数据源</button>
-      <button id="btn-inventory-migration" class="mini danger hidden" type="button">背包数据迁移</button>
       <button id="btn-logout" class="mini hidden" type="button">退出</button>
       <div id="theme-switcher" class="theme-switcher" role="group" aria-label="界面主题">
         <button type="button" class="theme-option" data-theme-option="white"
@@ -68,26 +67,33 @@
       <label class="runtime-source-field">数据库
         <input id="runtime-database-path" type="text" autocomplete="off" spellcheck="false" placeholder="inventory.db 完整路径">
       </label>
-      <label class="runtime-source-field">PVF
+        <label class="runtime-source-field">PVF（当前 A21 PVF，迁移使用此路径）
         <input id="runtime-pvf-path" type="text" autocomplete="off" spellcheck="false" placeholder="Script.pvf 完整路径">
       </label>
-      <div class="runtime-source-actions">
-        <button id="btn-load-runtime-source" type="submit">加载</button>
-        <span id="runtime-source-state" class="hint" aria-live="polite"></span>
-      </div>
-    </form>
-  </section>
+        <div class="runtime-source-actions">
+          <button id="btn-load-runtime-source" type="submit">加载</button>
+          <span id="runtime-source-state" class="hint" aria-live="polite"></span>
+        </div>
 
-  <section id="inventory-migration-confirm" class="runtime-source-panel hidden" role="dialog" aria-modal="true" aria-labelledby="inventory-migration-confirm-direction">
-    <div class="runtime-source-dialog migration-confirm-dialog">
-      <div id="inventory-migration-confirm-direction" class="migration-direction"></div>
-      <p>该操作会合并目标侧已有数据，并在成功迁移后清除源侧对应数据。容量不足的数据会保留在源侧并生成报告。</p>
-      <div class="migration-confirm-actions">
-        <button id="btn-confirm-inventory-migration" class="danger" type="button">确认执行迁移</button>
-        <button id="btn-cancel-inventory-migration" type="button">取消</button>
-      </div>
-    </div>
-  </section>
+        <section id="a12-a21-migration" class="a12-a21-migration" aria-labelledby="a12-a21-migration-title">
+          <div class="runtime-source-title-row">
+            <h2 id="a12-a21-migration-title">S4A12 → S4A21 数据迁移</h2>
+          </div>
+          <p class="migration-warning">此操作会把上方数据库路径中的 S4A12 原文件升级为 S4A21 schema-v5，并替换原文件。请先自行备份数据库、停止游戏服务端并确保没有在线角色；预览零写入，无法安全转换的数据会跳过并写入报告。</p>
+          <label class="migration-backup-check">
+            <input id="a12-a21-user-backed-up" type="checkbox">
+            我已自行备份数据库，并确认服务端已停止、没有在线角色
+          </label>
+          <div class="runtime-source-actions">
+            <button id="btn-preview-a12-a21" class="mini" type="button">预览升级</button>
+            <button id="btn-execute-a12-a21" class="mini danger" type="button" disabled>确认并替换原文件</button>
+            <span id="a12-a21-migration-state" class="hint" aria-live="polite"></span>
+          </div>
+          <div id="a12-a21-migration-preview" class="migration-status hidden" aria-live="polite"></div>
+          <div id="a12-a21-migration-report" class="migration-report hidden" aria-live="polite"></div>
+        </section>
+      </form>
+    </section>
 
   <section id="clone-account-panel" class="runtime-source-panel hidden" aria-labelledby="clone-account-title">
     <form id="clone-account-form" class="runtime-source-dialog">
@@ -131,11 +137,10 @@
 
       <nav class="tabs">
         <button class="acc-tab tab active" data-acc-tab="currency">货币</button>
-        <button class="acc-tab tab" data-acc-tab="cube">晶块</button>
+        <button class="acc-tab tab" data-acc-tab="cube">晶块/灵魂</button>
         <button class="acc-tab tab" data-acc-tab="progress">账号进度</button>
         <button class="acc-tab tab" data-acc-tab="cargo">账号金库</button>
         <button class="acc-tab tab" data-acc-tab="backup">账号备份</button>
-        <button class="acc-tab tab" data-acc-tab="migration">背包数据迁移</button>
         <button class="acc-tab tab" data-acc-tab="anomalies">异常物品清理</button>
       </nav>
 
@@ -148,9 +153,9 @@
 
       <div id="acc-tab-cube" class="acc-tab-page hidden">
         <div class="card">
-          <div class="card-title">晶块（账号共享，角色背包 354-359 显示的就是这里的数值）</div>
+          <div class="card-title">晶块/灵魂（账号共享，角色背包对应虚拟槽显示的就是这里的数值）</div>
           <table id="cube-table">
-            <thead><tr><th>ID</th><th>名称</th><th>当前值</th><th>覆写为</th><th></th></tr></thead>
+            <thead><tr><th>类型</th><th>ID</th><th>名称</th><th>当前值</th><th>覆写为</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -189,20 +194,6 @@
             <button id="btn-restore-account-backup" class="mini danger">恢复备份</button>
           </div>
           <div id="account-backup-state" class="hint"></div>
-        </div>
-      </div>
-
-      <div id="acc-tab-migration" class="acc-tab-page hidden">
-        <div class="card inventory-migration-dialog">
-          <div class="card-title">背包数据迁移</div>
-          <p class="migration-warning">请确保游戏服务端已停止，且没有在线角色。每次迁移在一个完整事务中执行，错误会整体回滚。</p>
-          <div id="inventory-migration-status" class="migration-status" aria-live="polite">正在读取数据状态…</div>
-          <div class="migration-actions">
-            <button id="btn-migrate-legacy-new" class="danger" type="button" disabled>旧版背包升级新版背包</button>
-            <button id="btn-migrate-new-legacy" class="danger" type="button" disabled>新版背包还原旧版背包</button>
-          </div>
-          <div id="inventory-migration-progress" class="hint" aria-live="polite"></div>
-          <div id="inventory-migration-report" class="migration-report hidden"></div>
         </div>
       </div>
 

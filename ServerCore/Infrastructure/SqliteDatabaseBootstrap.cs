@@ -52,7 +52,8 @@ namespace DfoGmTool.ServerCore.Infrastructure
             var connectionString = new SqliteConnectionStringBuilder
             {
                 DataSource = databasePath,
-                ForeignKeys = true
+                ForeignKeys = true,
+                Pooling = false
             }.ConnectionString;
             using (var connection = new SqliteConnection(connectionString))
             {
@@ -61,8 +62,13 @@ namespace DfoGmTool.ServerCore.Infrastructure
                 {
                     command.CommandText = File.ReadAllText(schemaFilePath);
                     command.ExecuteNonQuery();
-                    command.CommandText =
-                        $"PRAGMA user_version = {DatabaseCompatibilityGuard.MaximumSupportedVersion};";
+                    command.CommandText = "PRAGMA user_version = 5;";
+                    command.ExecuteNonQuery();
+                    command.CommandText = @"
+INSERT OR REPLACE INTO schema_metadata
+    (singleton_id, baseline_id, schema_version, created_at, updated_at)
+VALUES
+    (1, '86jp-database-v1', 5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);";
                     command.ExecuteNonQuery();
                 }
             }

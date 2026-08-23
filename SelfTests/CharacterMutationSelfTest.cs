@@ -67,6 +67,7 @@ namespace DfoGmTool.SelfTests
                 CheckUnlockExtraEquipmentSlots(gm, tempDb);
                 CheckDungeonPermissionScope(gm, pvfIndex, tempDb);
                 CheckQuestActivationIdentity(gm, pvfIndex, tempDb);
+                CheckQuestWriteGates(gm, pvfIndex, tempDb);
                 CheckPetGrantPersistence(gm, pvfIndex, tempDb);
                 CheckAvatarMailPersistence(gm, pvfIndex, tempDb);
                 CheckNameTagGrantPersistence(gm, pvfIndex, tempDb);
@@ -135,6 +136,29 @@ namespace DfoGmTool.SelfTests
                     || string.Equals(item.TypeTag, "aurora avatar", StringComparison.OrdinalIgnoreCase))
                 && !item.RequiresConfiguration).ToArray();
             Check("PVF contains direct-grant weapon or aurora avatars", directSpecialAvatars.Length > 0);
+
+            var darkSwordmanOptions = pvfIndex.GetJobGrowOptions(9);
+            var creatorMageOptions = pvfIndex.GetJobGrowOptions(10);
+            Check("DSSwordman explicit max grow count 0 keeps direct awakening",
+                GetCollectionCount(darkSwordmanOptions, "growTypes") == 1
+                && GetCollectionCount(FindListedItem(darkSwordmanOptions, "growTypes", "value", 0), "awakenings") == 2);
+            Check("CreatorMage explicit max grow count 0 keeps direct awakening",
+                GetCollectionCount(creatorMageOptions, "growTypes") == 1
+                && GetCollectionCount(FindListedItem(creatorMageOptions, "growTypes", "value", 0), "awakenings") == 2);
+            Check("DSSwordman rejects PVF-missing first grow",
+                !pvfIndex.TryValidateJobGrowOption(9, 1, 0, out _));
+            Check("CreatorMage rejects PVF-missing first grow",
+                !pvfIndex.TryValidateJobGrowOption(10, 1, 0, out _));
+            Check("DSSwordman direct awakenings validate",
+                pvfIndex.TryValidateJobGrowOption(9, 0, 1, out _)
+                && pvfIndex.TryValidateJobGrowOption(9, 0, 2, out _)
+                && pvfIndex.ResolveJobName(9, 0x10) != null
+                && pvfIndex.ResolveJobName(9, 0x20) != null);
+            Check("CreatorMage direct awakenings validate",
+                pvfIndex.TryValidateJobGrowOption(10, 0, 1, out _)
+                && pvfIndex.TryValidateJobGrowOption(10, 0, 2, out _)
+                && pvfIndex.ResolveJobName(10, 0x10) != null
+                && pvfIndex.ResolveJobName(10, 0x20) != null);
         }
 
         private static void CheckLevelAndExperience(GmService gm, string dbPath)
@@ -244,7 +268,6 @@ namespace DfoGmTool.SelfTests
             var oldSkills = LoadInt(dbPath, "SELECT COUNT(*) FROM character_skills WHERE character_id=926014 AND skill_id=999");
             var skill33 = LoadInt(dbPath, "SELECT COUNT(*) FROM character_skills WHERE character_id=926014 AND skill_id=33");
             var skill197 = LoadInt(dbPath, "SELECT COUNT(*) FROM character_skills WHERE character_id=926014 AND skill_id=197");
-            var flag101 = LoadInt(dbPath, "SELECT COUNT(*) FROM character_invisible_falgs WHERE character_id=926014 AND slot_index=101 AND flag_value=1");
             Check("grow_type packed as first + awakening", growType == 17, "got " + growType);
             Check("old skill residue removed", oldSkills == 0, "got " + oldSkills);
             Check("grow change preserves independent PVP skill state",
@@ -252,7 +275,6 @@ namespace DfoGmTool.SelfTests
                 && LoadInt(dbPath, "SELECT COUNT(1) FROM character_pvp_skills WHERE character_id=926014 AND skill_id=5555 AND level=3") == 1);
             Check("awakening grant skill 33 exists", skill33 > 0, "got " + skill33);
             Check("awakening grant skill 197 exists", skill197 > 0, "got " + skill197);
-            Check("default promoted quest flag set", flag101 == 1, "got " + flag101);
             Check("skill points reset to full after class change",
                 GetIntProperty(gm.GetSpTp(CharacterId), "totalSp") == GetIntProperty(gm.GetSpTp(CharacterId), "remainingSp"));
 
@@ -266,6 +288,41 @@ namespace DfoGmTool.SelfTests
                 && GetIntProperty(profession, "second") >= 1);
             Check("profession quest completion preserves independent PVP skills",
                 LoadInt(dbPath, "SELECT COUNT(1) FROM character_pvp_skills WHERE character_id=926014 AND skill_id=5555 AND level=3") == 1);
+
+            gm.SetLevel(CharacterId, 75);
+            var directBase = gm.SetGrowTypeFixed(CharacterId, 9, 0, 0);
+            Check("DSSwordman accepts PVF direct-awakening base state", IsSuccess(directBase));
+            var directProfession = gm.CompleteProfessionQuests(CharacterId, pvfIndex, null);
+            var directStage1Ids = pvfIndex.AllQuestMeta.Values
+                .Where(meta => meta != null
+                    && meta.RewardChainType == 1
+                    && meta.GrowNumber > 0
+                    && (meta.TargetCharacter ?? string.Empty).Contains("[demonic swordman]", StringComparison.OrdinalIgnoreCase))
+                .Select(meta => meta.Id)
+                .Distinct()
+                .ToArray();
+            var directStage1Sql = directStage1Ids.Length == 0
+                ? 0
+                : LoadInt(dbPath, $"SELECT COUNT(*) FROM character_quest_completions WHERE character_id={CharacterId} AND quest_id IN ({string.Join(",", directStage1Ids)})");
+            Check("direct-awakening profession quests complete both PVF stages",
+                IsSuccess(directProfession)
+                && GetIntProperty(directProfession, "first") == 0
+                && GetIntProperty(directProfession, "second") == 2
+                && LoadInt(dbPath, "SELECT grow_type FROM characters WHERE character_id=926014") == 32
+                && LoadInt(dbPath, "SELECT COUNT(*) FROM character_quest_completions WHERE character_id=926014 AND quest_id=2680") == 1
+                && LoadInt(dbPath, "SELECT COUNT(*) FROM character_quest_completions WHERE character_id=926014 AND quest_id=2681") == 1);
+            Check("direct awakening does not manufacture a stage-1 quest", directStage1Sql == 0);
+            var invalidDirectFirst = gm.SetGrowTypeFixed(CharacterId, 9, 1, 0);
+            Check("DSSwordman still rejects nonexistent first grow", !IsSuccess(invalidDirectFirst));
+            var directFirst = gm.SetGrowTypeFixed(CharacterId, 9, 0, 1);
+            Check("DSSwordman writes native direct-awakening 0x10",
+                IsSuccess(directFirst)
+                && LoadInt(dbPath, "SELECT grow_type FROM characters WHERE character_id=926014") == 16);
+            var directSecond = gm.SetGrowTypeFixed(CharacterId, 9, 0, 2);
+            Check("DSSwordman writes native direct-awakening 0x20",
+                IsSuccess(directSecond)
+                && LoadInt(dbPath, "SELECT grow_type FROM characters WHERE character_id=926014") == 32);
+            gm.SetGrowTypeFixed(CharacterId, 0, 1, 1);
         }
 
         private static void CheckUnlockExtraEquipmentSlots(GmService gm, string dbPath)
@@ -315,14 +372,32 @@ WHERE character_id=926014 AND dungeon_id=60000 AND clear_state=2") == 1);
             PvfIndexService pvfIndex,
             string dbPath)
         {
-            const int questId = 65000;
+            var activationMeta = pvfIndex.AllQuestMeta.Values
+                .Where(meta => meta != null
+                    && meta.Id >= ServerCore.Game.Quests.QuestRepository.MinimumQuestId
+                    && meta.Id <= ServerCore.Game.Quests.QuestRepository.MaximumQuestId
+                    && (string.IsNullOrWhiteSpace(meta.Job)
+                        || meta.Job.Equals("[all]", StringComparison.OrdinalIgnoreCase)
+                        || meta.Job.IndexOf("[swordman]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    && (string.IsNullOrWhiteSpace(meta.TargetCharacter)
+                        || meta.TargetCharacter.IndexOf("[swordman]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    && (meta.GrowType < 0 || meta.JobChangeQuestValue == 1
+                        || meta.JobChangeQuestValue == 10 || meta.JobChangeQuestValue == 20)
+                    && gm.GetTitleBoundQuestIdsForTest(meta.Id).Length == 1)
+                .OrderBy(meta => meta.Id)
+                .FirstOrDefault();
+            Check("PVF exposes a valid quest for activation tests", activationMeta != null);
+            if (activationMeta == null)
+                return;
+
+            var questId = activationMeta.Id;
             var eventId = Guid.NewGuid();
             string firstActivation;
             using (var conn = Open(dbPath))
             using (var tx = conn.BeginTransaction())
             {
                 var activation = ServerCore.Game.Quests.QuestRepository.InsertActiveQuest(
-                    conn, tx, CharacterId, 29, questId, 7);
+                    conn, tx, CharacterId, 29, (ushort)questId, 7);
                 firstActivation = activation.ToString();
                 Check("quest repository creates a valid activation identity",
                     !string.IsNullOrWhiteSpace(firstActivation) && firstActivation.Length == 32);
@@ -366,7 +441,7 @@ WHERE character_id=926014 AND quest_id={questId};");
             {
                 Exec(conn, tx, $"DELETE FROM character_active_quests WHERE character_id=926014 AND quest_id={questId};");
                 var replacement = ServerCore.Game.Quests.QuestRepository.InsertActiveQuest(
-                    conn, tx, CharacterId, 29, questId, 4);
+                    conn, tx, CharacterId, 29, (ushort)questId, 4);
                 secondActivation = replacement.ToString();
                 Check("reactivating the same quest creates a distinct run identity",
                     secondActivation != firstActivation);
@@ -431,6 +506,108 @@ WHERE character_id=926014 AND event_id='{eventId:N}' AND event_kind='gm-selftest
                     tx.Commit();
                 }
             }
+        }
+
+        private static void CheckQuestWriteGates(
+            GmService gm,
+            PvfIndexService pvfIndex,
+            string dbPath)
+        {
+            var candidates = pvfIndex.AllQuestMeta.Values
+                .Where(meta => meta != null
+                    && meta.Id >= ServerCore.Game.Quests.QuestRepository.MinimumQuestId
+                    && meta.Id <= ServerCore.Game.Quests.QuestRepository.MaximumQuestId
+                    && (string.IsNullOrWhiteSpace(meta.Job)
+                        || meta.Job.Equals("[all]", StringComparison.OrdinalIgnoreCase)
+                        || meta.Job.IndexOf("[swordman]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    && (string.IsNullOrWhiteSpace(meta.TargetCharacter)
+                        || meta.TargetCharacter.IndexOf("[swordman]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    && (meta.GrowType < 0 || meta.JobChangeQuestValue == 1
+                        || meta.JobChangeQuestValue == 10 || meta.JobChangeQuestValue == 20)
+                    && gm.GetTitleBoundQuestIdsForTest(meta.Id).Length == 1)
+                .OrderBy(meta => meta.Id)
+                .ToArray();
+            Check("PVF exposes valid quest write candidates", candidates.Length >= 2);
+            if (candidates.Length < 2)
+                return;
+
+            var valid = candidates[0];
+            var batchValid = candidates[1];
+            var validResult = gm.ForceCompleteQuest(CharacterId, valid.Id);
+            Check("valid PVF/job quest completes", IsSuccess(validResult)
+                && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_quest_completions WHERE character_id={CharacterId} AND quest_id={valid.Id}") == 1);
+
+            var missing = gm.ForceCompleteQuest(CharacterId, 20723);
+            Check("PVF-missing quest 20723 is rejected", !IsSuccess(missing)
+                && (GetStringProperty(missing, "error") ?? string.Empty).Contains("20723", StringComparison.Ordinal)
+                && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_quest_completions WHERE character_id={CharacterId} AND quest_id=20723") == 0);
+
+            var mismatch = pvfIndex.AllQuestMeta.Values
+                .Where(meta => meta != null
+                    && meta.Id >= ServerCore.Game.Quests.QuestRepository.MinimumQuestId
+                    && meta.Id <= ServerCore.Game.Quests.QuestRepository.MaximumQuestId
+                    && meta.Id != valid.Id
+                    && meta.Id != batchValid.Id
+                    && meta.GrowType < 0
+                    && (meta.Job ?? string.Empty).IndexOf("[fighter]", StringComparison.OrdinalIgnoreCase) >= 0
+                    && (meta.Job ?? string.Empty).IndexOf("[swordman]", StringComparison.OrdinalIgnoreCase) < 0)
+                .OrderBy(meta => meta.Id)
+                .FirstOrDefault();
+            Check("PVF exposes a role-mismatched quest candidate", mismatch != null);
+            if (mismatch == null)
+                return;
+
+            var mismatchResult = gm.ForceCompleteQuest(CharacterId, mismatch.Id);
+            Check("role-mismatched quest is rejected", !IsSuccess(mismatchResult)
+                && (GetStringProperty(mismatchResult, "error") ?? string.Empty).Contains("不匹配", StringComparison.Ordinal)
+                && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_quest_completions WHERE character_id={CharacterId} AND quest_id={mismatch.Id}") == 0);
+
+            var batch = gm.CompleteQuestBatch(CharacterId, new List<int> { batchValid.Id, 20723, mismatch.Id, 30000 });
+            Check("mixed quest batch counts only valid writes", IsSuccess(batch)
+                && GetIntProperty(batch, "completedCount") == 1
+                && GetCollectionCount(batch, "skipped") == 3
+                && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_quest_completions WHERE character_id={CharacterId} AND quest_id={batchValid.Id}") == 1
+                && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_quest_completions WHERE character_id={CharacterId} AND quest_id=30000") == 0);
+
+            var activeRejected = false;
+            var completionRejected = false;
+            var valueRejected = false;
+            using (var conn = Open(dbPath))
+            using (var tx = conn.BeginTransaction())
+            {
+                try
+                {
+                    ServerCore.Game.Quests.QuestRepository.InsertActiveQuest(
+                        conn, tx, CharacterId, 29, (ushort)30000, 0);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    activeRejected = true;
+                }
+                try
+                {
+                    ServerCore.Game.Quests.QuestRepository.MarkQuestCleared(
+                        conn, tx, CharacterId, (ushort)30000, 1);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    completionRejected = true;
+                }
+                try
+                {
+                    ServerCore.Game.Quests.QuestRepository.MarkQuestCleared(
+                        conn, tx, CharacterId, (ushort)1, 256);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    valueRejected = true;
+                }
+                tx.Rollback();
+            }
+            Check("QuestRepository remains the final protocol guard",
+                activeRejected && completionRejected && valueRejected
+                && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_active_quests WHERE character_id={CharacterId} AND quest_id=30000") == 0
+                && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_quest_completions WHERE character_id={CharacterId} AND quest_id=30000") == 0);
         }
 
         private static void CheckPetGrantPersistence(GmService gm, PvfIndexService pvfIndex, string dbPath)
@@ -530,8 +707,6 @@ WHERE character_id=926014 AND event_id='{eventId:N}' AND event_kind='gm-selftest
             Check("name tag expiration is encoded in dedicated state",
                 nameTagExpire >= now + 29L * 86400L
                 && nameTagExpire <= now + 31L * 86400L);
-            Check("name tag no longer writes old equipped rows",
-                LoadInt(dbPath, $"SELECT COUNT(*) FROM character_equipped_entries WHERE character_id={CharacterId} AND slot=28") == 0);
             Check("name tag direct grant does not create mail",
                 LoadInt(dbPath, "SELECT COUNT(*) FROM mailbox_messages;") == beforeMessages);
 
@@ -647,7 +822,7 @@ WHERE character_id=926014 AND event_id='{eventId:N}' AND event_kind='gm-selftest
                 && string.Equals(GetStringProperty(firstGrant, "delivery"), "direct_premium", StringComparison.Ordinal)
                 && GetBoolProperty(firstGrant, "requiresReselect"));
             Check("account premium contract does not enter character inventory",
-                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_items WHERE character_id={CharacterId} AND item_template_id={entry.ItemCode}") == 0);
+                CountCoreItem(dbPath, CharacterId, entry.ItemCode) == 0);
             var firstExpire = LoadLong(dbPath, $"SELECT end_time FROM account_premiums WHERE account_id={AccountId} AND premium_type={entry.PremiumType};");
             Check("account premium state is activated directly",
                 firstExpire >= now + entry.DurationDays * 86400L - 5
@@ -670,8 +845,7 @@ WHERE character_id=926014 AND event_id='{eventId:N}' AND event_kind='gm-selftest
         {
             const int cubeItemId = 3033;
             var cubeBefore = LoadLong(dbPath, $"SELECT cube_black FROM accounts WHERE account_id={AccountId};");
-            var reviveBefore = LoadLong(dbPath, $@"SELECT COALESCE(MAX(stack_count), 0)
-FROM character_items WHERE character_id={CharacterId} AND list_type=0 AND slot_index=1;");
+            var reviveBefore = LoadCore(dbPath, CharacterId, 0, ReviveCoinService.WalletSlot)?.Count ?? 0;
 
             var cubeGrant = gm.GiveItem(
                 CharacterId,
@@ -695,8 +869,7 @@ FROM character_items WHERE character_id={CharacterId} AND list_type=0 AND slot_i
                 "revive-mail-926014");
             Check("revive coin mail grant succeeds", IsSuccess(reviveGrant));
             Check("revive coin wallet remains unchanged before mail claim",
-                LoadLong(dbPath, $@"SELECT COALESCE(MAX(stack_count), 0)
-FROM character_items WHERE character_id={CharacterId} AND list_type=0 AND slot_index=1;") == reviveBefore
+                (LoadCore(dbPath, CharacterId, 0, ReviveCoinService.WalletSlot)?.Count ?? 0) == reviveBefore
                 && LoadLong(dbPath, $"SELECT item_count FROM mailbox_attachments WHERE item_template_id={ReviveCoinService.ConsumableItemId} ORDER BY attachment_id DESC LIMIT 1;") == 3);
         }
 
@@ -1377,12 +1550,12 @@ VALUES({unrelatedOrphanAuditId},0,910002,'stackable',1);");
             }
             Check("unclearing a bound quest removes the titlebook item", !HasAnyTitleBookData(dbPath));
             Check("unclearing a bound quest resets achievement progress",
-                LoadInt(dbPath, "SELECT COUNT(1) FROM character_achievement_complete WHERE character_id=926014") == 0);
+                LoadInt(dbPath, "SELECT COUNT(1) FROM character_achievements WHERE character_id=926014") == 0);
         }
 
         private static bool HasAnyTitleBookData(string dbPath)
         {
-            return LoadInt(dbPath, $"SELECT COUNT(*) FROM character_new_titlebook WHERE character_id={CharacterId}") > 0;
+            return LoadInt(dbPath, $"SELECT COUNT(*) FROM character_titlebook_items WHERE character_id={CharacterId}") > 0;
         }
 
         private static void CheckCloneCharacterSlotIsolation(GmService gm, string dbPath)
@@ -1500,8 +1673,6 @@ FROM (
             var basicOnlyId = CloneForOption(gm, "clbasic", "basic");
             Check("Clone basic-only does not copy active quests",
                 basicOnlyId > 0 && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_active_quests WHERE character_id={basicOnlyId}") == 0);
-            Check("Clone basic-only does not copy cleared quest flags",
-                basicOnlyId > 0 && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_invisible_falgs WHERE character_id={basicOnlyId}") == 0);
             Check("Clone basic-only does not bypass the skills option for PVP skills",
                 basicOnlyId > 0 && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_pvp_skills WHERE character_id={basicOnlyId}") == 0);
             Check("Clone basic-only does not bypass the misc option for expert job",
@@ -1521,10 +1692,9 @@ FROM (
                 && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_pvp_skills WHERE character_id={id} AND skill_id=4343") == 1);
             CheckCloneOption(gm, dbPath, "quests", "clques", id =>
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_active_quests WHERE character_id={id} AND quest_id=42420") > 0
-                && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_invisible_falgs WHERE character_id={id} AND slot_index=2424") > 0
                 && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_quest_notify_selections WHERE character_id={id} AND quest_id=42420") == 1);
             CheckCloneOption(gm, dbPath, "titlebook", "cltitl", id =>
-                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_new_titlebook WHERE character_id={id} AND category=0 AND slot_index=42") > 0);
+                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_titlebook_items WHERE character_id={id} AND category=0 AND slot_index=42") > 0);
             CheckCloneOption(gm, dbPath, "dungeon", "cldung", id =>
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_dungeon_permissions WHERE character_id={id} AND dungeon_id=4242") > 0);
             CheckCloneOption(gm, dbPath, "daily", "cldail", id =>
@@ -1571,7 +1741,7 @@ FROM (
                 && LoadInt(dbPath, $"SELECT enchanter_endurance FROM character_expert_job WHERE character_id={id}") == 4242
                 && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_expert_job_recipes WHERE character_id={id} AND recipe_id=4242") == 1);
             CheckCloneOption(gm, dbPath, "audit", "claudi", id =>
-                LoadInt(dbPath, $"SELECT COUNT(1) FROM item_audit_log WHERE character_id={id} AND action_name='clone_option_audit'") > 0);
+                LoadInt(dbPath, $"SELECT COUNT(1) FROM inventory_audit_log WHERE character_id={id} AND action_name='clone_option_audit'") > 0);
         }
 
         private static void CheckGrantAndConfigurationSlotBounds(GmService gm, PvfIndexService pvfIndex, string dbPath)
@@ -1734,10 +1904,10 @@ BEGIN SELECT RAISE(ABORT, 'gm audit failure'); END;");
             using (var conn = Open(dbPath))
             using (var tx = conn.BeginTransaction())
             {
-                Exec(conn, tx, "DELETE FROM character_new_items WHERE character_id=926014 AND list_type=0 AND slot_index BETWEEN 9 AND 64;");
-                Exec(conn, tx, "DELETE FROM character_new_items WHERE character_id=926014 AND list_type=3 AND slot_index IN (21,22);");
-                Exec(conn, tx, "DELETE FROM character_new_items WHERE character_id=926014 AND list_type=2 AND slot_index IN (7,8);");
-                Exec(conn, tx, "DELETE FROM account_cargo_new_items WHERE account_id=926014 AND slot_index IN (0,1);");
+                Exec(conn, tx, "DELETE FROM character_inventory_items WHERE character_id=926014 AND list_type=0 AND slot_index BETWEEN 9 AND 64;");
+                Exec(conn, tx, "DELETE FROM character_inventory_items WHERE character_id=926014 AND list_type=3 AND slot_index IN (21,22);");
+                Exec(conn, tx, "DELETE FROM character_inventory_items WHERE character_id=926014 AND list_type=2 AND slot_index IN (7,8);");
+                Exec(conn, tx, "DELETE FROM account_inventory_items WHERE account_id=926014 AND slot_index IN (0,1);");
                 Exec(conn, tx, "UPDATE character_container_state SET list_param16=24 WHERE character_id=926014 AND list_type=0;");
                 Exec(conn, tx, "UPDATE characters SET ex_equip_slot_stat=7 WHERE character_id=926014;");
                 tx.Commit();
@@ -1860,7 +2030,6 @@ VALUES(926014,'clone-activation','clone-event','clone-kind');");
                 Exec(conn, tx, @"INSERT OR REPLACE INTO character_active_quests
 (character_id,slot,quest_id,trigger_value,activation_id)
 VALUES(926014,44,42420,7,'clone-active-quest');");
-                Exec(conn, tx, "INSERT OR REPLACE INTO character_invisible_falgs(character_id, slot_index, flag_value) VALUES(926014, 2424, 1);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_quest_notify_selections(character_id,slot_index,quest_id) VALUES(926014,0,42420);");
                 SeedNewTitleBookItem(conn, tx, 0, 42, 904242);
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_dungeon_permissions(character_id, sort_order, dungeon_id, clear_state) VALUES(926014, 42, 4242, 4);");
@@ -1881,7 +2050,7 @@ VALUES(926014,44,42420,7,'clone-active-quest');");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_creatures(character_id, sort_order, creature_key, field04) VALUES(926014, 77, 424277, 1);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_item_locks(character_id, equipment_lock_id, inventory_list_type, slot, state) VALUES(926014, 4242, 0, 9, 1);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_item_values(character_id, list_kind, sort_order, item_id, value) VALUES(926014, 'clone_option', 1, 4242, 9);");
-                Exec(conn, tx, "INSERT INTO item_audit_log(owner_scope, owner_id, character_id, action_name, list_type, slot_index, item_template_id, delta_stack_count, payload_json) VALUES('character', 926014, 926014, 'clone_option_audit', 0, 0, 4242, 1, '{}');");
+                Exec(conn, tx, "INSERT INTO inventory_audit_log(owner_scope, owner_id, character_id, account_id, action_name, list_type, slot_index, item_id, item_kind, count_delta, payload_json) VALUES('character', 926014, 926014, 926014, 'clone_option_audit', 0, 0, 4242, 1, 1, '{}');");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,0,24);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,1,0);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,2,8);");
@@ -1933,9 +2102,9 @@ VALUES(926014,44,42420,7,'clone-active-quest');");
             {
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
-INSERT OR REPLACE INTO character_new_items
-    (owner_scope, owner_id, character_id, list_type, slot_index, item_core)
-VALUES ('character', 926014, 926014, @list, @slot, @core);";
+INSERT OR REPLACE INTO character_inventory_items
+    (character_id, list_type, slot_index, item_core)
+VALUES (926014, @list, @slot, @core);";
                 cmd.Parameters.AddWithValue("@list", listType);
                 cmd.Parameters.AddWithValue("@slot", slot);
                 cmd.Parameters.AddWithValue("@core", core.ToBytes());
@@ -1952,9 +2121,9 @@ VALUES ('character', 926014, 926014, @list, @slot, @core);";
             core.InstanceValue = 10000;
             using var command = conn.CreateCommand();
             command.Transaction = tx;
-            command.CommandText = @"INSERT INTO account_cargo_new_items
-(account_id,character_id,list_type,slot_index,item_core)
-VALUES(926014,926014,12,@slot,@core);";
+            command.CommandText = @"INSERT INTO account_inventory_items
+(account_id,slot_index,item_core)
+VALUES(926014,@slot,@core);";
             command.Parameters.AddWithValue("@slot", slot);
             command.Parameters.AddWithValue("@core", core.ToBytes());
             command.ExecuteNonQuery();
@@ -1965,7 +2134,7 @@ VALUES(926014,926014,12,@slot,@core);";
             var core = ItemCore.Create(ItemCore.KindEquipment, itemId);
             using var command = conn.CreateCommand();
             command.Transaction = tx;
-            command.CommandText = "INSERT OR REPLACE INTO character_new_titlebook(character_id,category,slot_index,item_core) VALUES(926014,@category,@slot,@core);";
+            command.CommandText = "INSERT OR REPLACE INTO character_titlebook_items(character_id,category,slot_index,item_core) VALUES(926014,@category,@slot,@core);";
             command.Parameters.AddWithValue("@category", category);
             command.Parameters.AddWithValue("@slot", slot);
             command.Parameters.AddWithValue("@core", core.ToBytes());
@@ -2015,8 +2184,8 @@ VALUES(824246,824245,0,910000,'stackable',7);");
             if (characterDump == null)
                 return;
 
-            Check("current account backup uses version 2", exported.Version == 2);
-            Check("account backup captures v52 account lottery progress",
+            Check("current account backup uses version 3", exported.Version == 3);
+            Check("account backup captures A21 account lottery progress",
                 exported.Tables.Any(t => t.Name.Equals("account_increase_chance_lottery_progress", StringComparison.OrdinalIgnoreCase)));
             Check("account backup captures mailbox relation graph",
                 new[]
@@ -2041,25 +2210,31 @@ VALUES(824246,824245,0,910000,'stackable',7);");
             RemoveBackupColumn(activeQuestDump, "activation_id");
             RemoveBackupColumn(questInboxDump, "activation_id");
 
-            var rejectedV2 = gm.RestoreAccountBackup(exported);
-            Check("v2 backup missing activation_id is rejected before restore",
-                !IsSuccess(rejectedV2)
-                && GetStringProperty(rejectedV2, "error").Contains("activation_id", StringComparison.Ordinal));
-            Check("rejected v2 backup leaves source account intact",
+            var rejectedV3 = gm.RestoreAccountBackup(exported);
+            Check("v3 backup missing activation_id is rejected before restore",
+                !IsSuccess(rejectedV3)
+                && GetStringProperty(rejectedV3, "error").Contains("activation_id", StringComparison.Ordinal));
+            Check("rejected v3 backup leaves source account intact",
                 LoadInt(dbPath, "SELECT COUNT(1) FROM characters WHERE account_id=926014") == 2);
 
-            RemoveBackupColumn(characterDump, "slot_index");
+            exported.Version = 2;
+            var rejectedV2 = gm.RestoreAccountBackup(exported);
+            Check("v2 S4A12 backup is rejected before restore",
+                !IsSuccess(rejectedV2)
+                && GetStringProperty(rejectedV2, "error").Contains("v3", StringComparison.Ordinal));
             exported.Version = 1;
+            var rejectedV1 = gm.RestoreAccountBackup(exported);
+            Check("v1 S4A12 backup is rejected before restore",
+                !IsSuccess(rejectedV1)
+                && GetStringProperty(rejectedV1, "error").Contains("v3", StringComparison.Ordinal));
+            Check("rejected v1/v2 backups leave source account intact",
+                LoadInt(dbPath, "SELECT COUNT(1) FROM characters WHERE account_id=926014") == 2);
 
-            exported.Tables.Add(new AccountBackupTableDump
-            {
-                Name = "account_character_entries",
-                Columns = new List<string> { "name" },
-                Rows = new List<List<AccountBackupValue>>
-                {
-                    new List<AccountBackupValue> { new AccountBackupValue { Type = "text", Text = "deprecated-roster-cache" } },
-                },
-            });
+            var currentBackup = gm.ExportAccountBackup(AccountId) as AccountBackupFile;
+            Check("re-export current account backup uses version 3", currentBackup != null && currentBackup.Version == 3);
+            if (currentBackup == null)
+                return;
+            exported = currentBackup;
 
             using (var conn = Open(dbPath))
             using (var tx = conn.BeginTransaction())
@@ -2094,10 +2269,10 @@ WHERE audit_id=824245;");
             }
 
             var restored = gm.RestoreAccountBackup(exported);
-            Check("RestoreAccountBackup accepts legacy backup without slot_index", IsSuccess(restored));
-            Check("account restore reports v1 to v2 upgrade",
-                GetIntProperty(restored, "sourceBackupVersion") == 1
-                && GetIntProperty(restored, "upgradedFromVersion") == 1);
+            Check("RestoreAccountBackup accepts current A21 v3 backup", IsSuccess(restored));
+            Check("account restore reports v3 without legacy upgrade",
+                GetIntProperty(restored, "sourceBackupVersion") == 3
+                && GetIntProperty(restored, "upgradedFromVersion") == 0);
             Check("account restore remaps conflicting avatar logical UIDs",
                 GetIntProperty(restored, "remappedAvatarUidCount") > 0
                 && (LoadCore(dbPath, CharacterId, 1, 1)?.Value ?? 0) != 424201
@@ -2106,7 +2281,7 @@ WHERE audit_id=824245;");
                 GetIntProperty(restored, "remappedCreatureUidCount") > 0
                 && (LoadCore(dbPath, CharacterId, 7, 0)?.Value ?? 0) != 424277
                 && LoadInt(dbPath, $"SELECT COUNT(*) FROM character_creatures WHERE character_id={CharacterId} AND creature_key={(LoadCore(dbPath, CharacterId, 7, 0)?.Value ?? 0)}") == 1);
-            Check("legacy account restore rebuilds unique character slots",
+            Check("A21 account restore rebuilds unique character slots",
                 LoadInt(dbPath, @"
 SELECT COUNT(1)
 FROM (
@@ -2116,19 +2291,19 @@ FROM (
     GROUP BY slot_index
     HAVING COUNT(1) > 1
 );") == 0);
-            Check("legacy account restore assigns compact slots",
-                LoadInt(dbPath, "SELECT COUNT(1) FROM characters WHERE account_id=926014 AND character_id IN (926014, 926016) AND slot_index IN (0, 1)") == 2);
-            Check("legacy account restore synthesizes v52 activation IDs",
+            Check("A21 account restore preserves source slots",
+                LoadInt(dbPath, "SELECT COUNT(1) FROM characters WHERE account_id=926014 AND character_id IN (926014, 926016) AND slot_index IN (0, 8)") == 2);
+            Check("A21 account restore preserves activation IDs",
                 LoadInt(dbPath, @"SELECT COUNT(1) FROM character_active_quests
-WHERE character_id=926014 AND quest_id=42420 AND activation_id LIKE 'legacy-active-%'") == 1
+WHERE character_id=926014 AND quest_id=42420 AND activation_id='clone-active-quest'") == 1
                 && LoadInt(dbPath, @"SELECT COUNT(1) FROM quest_progress_event_inbox
-WHERE character_id=926014 AND event_id='clone-event' AND activation_id LIKE 'legacy-inbox-%'") == 1);
-            Check("account restore preserves v52 skill quest daily and expert tables",
+WHERE character_id=926014 AND event_id='clone-event' AND activation_id='clone-activation'") == 1);
+            Check("account restore preserves A21 skill quest daily and expert tables",
                 LoadInt(dbPath, "SELECT COUNT(1) FROM character_pvp_skills WHERE character_id=926014 AND skill_id=4343") == 1
                 && LoadInt(dbPath, "SELECT COUNT(1) FROM character_quest_notify_selections WHERE character_id=926014 AND quest_id=42420") == 1
                 && LoadInt(dbPath, "SELECT COUNT(1) FROM character_daily_challenge_claims WHERE character_id=926014 AND group_index=4") == 1
                 && LoadInt(dbPath, "SELECT COUNT(1) FROM character_expert_job WHERE character_id=926014 AND enchanter_endurance=4242") == 1);
-            Check("account restore preserves v52 account lottery progress",
+            Check("account restore preserves A21 account lottery progress",
                 LoadInt(dbPath, @"SELECT COUNT(1) FROM account_increase_chance_lottery_progress
 WHERE account_id=926014 AND item_template_id=424242 AND reward_index=3") == 1);
             Check("account restore preserves mercenary reward item relations",
@@ -2197,7 +2372,7 @@ VALUES(926015, 926014, 'character-delete-seed-fallback', 0, 0, 1, 0);");
                 Exec(conn, tx, "UPDATE get_userinfo_template SET seed_character_id = 926014 WHERE id = 1;");
                 Exec(conn, tx, @"INSERT OR REPLACE INTO character_avatar_detail
 (item_uid,owner_id,character_id,item_id,jewel_socket) VALUES(92926014,926014,926014,930001,zeroblob(30));");
-                Exec(conn, tx, @"INSERT INTO inventory_audit_log_v2
+                Exec(conn, tx, @"INSERT INTO inventory_audit_log
 (owner_scope,owner_id,character_id,account_id,action_name,payload_json)
 VALUES('character',926014,926014,926014,'delete-cleanup-selftest','{}');");
                 tx.Commit();
@@ -2243,8 +2418,8 @@ WHERE character_id=926014;");
                 LoadInt(dbPath, "SELECT COUNT(1) FROM characters WHERE character_id=926015 AND delete_flag=0") == 1);
             Check("delete removes avatar detail rows",
                 LoadInt(dbPath, "SELECT COUNT(1) FROM character_avatar_detail WHERE character_id=926014 OR owner_id=926014") == 0);
-            Check("delete removes inventory audit v2 rows",
-                LoadInt(dbPath, "SELECT COUNT(1) FROM inventory_audit_log_v2 WHERE character_id=926014 OR (owner_scope='character' AND owner_id=926014)") == 0);
+            Check("delete removes inventory audit rows",
+                LoadInt(dbPath, "SELECT COUNT(1) FROM inventory_audit_log WHERE character_id=926014 OR (owner_scope='character' AND owner_id=926014)") == 0);
             Check("delete removes dungeon effect outbox rows",
                 LoadInt(dbPath, "SELECT COUNT(1) FROM dungeon_persistent_effect_outbox WHERE character_id=926014") == 0);
             Check("delete removes mercenary reward outbox rows",
@@ -2314,7 +2489,7 @@ VALUES({characterId}, {AccountId}, 'delivery-mode-selftest', 0, 0, 60, 0, 0, 0, 
             using var cmd = conn.CreateCommand();
             cmd.CommandText = @"
 SELECT list_type, slot_index, item_core
-FROM character_new_items
+FROM character_inventory_items
 WHERE character_id=@cid;";
             cmd.Parameters.AddWithValue("@cid", characterId);
             using var reader = cmd.ExecuteReader();
@@ -2352,9 +2527,9 @@ WHERE character_id=@cid;";
                     using var command = conn.CreateCommand();
                     command.Transaction = tx;
                     command.CommandText = @"
-INSERT OR REPLACE INTO character_new_items
-    (owner_scope, owner_id, character_id, list_type, slot_index, item_core)
-VALUES ('character', @owner, @owner, 0, @slot, @core);";
+INSERT OR REPLACE INTO character_inventory_items
+    (character_id, list_type, slot_index, item_core)
+VALUES (@owner, 0, @slot, @core);";
                     command.Parameters.AddWithValue("@owner", characterId);
                     command.Parameters.AddWithValue("@slot", slot);
                     command.Parameters.AddWithValue("@core", core.ToBytes());
@@ -2370,7 +2545,7 @@ VALUES ('character', @owner, @owner, 0, @slot, @core);";
             using (var tx = conn.BeginTransaction())
             {
                 Exec(conn, tx, $@"
-DELETE FROM character_new_items
+DELETE FROM character_inventory_items
 WHERE character_id={characterId} AND list_type=0
   AND slot_index BETWEEN {start} AND {end};");
                 tx.Commit();
@@ -2401,8 +2576,8 @@ WHERE message_id IN (SELECT message_id FROM mailbox_messages WHERE receiver_char
                 Exec(conn, tx, $"DELETE FROM mailbox_messages WHERE receiver_character_id={characterId};");
                 Exec(conn, tx, $"DELETE FROM character_avatar_detail WHERE character_id={characterId} OR owner_id={characterId};");
                 Exec(conn, tx, $"DELETE FROM character_creatures WHERE character_id={characterId};");
-                Exec(conn, tx, $"DELETE FROM inventory_audit_log_v2 WHERE character_id={characterId} OR (owner_scope='character' AND owner_id={characterId});");
-                Exec(conn, tx, $"DELETE FROM character_new_items WHERE character_id={characterId};");
+                Exec(conn, tx, $"DELETE FROM inventory_audit_log WHERE character_id={characterId} OR (owner_scope='character' AND owner_id={characterId});");
+                Exec(conn, tx, $"DELETE FROM character_inventory_items WHERE character_id={characterId};");
                 Exec(conn, tx, $"DELETE FROM character_container_state WHERE character_id={characterId};");
                 Exec(conn, tx, $"DELETE FROM characters WHERE character_id={characterId};");
                 tx.Commit();
@@ -2435,47 +2610,15 @@ INSERT INTO character_skills(character_id, page_index, slot, skill_id, level) VA
         {
             foreach (var root in EnumerateSearchRoots())
             {
-                foreach (var path in EnumerateServerPvfCandidates(root))
-                {
-                    if (File.Exists(path))
-                        return path;
-                }
-
-                var candidates = new[]
-                {
-                    Path.Combine(root, "Codes", "ServerS4A12_260716", "Server", "DfoServer", "bin", "Debug", "Data", "Pvf", "Script.pvf"),
-                    Path.Combine(root, "Codes", "ServerS4A12_260716", "Server", "DfoServer", "Data", "Pvf", "Script.pvf"),
-                    Path.Combine(root, "Codes", "ServerS4A12_260716", "dist", "linux-x64", "Data", "Pvf", "Script.pvf"),
-                    Path.Combine(root, "Codes", "ServerS4A12_260714", "Server", "DfoServer", "bin", "Debug", "Data", "Pvf", "Script.pvf"),
-                    Path.Combine(root, "Codes", "ServerS4A12_260714", "Server", "DfoServer", "Data", "Pvf", "Script.pvf"),
-                    Path.Combine(root, "Codes", "ServerS4A12_260714", "dist", "linux-x64", "Data", "Pvf", "Script.pvf"),
-                    Path.Combine(root, "ServerS4A12_260714", "Server", "DfoServer", "bin", "Debug", "Data", "Pvf", "Script.pvf"),
-                    Path.Combine(root, "ServerS4A12_260714", "Server", "DfoServer", "Data", "Pvf", "Script.pvf"),
-                    Path.Combine(root, "ServerS4A12_260714", "dist", "linux-x64", "Data", "Pvf", "Script.pvf"),
-                };
-                foreach (var path in candidates)
-                {
-                    if (File.Exists(path))
-                        return path;
-                }
-            }
-            return null;
-        }
-
-        private static IEnumerable<string> EnumerateServerPvfCandidates(string root)
-        {
-            var baseDirs = new[]
-            {
-                root,
-                Path.Combine(root, "Codes"),
-            };
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var baseDir in baseDirs)
-            {
-                if (!Directory.Exists(baseDir))
+                var codesRoot = Path.Combine(root, "Codes");
+                if (!Directory.Exists(codesRoot))
                     continue;
 
-                foreach (var serverDir in Directory.GetDirectories(baseDir, "ServerS4A12_*")
+                var exact = Path.Combine(codesRoot, "ServerS4A21_git", "Server", "DfoServer", "Data", "Pvf", "Script.pvf");
+                if (File.Exists(exact))
+                    return exact;
+
+                foreach (var serverDir in Directory.GetDirectories(codesRoot, "ServerS4A21_*")
                     .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
                 {
                     foreach (var path in new[]
@@ -2487,11 +2630,12 @@ INSERT INTO character_skills(character_id, page_index, slot, skill_id, level) VA
                         Path.Combine(serverDir, "Server", "DfoServer", "Data", "Pvf", "Script.pvf"),
                     })
                     {
-                        if (seen.Add(path))
-                            yield return path;
+                        if (File.Exists(path))
+                            return path;
                     }
                 }
             }
+            return null;
         }
 
         private static string[] EnumerateSearchRoots()
@@ -2564,7 +2708,7 @@ INSERT INTO character_skills(character_id, page_index, slot, skill_id, level) VA
         {
             using var conn = Open(dbPath);
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"SELECT item_core FROM character_new_items
+            cmd.CommandText = @"SELECT item_core FROM character_inventory_items
 WHERE character_id=@cid AND list_type=@list AND slot_index=@slot LIMIT 1;";
             cmd.Parameters.AddWithValue("@cid", characterId);
             cmd.Parameters.AddWithValue("@list", listType);
@@ -2577,7 +2721,7 @@ WHERE character_id=@cid AND list_type=@list AND slot_index=@slot LIMIT 1;";
         {
             using var conn = Open(dbPath);
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT item_core FROM character_new_items WHERE character_id=@cid"
+            cmd.CommandText = "SELECT item_core FROM character_inventory_items WHERE character_id=@cid"
                 + (listType.HasValue ? " AND list_type=@list" : string.Empty) + ";";
             cmd.Parameters.AddWithValue("@cid", characterId);
             if (listType.HasValue) cmd.Parameters.AddWithValue("@list", listType.Value);
@@ -2595,7 +2739,7 @@ WHERE character_id=@cid AND list_type=@list AND slot_index=@slot LIMIT 1;";
         {
             using var conn = Open(dbPath);
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT item_core FROM character_new_items WHERE character_id=@cid"
+            cmd.CommandText = "SELECT item_core FROM character_inventory_items WHERE character_id=@cid"
                 + (listType.HasValue ? " AND list_type=@list" : string.Empty) + ";";
             cmd.Parameters.AddWithValue("@cid", characterId);
             if (listType.HasValue) cmd.Parameters.AddWithValue("@list", listType.Value);
@@ -2638,6 +2782,16 @@ WHERE item_template_id=@item ORDER BY attachment_id DESC LIMIT 1;";
                 return 0;
             var prop = value.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
             return prop == null ? 0 : Convert.ToInt32(prop.GetValue(value));
+        }
+
+        private static int GetCollectionCount(object value, string propertyName)
+        {
+            if (value == null)
+                return 0;
+            var prop = value.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            return prop?.GetValue(value) is System.Collections.ICollection collection
+                ? collection.Count
+                : 0;
         }
 
         private static int GetListedItemCount(object value, int listType, int slot)

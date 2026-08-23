@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
-using System.Threading;
+using DfoGmTool.ServerCore.Game.Characters;
 using GmPvfLib;
 
 namespace DfoGmTool.Services
@@ -11,86 +10,63 @@ namespace DfoGmTool.Services
     {
         private sealed class JobNameInfo
         {
+            public string Token = "";
             public string BaseName = "";
             public List<string> GrowTypeNames = new List<string>();
             public Dictionary<int, List<string>> AwakeningNames = new Dictionary<int, List<string>>();
         }
 
-        private static readonly string[] FrontJobLabels =
-        {
-            "鬼剑士",
-            "格斗家",
-            "神枪手",
-            "魔法师",
-            "圣职者",
-            "女神枪手",
-            "暗夜使者",
-            "男格斗家",
-            "男魔法师",
-            "黑暗武士",
-            "缔造者",
-            "女鬼剑士",
-            "守护者",
-        };
-
-        private static bool IsFixedFrontJob(int job)
-        {
-            return job >= 0 && job < FrontJobLabels.Length;
-        }
-
         public static string GetFrontJobLabel(int job)
         {
-            return IsFixedFrontJob(job) ? FrontJobLabels[job] : "职业" + job;
-        }
-
-        private static bool HasNoGrowType(int job)
-        {
-            return job == 9 || job == 10;
+            return PvfCharacterJobCatalog.Current.GetLabel(job) ?? "职业" + job;
         }
 
         public string ResolveJobName(int job, int growType)
         {
-            if (IsFixedFrontJob(job) && HasNoGrowType(job))
-                return GetFrontJobLabel(job);
-
             var jobs = _jobNames;
             if (jobs == null || !jobs.TryGetValue(job, out var info))
-                return IsFixedFrontJob(job) ? GetFrontJobLabel(job) : null;
-
-            if (growType == 0 && IsFixedFrontJob(job))
-                return GetFrontJobLabel(job);
+                return null;
 
             var first = growType & 0xF;
             var second = (growType >> 4) & 0xF;
 
-            if (second > 0 && first > 0 && info.AwakeningNames.TryGetValue(first, out var awakenings)
-                && second <= awakenings.Count)
-                return awakenings[second - 1];
+            if (second > 0)
+            {
+                var awakenings = ValidAwakeningNames(info, first);
+                if (second <= awakenings.Length)
+                    return awakenings[second - 1];
+            }
 
             if (first > 0 && first <= info.GrowTypeNames.Count)
                 return info.GrowTypeNames[first - 1];
 
-            return info.BaseName.Length > 0 ? info.BaseName : null;
+            return info.BaseName.Length > 0 ? info.BaseName : info.Token;
         }
 
         public object GetJobGrowOptions(int job)
         {
-            if (IsFixedFrontJob(job) && HasNoGrowType(job))
-                return new { baseName = GetFrontJobLabel(job), growTypes = new object[0] };
-
             var jobs = _jobNames;
             JobNameInfo info = null;
             if (jobs != null)
                 jobs.TryGetValue(job, out info);
             if (info == null)
-                return new { baseName = IsFixedFrontJob(job) ? GetFrontJobLabel(job) : (string)null, growTypes = new object[0] };
+                return new { baseName = (string)null, growTypes = new object[0] };
 
             var growTypes = new List<object>();
+            var directAwakenings = ValidAwakeningNames(info, 0);
+            if (directAwakenings.Length > 0)
+            {
+                growTypes.Add(new
+                {
+                    value = 0,
+                    label = info.BaseName.Length > 0 ? info.BaseName : info.Token,
+                    awakenings = directAwakenings,
+                });
+            }
+
             for (var i = 0; i < info.GrowTypeNames.Count; i++)
             {
                 if (IsPlaceholderGrowName(info.GrowTypeNames[i]))
-                    continue;
-                if (!HasGrowTypeQuestStage(job, i + 1, stage: 1))
                     continue;
 
                 List<string> awakenings;
@@ -105,7 +81,7 @@ namespace DfoGmTool.Services
                 });
             }
 
-            return new { baseName = IsFixedFrontJob(job) ? GetFrontJobLabel(job) : info.BaseName, growTypes = growTypes.ToArray() };
+            return new { baseName = info.BaseName.Length > 0 ? info.BaseName : info.Token, growTypes = growTypes.ToArray() };
         }
 
         public bool TryValidateJobGrowOption(int job, int first, int second, out string error)
@@ -121,19 +97,6 @@ namespace DfoGmTool.Services
                 error = "转职/觉醒范围必须为 0-15";
                 return false;
             }
-            if (second > 0 && first == 0)
-            {
-                error = "未转职不能设置觉醒";
-                return false;
-            }
-
-            if (HasNoGrowType(job) && (first != 0 || second != 0))
-            {
-                error = GetFrontJobLabel(job) + "没有转职/觉醒分支";
-                return false;
-            }
-            if (IsFixedFrontJob(job) && first == 0 && second == 0)
-                return true;
 
             var jobs = _jobNames;
             JobNameInfo info = null;
@@ -144,21 +107,30 @@ namespace DfoGmTool.Services
             }
 
             if (first == 0)
-                return true;
+            {
+                if (second == 0)
+                    return true;
+
+                var directAwakenings = ValidAwakeningNames(info, 0);
+                if (second <= directAwakenings.Length)
+                    return true;
+
+                error = directAwakenings.Length == 0
+                    ? "未转职不能设置觉醒"
+                    : "PVF 中找不到该觉醒: job=" + job + ", first=0, second=" + second;
+                return false;
+            }
 
             if (first > info.GrowTypeNames.Count
                 || IsPlaceholderGrowName(info.GrowTypeNames[first - 1])
-                || !HasGrowTypeQuestStage(job, first, stage: 1))
+                )
             {
                 error = "PVF 中找不到该转职: job=" + job + ", first=" + first;
                 return false;
             }
 
-            List<string> awakenings;
             if (second > 0
-                && (!info.AwakeningNames.TryGetValue(first, out awakenings)
-                    || second > awakenings.Count
-                    || IsPlaceholderGrowName(awakenings[second - 1])))
+                && (ValidAwakeningNames(info, first).Length < second))
             {
                 error = "PVF 中找不到该觉醒: job=" + job + ", first=" + first + ", second=" + second;
                 return false;
@@ -195,7 +167,16 @@ namespace DfoGmTool.Services
                 || normalized == "？？";
         }
 
-        private static bool QuestMatchesJobGrow(QuestMeta meta, int job, int growType)
+        private static string[] ValidAwakeningNames(JobNameInfo info, int first)
+        {
+            if (info == null
+                || !info.AwakeningNames.TryGetValue(first, out var names)
+                || names == null)
+                return Array.Empty<string>();
+            return names.Where(name => !IsPlaceholderGrowName(name)).ToArray();
+        }
+
+        private bool QuestMatchesJobGrow(QuestMeta meta, int job, int growType)
         {
             if (!string.IsNullOrEmpty(meta.TargetCharacter) && !MatchesJobTag(meta.TargetCharacter, job))
                 return false;
@@ -217,54 +198,22 @@ namespace DfoGmTool.Services
             return true;
         }
 
-        private static bool MatchesJobTag(string tagString, int job)
+        private bool MatchesJobTag(string tagString, int job)
         {
-            if (string.IsNullOrEmpty(tagString))
-                return false;
-            var normalized = tagString
-                .ToLowerInvariant()
-                .Replace("_", " ")
-                .Replace("\t", " ")
-                .Replace("\r", " ")
-                .Replace("\n", " ");
-            if (normalized.Contains("[all]", StringComparison.Ordinal))
-                return true;
-            foreach (var token in GetJobTags(job))
-            {
-                if (normalized.Contains(token, StringComparison.Ordinal))
-                    return true;
-            }
-            return false;
-        }
-
-        private static string[] GetJobTags(int job)
-        {
-            switch (job)
-            {
-                case 0: return new[] { "[swordman]" };
-                case 1: return new[] { "[fighter]" };
-                case 2: return new[] { "[gunner]" };
-                case 3: return new[] { "[mage]" };
-                case 4: return new[] { "[priest]" };
-                case 5: return new[] { "[at gunner]" };
-                case 6: return new[] { "[thief]" };
-                case 7: return new[] { "[at fighter]" };
-                case 8: return new[] { "[at mage]" };
-                case 9: return new[] { "[demonic swordman]", "[demonicswordman]" };
-                case 10: return new[] { "[creator mage]", "[creatormage]" };
-                case 11: return new[] { "[at swordman]" };
-                case 12: return new[] { "[knight]" };
-                default: return Array.Empty<string>();
-            }
+            return PvfCharacterJobCatalog.Current.MatchesJobTag(tagString, job);
         }
 
         public object[] GetAllJobOptions()
         {
-            return FrontJobLabels
-                .Select((label, value) => (object)new
+            var jobs = _jobNames;
+            if (jobs == null)
+                return Array.Empty<object>();
+            return jobs.OrderBy(pair => pair.Key)
+                .Select(pair => (object)new
                 {
-                    value,
-                    label,
+                    value = pair.Key,
+                    label = pair.Value.BaseName.Length > 0 ? pair.Value.BaseName : pair.Value.Token,
+                    token = pair.Value.Token,
                 })
                 .ToArray();
         }
@@ -272,89 +221,20 @@ namespace DfoGmTool.Services
         private Dictionary<int, JobNameInfo> BuildJobNames(PvfArchive archive)
         {
             var result = new Dictionary<int, JobNameInfo>();
-            string lst;
-            try
+            foreach (var pair in PvfCharacterJobCatalog.Current.Jobs)
             {
-                lst = archive.GetFileContent("character/character.lst");
-            }
-            catch
-            {
-                return result;
-            }
-
-            if (string.IsNullOrEmpty(lst))
-                return result;
-
-            foreach (Match match in LstPattern.Matches(lst))
-            {
-                int jobId;
-                if (!int.TryParse(match.Groups[1].Value, out jobId))
-                    continue;
-
-                try
+                var source = pair.Value;
+                result[pair.Key] = new JobNameInfo
                 {
-                    var text = archive.GetFileContent("character/" + match.Groups[2].Value.Replace('\\', '/'));
-                    if (!string.IsNullOrEmpty(text))
-                        result[jobId] = ParseJobNames(text);
-                }
-                catch
-                {
-                    Interlocked.Increment(ref _parseFailures);
-                }
+                    Token = source.Token ?? "",
+                    BaseName = source.BaseName ?? "",
+                    GrowTypeNames = new List<string>(source.GrowTypeNames),
+                    AwakeningNames = source.AwakeningNames.ToDictionary(
+                        item => item.Key,
+                        item => new List<string>(item.Value)),
+                };
             }
-
             return result;
-        }
-
-        private static JobNameInfo ParseJobNames(string text)
-        {
-            var info = new JobNameInfo();
-
-            var growNameMatch = Regex.Match(text, @"\[growtype name\]\s*(.+?)(?:\r?\n)", RegexOptions.IgnoreCase);
-            if (growNameMatch.Success)
-            {
-                var names = BacktickPattern.Matches(growNameMatch.Groups[1].Value);
-                if (names.Count > 0)
-                    info.BaseName = names[0].Groups[1].Value;
-                for (var i = 1; i < names.Count; i++)
-                    info.GrowTypeNames.Add(names[i].Groups[1].Value);
-            }
-
-            for (var growType = 1; growType <= 6; growType++)
-            {
-                var section = growType + 1;
-                var sectionStart = text.IndexOf("[growtype " + section + "]", StringComparison.OrdinalIgnoreCase);
-                if (sectionStart < 0)
-                    continue;
-
-                var sectionEnd = text.Length;
-                for (var next = section + 1; next <= 8; next++)
-                {
-                    var nextPos = text.IndexOf("[growtype " + next + "]", sectionStart + 1, StringComparison.OrdinalIgnoreCase);
-                    if (nextPos >= 0)
-                    {
-                        sectionEnd = nextPos;
-                        break;
-                    }
-                }
-
-                var motionPos = text.IndexOf("[waiting motion]", sectionStart + 1, StringComparison.OrdinalIgnoreCase);
-                if (motionPos >= 0 && motionPos < sectionEnd)
-                    sectionEnd = motionPos;
-
-                var sectionText = text.Substring(sectionStart, sectionEnd - sectionStart);
-                var awakeningMatch = Regex.Match(sectionText, @"\[awakening name\]\s*(.+?)(?:\r?\n)", RegexOptions.IgnoreCase);
-                if (awakeningMatch.Success)
-                {
-                    var list = new List<string>();
-                    foreach (Match name in BacktickPattern.Matches(awakeningMatch.Groups[1].Value))
-                        list.Add(name.Groups[1].Value);
-                    if (list.Count > 0)
-                        info.AwakeningNames[growType] = list;
-                }
-            }
-
-            return info;
         }
     }
 }

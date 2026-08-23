@@ -12,6 +12,7 @@ namespace DfoGmTool.ServerCore.GameWorld
         internal static void ResetForPvfChange()
         {
             CharacterStatComputer.ResetForPvfChange();
+            PvfCharacterJobCatalog.ResetForPvfChange();
             ExpTableProvider.ResetForPvfChange();
             InitialCharacterSkills.ResetForPvfChange();
             ItemMetadataResolver.ResetForPvfChange();

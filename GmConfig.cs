@@ -57,7 +57,7 @@ namespace DfoGmTool
             // 从工作目录和程序目录向上找同级的服务端仓库
             foreach (var root in EnumerateSearchRoots())
             {
-                candidates.Add(Path.Combine(root, "ServerS4A12", "Server", "DfoServer", "bin", "Debug"));
+                candidates.Add(Path.Combine(root, "ServerS4A21_git", "Server", "DfoServer", "bin", "Debug"));
             }
 
             foreach (var candidate in candidates)

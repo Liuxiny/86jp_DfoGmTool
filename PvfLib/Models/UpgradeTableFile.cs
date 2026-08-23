@@ -7,7 +7,7 @@ namespace GmPvfLib
 {
     public sealed class UpgradeTableFile : PvfModelBase
     {
-        private const int UpgradeRowValueCount = 17;
+        private const int UpgradeRowValueCount = 19;
 
         public List<UpgradeTableDefinition> Tables { get; set; } = new List<UpgradeTableDefinition>();
         public int NoticeLevel { get; set; } = -1;
@@ -424,12 +424,12 @@ namespace GmPvfLib
 
         public int TargetLevel => RowIndex + 1;
         public double BaseGrowValue => GetValue(0);
-        public int FailureWeight => GetInt(6);
+        public int FailureWeight => GetInt(7);
         public int DerivedSuccessWeight => Math.Max(0, 100000 - FailureWeight);
-        public int PenaltyType => GetInt(7);
-        public int PenaltyValue => GetInt(8);
-        public int MaterialItemId => GetInt(9);
-        public int MaterialCount => GetInt(10);
+        public int PenaltyType => GetInt(8);
+        public int PenaltyValue => GetInt(9);
+        public int MaterialItemId => GetInt(10);
+        public int MaterialCount => GetInt(11);
 
         public double GetValue(int index)
         {

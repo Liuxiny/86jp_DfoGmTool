@@ -177,6 +177,7 @@ namespace GmPvfLib
         public string ItemGroupName { get; set; }
         public string ItemCategory { get; set; }
         public int StackLimit { get; set; } = -1;
+        public int TotalUsableCount { get; set; } = -1;
 
         #endregion
 
@@ -213,6 +214,9 @@ namespace GmPvfLib
         public int ExpirationDate { get; set; } = -1;
         public int UsablePeriod { get; set; } = -1;
         public int TradeLimit { get; set; } = -1;
+        public string DailyPurchaseLimitScope { get; set; }
+        public int DailyPurchaseLimitCount { get; set; } = -1;
+        public bool ResetDailyPurchaseItem { get; set; }
         public int PortableDisjoint { get; set; } = -1;
         public string ExpertJobOnlyType { get; set; }
         public int ExpertJobOnlyLevel { get; set; } = -1;
@@ -234,6 +238,7 @@ namespace GmPvfLib
         public UpgradeLimitCubeInfo UpgradeLimitCube { get; set; }
         public EquipmentUpgradeTicketInfo EquipmentReinforcementTicket { get; set; }
         public EquipmentUpgradeTicketInfo EquipmentAmplifyReinforcementTicket { get; set; }
+        public EquipmentUpgradeTicketInfo EquipmentSeparateReinforcementTicket { get; set; }
         public EnchantRandomUpgradeInfo EnchantRandomUpgrade { get; set; }
         public List<AmplificationRandomValueEntry> AmplificationRandomValues { get; set; } = new List<AmplificationRandomValueEntry>();
         public List<int> CheckUsableItemLevels { get; set; } = new List<int>();
@@ -290,6 +295,7 @@ namespace GmPvfLib
         public int PhysicalDefense { get; set; }
         public int MagicalDefense { get; set; }
         public List<StackableStatusIncreaseEntry> StatusIncreases { get; set; } = new List<StackableStatusIncreaseEntry>();
+        public List<StackableStatusIncreaseEntry> GuardianGemEnchantEntries { get; set; } = new List<StackableStatusIncreaseEntry>();
 
         #endregion
         #region 解析
@@ -329,6 +335,7 @@ namespace GmPvfLib
                     case "item group name": stk.ItemGroupName = StripBacktick(data); break;
                     case "item category": stk.ItemCategory = StripBacktick(data); break;
                     case "stack limit": stk.StackLimit = ParseInt(data); break;
+                    case "total usable count": stk.TotalUsableCount = ParseInt(data); break;
 
                     
                     case "price": stk.Price = ParseInt(data); break;
@@ -365,6 +372,8 @@ namespace GmPvfLib
                     case "expiration date": stk.ExpirationDate = ParseInt(data); break;
                     case "usable period": stk.UsablePeriod = ParseInt(data); break;
                     case "trade limit max": stk.TradeLimit = ParseInt(data); break;
+                    case "daily purchase limit": ParseDailyPurchaseLimit(node, content, stk); break;
+                    case "reset daily purchase item": stk.ResetDailyPurchaseItem = true; break;
                     case "portable disjoint": stk.PortableDisjoint = ParseInt(data); break;
                     case "expertjob only": ParseExpertJobOnly(node, content, stk); break;
                     case "alchemist extraction": stk.AlchemistExtractionIndex = ParseInt(data); break;
@@ -380,6 +389,8 @@ namespace GmPvfLib
                     case "upgrade limit cube info": stk.UpgradeLimitCube = ParseUpgradeLimitCubeInfo(node, content); break;
                     case "equipment reinforcement ticket": stk.EquipmentReinforcementTicket = ParseUpgradeTicket(node, content); break;
                     case "equipment amplify reinforcement ticket": stk.EquipmentAmplifyReinforcementTicket = ParseUpgradeTicket(node, content); break;
+                    case "equipment separate reinforcement ticket": stk.EquipmentSeparateReinforcementTicket = ParseUpgradeTicket(node, content); break;
+                    case "enchant": stk.GuardianGemEnchantEntries.AddRange(ParseGuardianGemEnchantEntries(node, content)); break;
                     case "enchant random": stk.EnchantRandomUpgrade = ParseEnchantRandomUpgrade(node, content); break;
                     case "amplification random value": stk.AmplificationRandomValues = ParseAmplificationRandomValues(node, content); break;
                     case "check usable itemlevel": stk.CheckUsableItemLevels = ParseIntList(node, content); break;
@@ -472,6 +483,59 @@ namespace GmPvfLib
             return result;
         }
 
+        private static List<StackableStatusIncreaseEntry> ParseGuardianGemEnchantEntries(
+            ScriptNode node,
+            string content)
+        {
+            var result = new List<StackableStatusIncreaseEntry>();
+            if (node == null || node.Children == null)
+                return result;
+
+            foreach (var child in node.Children)
+            {
+                var effectType = NormalizeGuardianGemEffectType(child.Tag);
+                if (string.IsNullOrWhiteSpace(effectType))
+                    continue;
+
+                result.Add(new StackableStatusIncreaseEntry
+                {
+                    EffectType = effectType,
+                    Values = ParseIntList(child, content),
+                });
+            }
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content);
+                var match = Regex.Match(
+                    raw ?? string.Empty,
+                    @"^\s*`?\[(?<type>[^\]\r\n]+)\]`?(?<values>(?:\s+-?\d+)*)\s*$");
+                if (!match.Success)
+                    continue;
+
+                var effectType = NormalizeGuardianGemEffectType(match.Groups["type"].Value);
+                if (string.IsNullOrWhiteSpace(effectType))
+                    continue;
+
+                result.Add(new StackableStatusIncreaseEntry
+                {
+                    EffectType = effectType,
+                    Values = ParseInts(match.Groups["values"].Value),
+                });
+            }
+
+            return result;
+        }
+
+        private static string NormalizeGuardianGemEffectType(string text)
+        {
+            var value = StripBacktick(text ?? string.Empty).Trim();
+            if (value.Length >= 2 && value[0] == '[' && value[value.Length - 1] == ']')
+                value = value.Substring(1, value.Length - 2).Trim();
+
+            return value;
+        }
+
         private static List<BoosterRewardEntry> ParseBoosterInfo(ScriptNode node, string content)
         {
             var rewards = new List<BoosterRewardEntry>();
@@ -554,7 +618,7 @@ namespace GmPvfLib
             // [upgradable legacy] pots store rewards as itemId/weight/count triples in [int data].
             for (var i = 0; i + 2 < ints.Count; i += 3)
             {
-                if (ints[i] <= 0)
+                if (ints[i] < 0)
                     continue;
 
                 rewards.Add(new BoosterRewardEntry
@@ -577,7 +641,7 @@ namespace GmPvfLib
             // [legacy] pots store rewards as itemId/weight pairs in [int data].
             for (var i = 0; i + 1 < ints.Count; i += 2)
             {
-                if (ints[i] <= 0)
+                if (ints[i] < 0)
                     continue;
 
                 rewards.Add(new BoosterRewardEntry
@@ -990,6 +1054,20 @@ namespace GmPvfLib
                 item.ExpertJobOnlyType = typeMatch.Groups[1].Value.Trim();
             if (values.Count > 0)
                 item.ExpertJobOnlyLevel = values[0];
+        }
+
+        private static void ParseDailyPurchaseLimit(ScriptNode node, string content, StackableItemFile item)
+        {
+            if (node == null || item == null)
+                return;
+
+            var raw = node.GetFirstDataContent(content);
+            var scopeMatch = Regex.Match(raw ?? string.Empty, "`([^`]*)`");
+            var values = ParseInts(raw);
+            if (scopeMatch.Success)
+                item.DailyPurchaseLimitScope = scopeMatch.Groups[1].Value.Trim();
+            if (values.Count > 0)
+                item.DailyPurchaseLimitCount = values[0];
         }
 
         private static List<AvatarSelectAbilityChangeEntry> ParseAvatarSelectAbilityChanges(

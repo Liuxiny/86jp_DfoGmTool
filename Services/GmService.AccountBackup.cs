@@ -11,8 +11,7 @@ namespace DfoGmTool.Services
 {
     public sealed partial class GmService
     {
-        private const int AccountBackupVersion = 2;
-        private const int MinimumAccountBackupVersion = 1;
+        private const int AccountBackupVersion = 3;
 
         private static readonly Regex AccountBackupIdentifier = new Regex(
             @"\A[A-Za-z_][A-Za-z0-9_]*\z",
@@ -25,7 +24,7 @@ namespace DfoGmTool.Services
             "account_premiums",
             "account_increase_chance_lottery_progress",
             "account_cargo_state",
-            "account_cargo_new_items",
+            "account_inventory_items",
             "characters",
             "character_subtype1_fields",
             "character_subtype0_fields",
@@ -33,23 +32,20 @@ namespace DfoGmTool.Services
             "character_pvp_skill_state",
             "character_pvp_skills",
             "character_dark_knight_combo_skill_pages",
-            "character_init_bodies",
             "character_init_flags",
-            "character_invisible_falgs",
             "character_dungeon_permissions",
             "character_container_state",
             "character_creatures",
             "character_avatar_detail",
-            "character_new_items",
+            "character_inventory_items",
             "character_name_tag_state",
             "character_item_values",
             "character_item_locks",
-            "character_sort_item_locks",
             "character_hotkey_slots",
             "character_active_quests",
             "character_quest_notify_selections",
-            "character_achievement_complete",
-            "character_new_titlebook",
+            "character_achievements",
+            "character_titlebook_items",
             "character_daily_reset",
             "character_daily_counters",
             "character_daily_challenge_groups",
@@ -57,7 +53,6 @@ namespace DfoGmTool.Services
             "character_daily_challenge_tail_ids",
             "character_daily_schedule_states",
             "character_buy_restrict_items",
-            "character_pet_welcome_cache",
             "character_rental_items",
             "character_crystal_contract",
             "character_growth_weapon_stages",
@@ -76,27 +71,19 @@ namespace DfoGmTool.Services
             "account_mercenary_assignments",
             "mercenary_reward_outbox",
             "mercenary_reward_items",
-            "item_audit_log",
+            "inventory_audit_log",
             "account_character_entries",
         };
 
         private static readonly Dictionary<string, HashSet<string>> AccountBackupRestoreExcludedColumns =
             new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
             {
-                ["character_new_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
-                ["account_cargo_new_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
-                ["item_audit_log"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id", "log_id", "item_uid" },
-                ["inventory_audit_log_v2"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id" },
+                ["character_inventory_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
+                ["account_inventory_items"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "item_uid" },
+                ["inventory_audit_log"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_id" },
                 ["mailbox_recipients"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "recipient_id" },
                 ["mailbox_attachments"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "attachment_id" },
                 ["mailbox_system_mail_audit_attachments"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "audit_attachment_id" },
-            };
-
-        private static readonly HashSet<string> AccountBackupLegacyInventoryTables =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "character_items", "character_equipped_entries", "equipped_items",
-                "account_cargo_items", "character_titlebook", "character_achievement_chunks",
             };
 
         private static readonly HashSet<string> AccountBackupDeprecatedOptionalTables =
@@ -160,17 +147,6 @@ namespace DfoGmTool.Services
             if (validation != null)
                 return Error(validation);
             var sourceBackupVersion = file.Version;
-            if (sourceBackupVersion == 1)
-            {
-                try
-                {
-                    UpgradeAccountBackupV1ToV2(file);
-                }
-                catch (InvalidOperationException ex)
-                {
-                    return Error("备份 v1 升级失败: " + ex.Message);
-                }
-            }
 
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {
@@ -198,8 +174,6 @@ namespace DfoGmTool.Services
                     var restorableDumps = new List<AccountBackupTableDump>();
                     foreach (var dump in file.Tables)
                     {
-                        if (AccountBackupLegacyInventoryTables.Contains(dump.Name))
-                            return Error("备份包含旧版背包表，当前版本仅支持新版背包备份: " + dump.Name);
                         if (!schemaTables.TryGetValue(dump.Name, out var targetTable))
                         {
                             if (AccountBackupDeprecatedOptionalTables.Contains(dump.Name))
@@ -212,6 +186,10 @@ namespace DfoGmTool.Services
                         var requiredColumnError = ValidateAccountBackupRequiredColumns(dump, targetTable);
                         if (requiredColumnError != null)
                             return Error(requiredColumnError);
+
+                        var itemCoreError = ValidateAccountBackupItemCore(dump);
+                        if (itemCoreError != null)
+                            return Error(itemCoreError);
 
                         foreach (var column in dump.Columns)
                         {
@@ -258,7 +236,7 @@ namespace DfoGmTool.Services
                         RemappedAvatarUidCount = remappedAvatarUidCount,
                         RemappedCreatureUidCount = remappedCreatureUidCount,
                         SourceBackupVersion = sourceBackupVersion,
-                        UpgradedFromVersion = sourceBackupVersion < AccountBackupVersion ? sourceBackupVersion : 0,
+                        UpgradedFromVersion = 0,
                         RemappedMailboxMessageIdCount = remappedMailboxMessageIdCount,
                         RemappedMailboxAuditIdCount = remappedMailboxAuditIdCount,
                     };
@@ -270,8 +248,8 @@ namespace DfoGmTool.Services
         {
             if (file == null)
                 return "备份文件为空";
-            if (file.Version < MinimumAccountBackupVersion || file.Version > AccountBackupVersion)
-                return "不支持的备份文件版本: " + file.Version;
+            if (file.Version != AccountBackupVersion)
+                return "不支持的备份文件版本: " + file.Version + "；当前仅接受 A21 备份 v3";
             if (file.AccountID <= 0)
                 return "备份文件中的账号 ID 无效";
             if (file.CharacterIDs == null)
@@ -316,72 +294,47 @@ namespace DfoGmTool.Services
                 && targetTable.Columns.ContainsKey("activation_id")
                 && !dump.Columns.Any(column => column.Equals("activation_id", StringComparison.OrdinalIgnoreCase)))
             {
-                return "备份表 " + dump.Name + " 缺少 v52 必需列 activation_id";
+                return "备份表 " + dump.Name + " 缺少当前结构必需列 activation_id";
             }
 
             return null;
         }
 
-        private static void UpgradeAccountBackupV1ToV2(AccountBackupFile file)
+        private static string ValidateAccountBackupItemCore(AccountBackupTableDump dump)
         {
-            foreach (var dump in file.Tables)
+            if (dump == null)
+                return null;
+            var coreIndex = dump.Columns.FindIndex(column =>
+                column.Equals("item_core", StringComparison.OrdinalIgnoreCase));
+            if (coreIndex < 0)
+                return null;
+
+            var allowsNull = dump.Name.Equals("mailbox_attachments", StringComparison.OrdinalIgnoreCase);
+            for (var rowIndex = 0; rowIndex < dump.Rows.Count; rowIndex++)
             {
-                if (dump.Name.Equals("character_active_quests", StringComparison.OrdinalIgnoreCase))
+                var row = dump.Rows[rowIndex];
+                if (row.Count != dump.Columns.Count)
+                    continue;
+                object value;
+                try
                 {
-                    AddLegacyActivationColumn(
-                        dump,
-                        row => "legacy-active-" + ReadDumpInteger(dump, row, "character_id")
-                            + "-" + ReadDumpInteger(dump, row, "quest_id")
-                            + "-" + ReadDumpInteger(dump, row, "slot"));
+                    value = row[coreIndex].ToDbValue();
                 }
-                else if (dump.Name.Equals("quest_progress_event_inbox", StringComparison.OrdinalIgnoreCase))
+                catch (InvalidOperationException ex)
                 {
-                    AddLegacyActivationColumn(
-                        dump,
-                        row => "legacy-inbox-" + ReadDumpInteger(dump, row, "character_id")
-                            + "-" + ReadDumpText(dump, row, "event_id")
-                            + "-" + ReadDumpText(dump, row, "event_kind"));
+                    return $"备份表 {dump.Name} 第 {rowIndex + 1} 行 item_core 无效: {ex.Message}";
                 }
+
+                if (value == null || value == DBNull.Value)
+                {
+                    if (!allowsNull)
+                        return $"备份表 {dump.Name} 第 {rowIndex + 1} 行 item_core 不能为空";
+                    continue;
+                }
+                if (!(value is byte[] bytes) || bytes.Length != ItemCore.Size)
+                    return $"备份表 {dump.Name} 第 {rowIndex + 1} 行 item_core 必须为 {ItemCore.Size} 字节";
             }
-            file.Version = AccountBackupVersion;
-        }
-
-        private static void AddLegacyActivationColumn(
-            AccountBackupTableDump dump,
-            Func<List<AccountBackupValue>, string> valueFactory)
-        {
-            if (dump.Columns.Any(column => column.Equals("activation_id", StringComparison.OrdinalIgnoreCase)))
-                return;
-            var oldColumnCount = dump.Columns.Count;
-            foreach (var row in dump.Rows)
-            {
-                if (row.Count != oldColumnCount)
-                    throw new InvalidOperationException("表 " + dump.Name + " 的行列数不一致");
-                row.Add(new AccountBackupValue { Type = "text", Text = valueFactory(row) });
-            }
-            dump.Columns.Add("activation_id");
-        }
-
-        private static long ReadDumpInteger(
-            AccountBackupTableDump dump,
-            List<AccountBackupValue> row,
-            string columnName)
-        {
-            var index = dump.Columns.FindIndex(column => column.Equals(columnName, StringComparison.OrdinalIgnoreCase));
-            if (index < 0 || index >= row.Count)
-                throw new InvalidOperationException("表 " + dump.Name + " 缺少列 " + columnName);
-            return row[index].ToInt64();
-        }
-
-        private static string ReadDumpText(
-            AccountBackupTableDump dump,
-            List<AccountBackupValue> row,
-            string columnName)
-        {
-            var index = dump.Columns.FindIndex(column => column.Equals(columnName, StringComparison.OrdinalIgnoreCase));
-            if (index < 0 || index >= row.Count)
-                throw new InvalidOperationException("表 " + dump.Name + " 缺少列 " + columnName);
-            return Convert.ToString(row[index].ToDbValue(), CultureInfo.InvariantCulture) ?? string.Empty;
+            return null;
         }
 
         private static void NormalizeCharacterBackupSlotIndexes(AccountBackupTableDump dump, int slotIndex)
@@ -549,8 +502,6 @@ namespace DfoGmTool.Services
             List<int> characterIds,
             List<object> characterNames)
         {
-            if (AccountBackupLegacyInventoryTables.Contains(table.Name))
-                return null;
             var clauses = new List<string>();
             var parameters = new List<(string Name, object Value)>();
 
@@ -897,24 +848,26 @@ namespace DfoGmTool.Services
             byte itemKind,
             IReadOnlyDictionary<int, int> mapping)
         {
-            if (mapping.Count == 0 || !tableMap.TryGetValue("character_new_items", out var itemDump))
-                return;
-            var coreIndex = itemDump.Columns.FindIndex(column =>
-                column.Equals("item_core", StringComparison.OrdinalIgnoreCase));
-            if (coreIndex < 0)
+            if (mapping.Count == 0)
                 return;
 
-            foreach (var row in itemDump.Rows)
+            foreach (var itemDump in tableMap.Values.Where(dump => dump.Columns.Any(column =>
+                column.Equals("item_core", StringComparison.OrdinalIgnoreCase))))
             {
-                if (row.Count != itemDump.Columns.Count)
-                    continue;
-                if (!(row[coreIndex].ToDbValue() is byte[] bytes) || bytes.Length != ItemCore.Size)
-                    throw new InvalidOperationException("备份中的 character_new_items.item_core 长度无效");
-                var core = ItemCore.FromBytes(bytes);
-                if (core.ItemKind != itemKind || core.Value <= 0 || !mapping.TryGetValue(core.Value, out var newValue))
-                    continue;
-                core.Value = newValue;
-                row[coreIndex] = AccountBackupValue.FromDbValue(core.ToBytes());
+                var coreIndex = itemDump.Columns.FindIndex(column =>
+                    column.Equals("item_core", StringComparison.OrdinalIgnoreCase));
+                foreach (var row in itemDump.Rows)
+                {
+                    if (row.Count != itemDump.Columns.Count)
+                        continue;
+                    if (!(row[coreIndex].ToDbValue() is byte[] bytes) || bytes.Length != ItemCore.Size)
+                        continue;
+                    var core = ItemCore.FromBytes(bytes);
+                    if (core.ItemKind != itemKind || core.Value <= 0 || !mapping.TryGetValue(core.Value, out var newValue))
+                        continue;
+                    core.Value = newValue;
+                    row[coreIndex] = AccountBackupValue.FromDbValue(core.ToBytes());
+                }
             }
         }
 

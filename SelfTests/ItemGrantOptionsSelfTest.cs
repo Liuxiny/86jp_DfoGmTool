@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using DfoGmTool.ServerCore.Game.Characters;
 using DfoGmTool.ServerCore.Game.Currency;
 using DfoGmTool.ServerCore.Game.Inventory;
 using DfoGmTool.ServerCore.Game.Skills;
@@ -16,17 +17,25 @@ namespace DfoGmTool.SelfTests
             _failures = 0;
             Console.WriteLine("=== ITEM_GRANT_OPTIONS selftest ===");
 
-            CheckEquipmentCapabilities();
-            CheckEquipmentEncoding();
-            CheckEquipmentLimits();
-            CheckQualitySeeds();
-            CheckAvatarRules();
-            CheckAvatarEquipmentMetadataAdapter();
-            CheckAvatarSkillFiltering();
-            CheckAvatarExtraJson();
-            CheckAvatarDurationDeduplication();
-            CheckExpirationRules();
-            CheckCubeRoutes();
+            PvfCharacterJobCatalog.ConfigureForTests(BuildJobCatalogFixture());
+            try
+            {
+                CheckEquipmentCapabilities();
+                CheckEquipmentEncoding();
+                CheckEquipmentLimits();
+                CheckQualitySeeds();
+                CheckAvatarRules();
+                CheckAvatarEquipmentMetadataAdapter();
+                CheckAvatarSkillFiltering();
+                CheckAvatarExtraJson();
+                CheckAvatarDurationDeduplication();
+                CheckExpirationRules();
+                CheckCubeRoutes();
+            }
+            finally
+            {
+                PvfCharacterJobCatalog.ResetForPvfChange();
+            }
 
             Console.WriteLine(_failures == 0
                 ? "ItemGrantOptionsSelfTest OK"
@@ -175,6 +184,23 @@ namespace DfoGmTool.SelfTests
 
         private static void CheckAvatarRules()
         {
+            var lancer = PvfCharacterJobCatalog.Current;
+            lancer.TryGet(13, out var lancerInfo);
+            Check("PVF job13 token is dynamic", lancerInfo != null
+                && lancerInfo.Token == "demonic lancer"
+                && lancerInfo.BaseName == "魔枪士"
+                && lancerInfo.GrowTypeNames.Count == 2
+                && lancerInfo.AwakeningNames.TryGetValue(1, out var lancerFirstAwakenings)
+                && lancerFirstAwakenings.Count == 2
+                && lancerInfo.AwakeningNames.TryGetValue(2, out var lancerSecondAwakenings)
+                && lancerSecondAwakenings.Count == 2);
+            Check("PVF job13 token is usable", AvatarGrantPolicy.IsUsableByJob("[demonic lancer]", 13));
+            var lancerTags = lancer.GetJobTags(13);
+            Check("PVF job13 task tag keeps token spaces",
+                lancerTags.Length == 1 && lancerTags[0] == "[demonic lancer]");
+            Check("PVF job13 task tag matches dynamically",
+                lancer.MatchesJobTag("[demonic lancer]", 13));
+            Check("unknown PVF job token is rejected", !AvatarGrantPolicy.IsUsableByJob("[unknown job]", 13));
             Check("priest avatar accepts priest character",
                 AvatarGrantPolicy.IsUsableByJob("[priest]", 4));
             Check("priest avatar rejects swordman character",
@@ -185,6 +211,16 @@ namespace DfoGmTool.SelfTests
                 AvatarGrantPolicy.IsUsableByJob("[swordman]` `[demonic swordman]` `[at swordman]", 11));
             Check("dark knight avatar accepts demonic swordman category",
                 AvatarGrantPolicy.IsUsableByJob("[demonic swordman]", 9));
+            Check("DSSwordman fixture keeps direct awakening names",
+                lancer.TryGet(9, out var darkInfo)
+                && darkInfo.GrowTypeNames.Count == 0
+                && darkInfo.AwakeningNames.TryGetValue(0, out var darkAwakenings)
+                && darkAwakenings.Count == 2);
+            Check("CreatorMage fixture keeps direct awakening names",
+                lancer.TryGet(10, out var creatorInfo)
+                && creatorInfo.GrowTypeNames.Count == 0
+                && creatorInfo.AwakeningNames.TryGetValue(0, out var creatorAwakenings)
+                && creatorAwakenings.Count == 2);
             Check("male swordman avatar rejects dark knight",
                 !AvatarGrantPolicy.IsUsableByJob("[swordman]", 9));
             Check("male swordman avatar rejects female swordman",
@@ -281,6 +317,66 @@ namespace DfoGmTool.SelfTests
                 {
                     ItemKind = "special",
                 }));
+        }
+
+        private static IEnumerable<PvfCharacterJobCatalog.JobInfo> BuildJobCatalogFixture()
+        {
+            var labels = new[]
+            {
+                "swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief",
+                "at fighter", "at mage", "demonic swordman", "creator mage", "at swordman", "knight",
+            };
+            var names = new[]
+            {
+                "鬼剑士", "格斗家", "神枪手", "魔法师", "圣职者", "女神枪手", "暗夜使者",
+                "男格斗家", "男魔法师", "黑暗武士", "缔造者", "女鬼剑士", "守护者",
+            };
+            var result = new List<PvfCharacterJobCatalog.JobInfo>();
+            for (var id = 0; id < labels.Length; id++)
+            {
+                result.Add(new PvfCharacterJobCatalog.JobInfo
+                {
+                    Id = id,
+                    Token = labels[id],
+                    BaseName = names[id],
+                });
+            }
+
+            var darkSwordman = new PvfCharacterJobCatalog.JobInfo
+            {
+                Id = 9,
+                Token = "demonic swordman",
+                BaseName = "黑暗武士",
+                MaxGrowCount = 0,
+                HasMaxGrowCount = true,
+            };
+            darkSwordman.AwakeningNames[0] = new List<string> { "黑暗觉醒", "黑暗二觉" };
+            result[9] = darkSwordman;
+
+            var creatorMage = new PvfCharacterJobCatalog.JobInfo
+            {
+                Id = 10,
+                Token = "creator mage",
+                BaseName = "缔造者",
+                MaxGrowCount = 0,
+                HasMaxGrowCount = true,
+            };
+            creatorMage.AwakeningNames[0] = new List<string> { "创造觉醒", "创造二觉" };
+            result[10] = creatorMage;
+
+            var lancer = new PvfCharacterJobCatalog.JobInfo
+            {
+                Id = 13,
+                Token = "demonic lancer",
+                BaseName = "魔枪士",
+                MaxGrowCount = 2,
+            };
+            lancer.GrowTypeNames.Add("征战者");
+            lancer.GrowTypeNames.Add("决战者");
+            lancer.AwakeningNames[1] = new List<string> { "战魂", "不灭战神" };
+            lancer.AwakeningNames[2] = new List<string> { "无双之魂", "圣武枪魂" };
+            result.Add(lancer);
+            return result;
         }
 
         private static void CheckExpirationRules()

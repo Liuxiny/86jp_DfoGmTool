@@ -312,7 +312,7 @@ function updateAllQuestActionButtons(region) {
   for (const btn of groupButtons) btn.disabled = !currentChar || isDailyList;
   const professionBtn = $('#btn-complete-profession-quests');
   if (professionBtn && currentChar)
-    professionBtn.disabled = isDailyList || currentChar.level < 15 || currentChar.job === 9 || currentChar.job === 10;
+    professionBtn.disabled = isDailyList;
   const slotBtn = $('#btn-complete-equipment-slot-quests');
   if (slotBtn) {
     const canCompleteSlots = !!extraEquipmentSlotQuestStatus?.canComplete;
@@ -602,8 +602,6 @@ async function completeProfessionQuests(first) {
 
 async function completeProfessionQuestsButton() {
   if (!currentChar) { toast('请先选择角色', true); return; }
-  if (currentChar.level < 15) return toast('角色达到 15 级后才能完成转职任务', true);
-  if (currentChar.job === 9 || currentChar.job === 10) return toast('当前职业没有转职/觉醒分支', true);
   const currentFirst = (currentChar.growType || 0) & 0xF;
   if (currentFirst > 0) {
     if (!confirm(`按 ${currentChar.name} 当前职业和等级完成转职/觉醒任务，继续？`)) return;
@@ -624,14 +622,23 @@ async function openProfessionQuestPanel() {
   try {
     const data = await api(`/api/characters/${currentChar.characterId}/growoptions`);
     const growTypes = data.options?.growTypes || [];
-    for (const g of growTypes) {
+    const direct = growTypes.find((g) => Number(g.value) === 0
+      && Array.isArray(g.awakenings) && g.awakenings.length > 0);
+    if ((currentChar.growType || 0) % 16 === 0 && direct) {
+      closeProfessionQuestPanel();
+      if (!confirm(`按 ${currentChar.name} 当前等级完成自我觉醒任务，继续？`)) return;
+      await completeProfessionQuests(null);
+      return;
+    }
+    const selectableGrowTypes = growTypes.filter((g) => Number(g.value) > 0);
+    for (const g of selectableGrowTypes) {
       const option = document.createElement('option');
       option.value = g.value;
       option.textContent = g.label;
       select.appendChild(option);
     }
-    state.textContent = growTypes.length ? '' : '当前职业没有可用转职';
-    $('#btn-confirm-profession-quest').disabled = growTypes.length === 0;
+    state.textContent = selectableGrowTypes.length ? '' : '当前职业没有可用转职';
+    $('#btn-confirm-profession-quest').disabled = selectableGrowTypes.length === 0;
   } catch (e) {
     state.textContent = e.message;
     toast(e.message, true);

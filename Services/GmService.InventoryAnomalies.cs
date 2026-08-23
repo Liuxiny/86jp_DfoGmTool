@@ -205,12 +205,11 @@ namespace DfoGmTool.Services
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-SELECT n.item_uid, n.owner_id, n.character_id, n.list_type, n.slot_index,
+SELECT n.item_uid, n.character_id, n.character_id, n.list_type, n.slot_index,
        n.item_core, c.account_id, CAST(c.name AS BLOB)
-FROM character_new_items n
-LEFT JOIN characters c ON c.character_id=COALESCE(n.character_id, n.owner_id)
-WHERE n.owner_scope='character'
-ORDER BY n.owner_id, n.list_type, n.slot_index, n.item_uid;";
+FROM character_inventory_items n
+LEFT JOIN characters c ON c.character_id=n.character_id
+ORDER BY n.character_id, n.list_type, n.slot_index, n.item_uid;";
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -247,11 +246,10 @@ ORDER BY n.owner_id, n.list_type, n.slot_index, n.item_uid;";
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-SELECT n.item_uid, n.account_id, n.character_id, n.list_type, n.slot_index,
-       n.item_core, CAST(c.name AS BLOB)
-FROM account_cargo_new_items n
-LEFT JOIN characters c ON c.character_id=n.character_id
-ORDER BY n.account_id, n.list_type, n.slot_index, n.item_uid;";
+SELECT n.item_uid, n.account_id, 0 AS character_id, 12 AS list_type, n.slot_index,
+       n.item_core, CAST(NULL AS BLOB)
+FROM account_inventory_items n
+ORDER BY n.account_id, n.slot_index, n.item_uid;";
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -400,6 +398,7 @@ ORDER BY n.account_id, n.list_type, n.slot_index, n.item_uid;";
                 InventoryListType.Avatar => "时装",
                 InventoryListType.PersonalCargo => "个人仓库",
                 InventoryListType.Pet => "宠物",
+                InventoryListType.GuildMedal => "勋章/守护珠",
                 _ => "角色列表" + listType,
             };
         }

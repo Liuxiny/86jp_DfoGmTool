@@ -58,6 +58,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         {
             if (string.Equals(ItemKind, "equipment", StringComparison.Ordinal))
             {
+                var equipmentType = (EquipmentType ?? string.Empty).Replace("`", string.Empty).Trim();
+                if (equipmentType.StartsWith("[flag]", StringComparison.OrdinalIgnoreCase))
+                { slotStart = 0; slotEnd = 48; return; }
                 slotStart = 9; slotEnd = 64; return;
             }
             if (StackableType == null)
@@ -65,6 +68,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 slotStart = 65; slotEnd = 120; return;
             }
             var st = StackableType.Replace("`", "").Trim().ToLowerInvariant();
+            if (st.StartsWith("[flag gem]", StringComparison.OrdinalIgnoreCase))
+            { slotStart = 49; slotEnd = 97; return; }
             if (st.StartsWith("[material]"))
             {
                 if (st.EndsWith("4"))
@@ -126,6 +131,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 StackableList = CreateStackableList();
                 SellRates = CreateSellRates();
             }
+            EpicPieceService.ResetForPvfChange();
         }
 
         private static Lazy<LstFile> CreateEquipmentList()
@@ -145,6 +151,16 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         public static ItemMetadata Resolve(int itemTemplateId)
         {
+            if (EpicPieceService.IsEpicPiece(itemTemplateId))
+            {
+                return new ItemMetadata
+                {
+                    ItemKind = "epic_piece",
+                    StackLimit = int.MaxValue,
+                    PvfFilePath = "etc/epicpieceinfo.etc",
+                };
+            }
+
             var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
             if (equipmentEntry != null)
             {
@@ -233,6 +249,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 StackLimit = 1,
             };
         }
+
+        public static bool IsEpicPieceItem(int itemTemplateId)
+            => EpicPieceService.IsEpicPiece(itemTemplateId);
 
         public static LstEntry GetStackableEntry(int itemTemplateId)
         {
@@ -355,6 +374,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public static bool RequiresManualGrantType(ItemMetadata metadata)
         {
             if (metadata == null || string.Equals(metadata.ItemKind, "special", StringComparison.Ordinal))
+                return false;
+
+            if (string.Equals(metadata.ItemKind, "epic_piece", StringComparison.Ordinal))
                 return false;
 
             if (string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal))

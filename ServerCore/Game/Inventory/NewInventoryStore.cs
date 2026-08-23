@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
+using DfoGmTool.ServerCore.Game.Currency;
 using DfoGmTool.ServerCore.Infrastructure;
 using Microsoft.Data.Sqlite;
 
@@ -33,8 +34,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     }
 
     /// <summary>
-    /// GM 离线仓储。正常业务只读写新版 ItemCore 表；旧表仅由显式迁移服务访问。
-    /// 每个写操作均在一个 SQLite 事务内同时维护 core、detail、锁与 v2 审计。
+    /// GM 离线仓储。正常业务只读写 A21 ItemCore 表，数据库结构由启动门禁只读检查。
+    /// 每个写操作均在一个 SQLite 事务内同时维护 core、detail、锁与 A21 审计。
     /// </summary>
     public sealed partial class NewInventoryStore
     {
@@ -54,8 +55,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 command.CommandText = @"
 SELECT item_uid, character_id, list_type, slot_index, item_core
-FROM character_new_items
-WHERE owner_scope = 'character' AND owner_id = @cid
+FROM character_inventory_items
+WHERE character_id = @cid
 ORDER BY list_type, slot_index;";
                 command.Parameters.AddWithValue("@cid", characterId);
                 using var reader = command.ExecuteReader();
@@ -91,8 +92,8 @@ ORDER BY list_type, slot_index;";
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-SELECT item_uid, COALESCE(character_id, 0), list_type, slot_index, item_core
-FROM account_cargo_new_items
+SELECT item_uid, 0, slot_index, item_core
+FROM account_inventory_items
 WHERE account_id = @aid
 ORDER BY slot_index;";
             command.Parameters.AddWithValue("@aid", accountId);
@@ -104,9 +105,9 @@ ORDER BY slot_index;";
                     ItemUid = reader.GetInt64(0),
                     CharacterId = reader.GetInt32(1),
                     AccountId = accountId,
-                    ListType = (InventoryListType)reader.GetInt32(2),
-                    SlotIndex = checked((short)reader.GetInt32(3)),
-                    Core = ReadCore(reader, 4),
+                    ListType = InventoryListType.AccountCargo,
+                    SlotIndex = checked((short)reader.GetInt32(2)),
+                    Core = ReadCore(reader, 3),
                 });
             }
             return result;
@@ -126,16 +127,16 @@ ORDER BY slot_index;";
             if (listType == InventoryListType.AccountCargo)
             {
                 command.CommandText = @"
-SELECT item_uid, COALESCE(character_id, 0), list_type, slot_index, item_core
-FROM account_cargo_new_items WHERE account_id=@owner AND slot_index=@slot LIMIT 1;";
+SELECT item_uid, 0, slot_index, item_core
+FROM account_inventory_items WHERE account_id=@owner AND slot_index=@slot LIMIT 1;";
                 command.Parameters.AddWithValue("@owner", accountId);
             }
             else
             {
                 command.CommandText = @"
-SELECT item_uid, COALESCE(character_id, 0), list_type, slot_index, item_core
-FROM character_new_items
-WHERE owner_scope='character' AND owner_id=@owner AND list_type=@list AND slot_index=@slot LIMIT 1;";
+SELECT item_uid, character_id, list_type, slot_index, item_core
+FROM character_inventory_items
+WHERE character_id=@owner AND list_type=@list AND slot_index=@slot LIMIT 1;";
                 command.Parameters.AddWithValue("@owner", characterId);
                 command.Parameters.AddWithValue("@list", (int)listType);
             }
@@ -143,14 +144,16 @@ WHERE owner_scope='character' AND owner_id=@owner AND list_type=@list AND slot_i
             using var reader = command.ExecuteReader();
             if (!reader.Read())
                 return false;
-            var core = ReadCore(reader, 4);
+            var core = ReadCore(reader, listType == InventoryListType.AccountCargo ? 3 : 4);
             record = new NewInventoryItemRecord
             {
                 ItemUid = reader.GetInt64(0),
                 CharacterId = reader.GetInt32(1),
                 AccountId = accountId,
-                ListType = (InventoryListType)reader.GetInt32(2),
-                SlotIndex = checked((short)reader.GetInt32(3)),
+                ListType = listType == InventoryListType.AccountCargo
+                    ? InventoryListType.AccountCargo
+                    : (InventoryListType)reader.GetInt32(2),
+                SlotIndex = checked((short)reader.GetInt32(listType == InventoryListType.AccountCargo ? 2 : 3)),
                 Core = core,
             };
             reader.Close();
@@ -264,7 +267,7 @@ WHERE owner_scope='character' AND owner_id=@owner AND list_type=@list AND slot_i
             using var transaction = connection.BeginTransaction();
             if (!TryLoadItem(connection, transaction, characterId, accountId, listType, slotIndex, out var record))
                 return false;
-            if (listType == InventoryListType.Main && (slotIndex <= 2 || (slotIndex >= 354 && slotIndex <= 359)))
+            if (listType == InventoryListType.Main && (slotIndex <= 2 || CurrencyService.IsAccountWarehouseSlot(slotIndex)))
                 return false;
 
             var before = record.Core.Copy();
@@ -329,8 +332,8 @@ WHERE owner_scope='character' AND owner_id=@owner AND list_type=@list AND slot_i
             var wallet = new NewInventoryWalletSnapshot();
             using var command = connection.CreateCommand();
             command.CommandText = @"
-SELECT slot_index, item_core FROM character_new_items
-WHERE owner_scope='character' AND owner_id=@cid AND list_type=0 AND slot_index IN (0,1,2);";
+SELECT slot_index, item_core FROM character_inventory_items
+WHERE character_id=@cid AND list_type=0 AND slot_index IN (0,1,2);";
             command.Parameters.AddWithValue("@cid", characterId);
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -460,7 +463,7 @@ WHERE owner_scope='character' AND owner_id=@cid AND list_type=0 AND slot_index I
                 WriteAudit(connection, transaction, "gm_account_cargo_clear", row.CharacterId, accountId, InventoryListType.AccountCargo, row.SlotIndex, row.Core, null, row.ItemUid);
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "DELETE FROM account_cargo_new_items WHERE account_id=@aid;";
+            command.CommandText = "DELETE FROM account_inventory_items WHERE account_id=@aid;";
             command.Parameters.AddWithValue("@aid", accountId);
             var deleted = command.ExecuteNonQuery();
             transaction.Commit();
@@ -535,12 +538,16 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
         {
             return kind == ItemCore.KindConsumable || kind == ItemCore.KindMaterial || kind == ItemCore.KindQuest
                 || kind == ItemCore.KindCreatureConsumable || kind == ItemCore.KindAvatarEmblem
-                || kind == ItemCore.KindExpertJobMaterial || kind == ItemCore.KindSpecialMaterial;
+                || kind == ItemCore.KindExpertJobMaterial || kind == ItemCore.KindSpecialMaterial
+                || kind == ItemCore.KindGuardianGem;
         }
 
         internal static string GetLegacyKindLabel(byte kind)
         {
-            return kind == ItemCore.KindAvatar ? "avatar" : kind == ItemCore.KindCreature || kind == ItemCore.KindCreatureEquipment || kind == ItemCore.KindCreatureConsumable ? "pet" : kind == ItemCore.KindEquipment ? "equipment" : "stackable";
+            return kind == ItemCore.KindAvatar ? "avatar"
+                : kind == ItemCore.KindCreature || kind == ItemCore.KindCreatureEquipment || kind == ItemCore.KindCreatureConsumable ? "pet"
+                : kind == ItemCore.KindEquipment || kind == ItemCore.KindGuildMedal ? "equipment"
+                : kind == ItemCore.KindEpicPiece ? "epic_piece" : "stackable";
         }
 
         private static ItemCore CreateDefaultCore(ItemMetadata metadata, byte itemKind, int itemId, int count, ItemGrantOptions options, int expireTime, out string error)
@@ -679,7 +686,16 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
             start = end = 0;
             error = null;
             var token = (manual ?? string.Empty).Trim().ToLowerInvariant();
-            if (!string.IsNullOrEmpty(token))
+            var pvfTag = ItemMetadataResolver.ResolvePvfTypeTag(metadata);
+            var isGuildMedal = string.Equals(metadata?.ItemKind, "equipment", StringComparison.Ordinal)
+                && string.Equals(pvfTag, "flag", StringComparison.OrdinalIgnoreCase);
+            var isGuardianGem = metadata?.IsStackable == true
+                && string.Equals(pvfTag, "flag gem", StringComparison.OrdinalIgnoreCase);
+            if (isGuildMedal)
+                kind = ItemCore.KindGuildMedal;
+            else if (isGuardianGem)
+                kind = ItemCore.KindGuardianGem;
+            else if (!string.IsNullOrEmpty(token))
             {
                 switch (token)
                 {
@@ -702,6 +718,7 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
                 if (ItemMetadataResolver.IsAvatarMetadata(metadata)) kind = ItemCore.KindAvatar;
                 else if (ItemMetadataResolver.IsPetCreatureMetadata(metadata)) kind = ItemCore.KindCreature;
                 else if (ItemMetadataResolver.IsPetArtifactMetadata(metadata)) kind = ItemCore.KindCreatureEquipment;
+                else if (string.Equals(ItemMetadataResolver.ResolvePvfTypeTag(metadata), "flag", StringComparison.OrdinalIgnoreCase)) kind = ItemCore.KindGuildMedal;
                 else kind = ItemCore.KindEquipment;
             }
             else if (metadata.IsStackable)
@@ -711,6 +728,7 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
                 {
                     var tag = ItemMetadataResolver.ResolvePvfTypeTag(metadata);
                     if (tag == "avatar emblem") kind = ItemCore.KindAvatarEmblem;
+                    else if (string.Equals(tag, "flag gem", StringComparison.OrdinalIgnoreCase)) kind = ItemCore.KindGuardianGem;
                     else if (tag == "material expert job") kind = ItemCore.KindExpertJobMaterial;
                     else if (tag == "quest") kind = ItemCore.KindQuest;
                     else if (tag == "material") kind = ItemCore.KindMaterial;
@@ -747,6 +765,8 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
                 case ItemCore.KindCreature: list = InventoryListType.Pet; start = 0; end = 139; return true;
                 case ItemCore.KindCreatureEquipment: list = InventoryListType.Pet; start = 140; end = 188; return true;
                 case ItemCore.KindCreatureConsumable: list = InventoryListType.Pet; start = 189; end = 239; return true;
+                case ItemCore.KindGuildMedal: list = InventoryListType.GuildMedal; start = 0; end = 48; return true;
+                case ItemCore.KindGuardianGem: list = InventoryListType.GuildMedal; start = 49; end = 97; return true;
                 default: return false;
             }
         }
@@ -790,29 +810,15 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
             out short rangeStart,
             out short destinationSlot,
             out string error)
-            => TryFindFirstFreeCharacterBagSlot(
-                connection, transaction, characterId, kind, "character_new_items",
+            => TryFindFirstFreeCharacterBagSlotCore(
+                connection, transaction, characterId, kind,
                 out list, out rangeStart, out destinationSlot, out error);
 
-        internal static bool TryFindFirstFreeLegacyCharacterBagSlot(
+        private static bool TryFindFirstFreeCharacterBagSlotCore(
             SqliteConnection connection,
             SqliteTransaction transaction,
             int characterId,
             byte kind,
-            out InventoryListType list,
-            out short rangeStart,
-            out short destinationSlot,
-            out string error)
-            => TryFindFirstFreeCharacterBagSlot(
-                connection, transaction, characterId, kind, "character_items",
-                out list, out rangeStart, out destinationSlot, out error);
-
-        private static bool TryFindFirstFreeCharacterBagSlot(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            byte kind,
-            string itemTable,
             out InventoryListType list,
             out short rangeStart,
             out short destinationSlot,
@@ -828,9 +834,8 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
-                command.CommandText = $@"SELECT slot_index FROM {itemTable}
-WHERE owner_scope='character'
-  AND COALESCE(character_id,owner_id)=@cid
+                command.CommandText = @"SELECT slot_index FROM character_inventory_items
+WHERE character_id=@cid
   AND list_type=@list
   AND slot_index BETWEEN @start AND @end;";
                 command.Parameters.AddWithValue("@cid", characterId);
@@ -903,6 +908,13 @@ WHERE owner_scope='character'
                     if (record.Core.ItemKind == ItemCore.KindCreatureEquipment) return slot >= 140 && slot <= 188 || FailSlotValidation("宠物装备槽位不匹配", out error);
                     if (record.Core.ItemKind == ItemCore.KindCreatureConsumable) return slot >= 189 && slot <= 239 || FailSlotValidation("宠物用品槽位不匹配", out error);
                     return FailSlotValidation("宠物背包物品类型无效", out error);
+
+                case InventoryListType.GuildMedal:
+                    if (record.Core.ItemKind == ItemCore.KindGuildMedal)
+                        return slot >= 0 && slot <= 48 || FailSlotValidation("勋章槽位不匹配", out error);
+                    if (record.Core.ItemKind == ItemCore.KindGuardianGem)
+                        return slot >= 49 && slot <= 97 || FailSlotValidation("守护珠槽位不匹配", out error);
+                    return FailSlotValidation("勋章/守护珠类型无效", out error);
 
                 case InventoryListType.Equipment:
                     if (slot >= 0 && slot <= 10)
@@ -1039,8 +1051,8 @@ FROM character_avatar_detail WHERE item_uid=@uid;";
             command.Transaction = transaction;
             command.CommandText = @"
 SELECT item_uid, COALESCE(character_id,0), list_type, slot_index, item_core
-FROM character_new_items
-WHERE owner_scope='character' AND owner_id=@cid AND list_type=@list AND slot_index BETWEEN @start AND @end
+FROM character_inventory_items
+WHERE character_id=@cid AND list_type=@list AND slot_index BETWEEN @start AND @end
 ORDER BY slot_index;";
             command.Parameters.AddWithValue("@cid", characterId);
             command.Parameters.AddWithValue("@list", (int)listType);
@@ -1057,7 +1069,7 @@ ORDER BY slot_index;";
             var result = new List<NewInventoryItemRecord>();
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "SELECT item_uid, COALESCE(character_id,0), list_type, slot_index, item_core FROM character_new_items WHERE owner_scope='character' AND owner_id=@cid ORDER BY list_type,slot_index;";
+            command.CommandText = "SELECT item_uid, character_id, list_type, slot_index, item_core FROM character_inventory_items WHERE character_id=@cid ORDER BY list_type,slot_index;";
             command.Parameters.AddWithValue("@cid", characterId);
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -1084,8 +1096,8 @@ ORDER BY slot_index;";
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-INSERT INTO character_new_items(owner_scope,owner_id,character_id,list_type,slot_index,item_core)
-VALUES('character',@cid,@cid,@list,@slot,@core);
+ INSERT INTO character_inventory_items(character_id,list_type,slot_index,item_core)
+VALUES(@cid,@list,@slot,@core);
 SELECT last_insert_rowid();";
             command.Parameters.AddWithValue("@cid", characterId);
             command.Parameters.AddWithValue("@list", (int)listType);
@@ -1099,9 +1111,9 @@ SELECT last_insert_rowid();";
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-INSERT INTO character_new_items(owner_scope,owner_id,character_id,list_type,slot_index,item_core)
-VALUES('character',@cid,@cid,@list,@slot,@core)
-ON CONFLICT(owner_scope,owner_id,list_type,slot_index) DO UPDATE SET item_core=excluded.item_core, updated_at=CURRENT_TIMESTAMP;";
+ INSERT INTO character_inventory_items(character_id,list_type,slot_index,item_core)
+VALUES(@cid,@list,@slot,@core)
+ON CONFLICT(character_id,list_type,slot_index) DO UPDATE SET item_core=excluded.item_core, updated_at=CURRENT_TIMESTAMP;";
             command.Parameters.AddWithValue("@cid", characterId);
             command.Parameters.AddWithValue("@list", (int)listType);
             command.Parameters.AddWithValue("@slot", slot);
@@ -1114,8 +1126,8 @@ ON CONFLICT(owner_scope,owner_id,list_type,slot_index) DO UPDATE SET item_core=e
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = record.ListType == InventoryListType.AccountCargo
-                ? "UPDATE account_cargo_new_items SET item_core=@core,updated_at=CURRENT_TIMESTAMP WHERE item_uid=@uid;"
-                : "UPDATE character_new_items SET item_core=@core,updated_at=CURRENT_TIMESTAMP WHERE item_uid=@uid;";
+                ? "UPDATE account_inventory_items SET item_core=@core,updated_at=CURRENT_TIMESTAMP WHERE item_uid=@uid;"
+                : "UPDATE character_inventory_items SET item_core=@core,updated_at=CURRENT_TIMESTAMP WHERE item_uid=@uid;";
             command.Parameters.AddWithValue("@core", record.Core.ToBytes());
             command.Parameters.AddWithValue("@uid", record.ItemUid);
             command.ExecuteNonQuery();
@@ -1127,8 +1139,8 @@ ON CONFLICT(owner_scope,owner_id,list_type,slot_index) DO UPDATE SET item_core=e
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = record.ListType == InventoryListType.AccountCargo
-                ? "DELETE FROM account_cargo_new_items WHERE item_uid=@uid;"
-                : "DELETE FROM character_new_items WHERE item_uid=@uid;";
+                ? "DELETE FROM account_inventory_items WHERE item_uid=@uid;"
+                : "DELETE FROM character_inventory_items WHERE item_uid=@uid;";
             command.Parameters.AddWithValue("@uid", record.ItemUid);
             command.ExecuteNonQuery();
         }
@@ -1136,9 +1148,9 @@ ON CONFLICT(owner_scope,owner_id,list_type,slot_index) DO UPDATE SET item_core=e
         private static void DeleteAssociatedState(SqliteConnection connection, SqliteTransaction transaction, int characterId, ItemCore core)
         {
             if (core.ItemKind == ItemCore.KindAvatar && core.AvatarUid > 0)
-                Execute(connection, transaction, "DELETE FROM character_avatar_detail WHERE item_uid=@value AND NOT EXISTS(SELECT 1 FROM character_new_items WHERE substr(item_core,6,4)=substr(@blob,6,4));", ("@value", core.AvatarUid), ("@blob", core.ToBytes()));
+                Execute(connection, transaction, "DELETE FROM character_avatar_detail WHERE item_uid=@value AND NOT EXISTS(SELECT 1 FROM character_inventory_items WHERE substr(item_core,6,4)=substr(@blob,6,4));", ("@value", core.AvatarUid), ("@blob", core.ToBytes()));
             if (core.ItemKind == ItemCore.KindCreature && core.CreatureUid > 0)
-                Execute(connection, transaction, "DELETE FROM character_creatures WHERE character_id=@cid AND creature_key=@value AND NOT EXISTS(SELECT 1 FROM character_new_items WHERE character_id=@cid AND substr(item_core,6,4)=substr(@blob,6,4));", ("@cid", characterId), ("@value", core.CreatureUid), ("@blob", core.ToBytes()));
+                Execute(connection, transaction, "DELETE FROM character_creatures WHERE character_id=@cid AND creature_key=@value AND NOT EXISTS(SELECT 1 FROM character_inventory_items WHERE character_id=@cid AND substr(item_core,6,4)=substr(@blob,6,4));", ("@cid", characterId), ("@value", core.CreatureUid), ("@blob", core.ToBytes()));
             if (core.EquipmentLockId != 0)
                 Execute(connection, transaction, "DELETE FROM character_item_locks WHERE character_id=@cid AND equipment_lock_id=@lock;", ("@cid", characterId), ("@lock", core.EquipmentLockId));
         }
@@ -1147,7 +1159,7 @@ ON CONFLICT(owner_scope,owner_id,list_type,slot_index) DO UPDATE SET item_core=e
         {
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "UPDATE character_new_items SET slot_index=@slot,updated_at=CURRENT_TIMESTAMP WHERE item_uid=@uid;";
+            command.CommandText = "UPDATE character_inventory_items SET slot_index=@slot,updated_at=CURRENT_TIMESTAMP WHERE item_uid=@uid;";
             command.Parameters.AddWithValue("@slot", slot);
             command.Parameters.AddWithValue("@uid", record.ItemUid);
             command.ExecuteNonQuery();
@@ -1221,7 +1233,7 @@ VALUES(@cid,COALESCE((SELECT MAX(sort_order)+1 FROM character_creatures WHERE ch
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-INSERT INTO inventory_audit_log_v2(session_id,owner_scope,owner_id,character_id,account_id,action_name,list_type,slot_index,item_id,item_kind,value_before,value_after,count_before,count_after,count_delta,before_core_hash,after_core_hash,payload_json)
+INSERT INTO inventory_audit_log(session_id,owner_scope,owner_id,character_id,account_id,action_name,list_type,slot_index,item_id,item_kind,value_before,value_after,count_before,count_after,count_delta,before_core_hash,after_core_hash,payload_json)
 VALUES('gm-tool',@scope,@owner,@cid,@aid,@action,@list,@slot,@item,@kind,@vb,@va,@cb,@ca,@delta,@hb,@ha,@payload);";
             var ownerScope = listType == InventoryListType.AccountCargo ? "account" : "character";
             command.Parameters.AddWithValue("@scope", ownerScope);

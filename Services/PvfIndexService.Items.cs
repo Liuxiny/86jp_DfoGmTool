@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using DfoGmTool.ServerCore.Game.Characters;
 using DfoGmTool.ServerCore.Game.Inventory;
 using GmPvfLib;
 
@@ -314,7 +315,7 @@ namespace DfoGmTool.Services
                 .Replace("\n", " ");
         }
 
-        private static string UsableJobLabel(string usableJob)
+        private string UsableJobLabel(string usableJob)
         {
             var normalized = NormalizeUsableJob(usableJob);
             if (string.IsNullOrWhiteSpace(normalized) || normalized.Contains("[all]", StringComparison.Ordinal))
@@ -333,7 +334,7 @@ namespace DfoGmTool.Services
             return labels.Count == 0 ? "无限制" : string.Join("、", labels);
         }
 
-        private static string[] UsableJobLabels(string usableJob)
+        private string[] UsableJobLabels(string usableJob)
         {
             var normalized = NormalizeUsableJob(usableJob);
             if (string.IsNullOrWhiteSpace(normalized) || normalized.Contains("[all]", StringComparison.Ordinal))
@@ -352,28 +353,11 @@ namespace DfoGmTool.Services
             return labels.Count == 0 ? new[] { UsableJobLabel(usableJob) } : labels.ToArray();
         }
 
-        private static string UsableJobTokenLabel(string token)
+        private string UsableJobTokenLabel(string token)
         {
-            switch ((token ?? string.Empty).Replace("_", " ").Trim().ToLowerInvariant())
-            {
-                case "swordman": return "鬼剑士";
-                case "fighter": return "格斗家";
-                case "gunner": return "神枪手";
-                case "mage": return "魔法师";
-                case "priest": return "圣职者";
-                case "thief": return "暗夜使者";
-                case "knight": return "守护者";
-                case "at gunner": return "女神枪手";
-                case "at fighter": return "男格斗家";
-                case "at mage": return "男魔法师";
-                case "at swordman": return "女鬼剑士";
-                case "atswordman": return "女鬼剑士";
-                case "demonic swordman": return "黑暗武士";
-                case "demonicswordman": return "黑暗武士";
-                case "creatormage": return "缔造者";
-                case "creator mage": return "缔造者";
-                default: return token;
-            }
+            return PvfCharacterJobCatalog.Current.TryResolveToken(token, out var job)
+                ? (PvfCharacterJobCatalog.Current.GetLabel(job) ?? token)
+                : token;
         }
 
         public object Search(string query, int limit)

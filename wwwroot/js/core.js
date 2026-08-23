@@ -228,7 +228,11 @@ function renderRuntimeStatus(status) {
   }
 
   if (!status || !status.configured) {
-    el.textContent = status && status.error ? '数据源不可用' : '等待选择数据源';
+    el.textContent = status && status.migrationRequired
+      ? '发现可迁移旧库'
+      : status && status.databaseUnusable
+        ? '数据库不可用'
+        : status && status.error ? '数据源不可用' : '等待选择数据源';
     el.className = 'status' + (status && status.error ? ' err' : '');
     return;
   }
@@ -240,7 +244,13 @@ function renderRuntimeStatus(status) {
     el.textContent = 'PVF 加载中…';
     el.className = 'status';
   } else {
-    el.textContent = '数据源已就绪';
+    const details = [];
+    if (status.toolVersion) details.push(status.toolVersion);
+    if (status.schemaVersion !== null && status.schemaVersion !== undefined)
+      details.push(`schema v${status.schemaVersion}`);
+    if (status.baselineId) details.push(status.baselineId);
+    if (status.structureCompatible === true) details.push('结构兼容');
+    el.textContent = details.length ? `数据源已就绪（${details.join(' · ')}）` : '数据源已就绪';
     el.className = 'status ok';
   }
 }

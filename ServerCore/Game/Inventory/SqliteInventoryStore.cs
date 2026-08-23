@@ -51,7 +51,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
             _auditLogger = new InventoryAuditLogger();
             _db = new InventoryDbPrimitives();
-            _equipStore = new InventoryEquipmentStore(_db, _auditLogger);
+            _equipStore = new InventoryEquipmentStore();
             CharacterItemGrants = new CharacterItemGrantService(_db, _auditLogger);
         }
 

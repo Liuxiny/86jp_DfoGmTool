@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using DfoGmTool.Services;
+using DfoGmTool.ServerCore.Game.Inventory;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -9,6 +10,8 @@ namespace DfoGmTool
 {
     public static class Program
     {
+        public const string ToolVersion = "v260822";
+
         public static void Main(string[] args)
         {
             if (Array.IndexOf(args, "--selftest-database-compatibility") >= 0)
@@ -32,10 +35,14 @@ namespace DfoGmTool
                 Environment.Exit(SelfTests.InventoryMaintenanceSelfTest.Run());
                 return;
             }
-
-            if (Array.IndexOf(args, "--selftest-inventory-migration") >= 0)
+            if (Array.IndexOf(args, "--selftest-inventory-a21") >= 0)
             {
-                Environment.Exit(SelfTests.InventoryMigrationSelfTest.Run());
+                Environment.Exit(SelfTests.InventoryA21SelfTest.Run());
+                return;
+            }
+            if (Array.IndexOf(args, "--selftest-a12-to-a21-migration") >= 0)
+            {
+                Environment.Exit(SelfTests.A12ToA21MigrationSelfTest.Run());
                 return;
             }
 
@@ -87,9 +94,14 @@ namespace DfoGmTool
                     indexError = status.IndexError,
                     error = status.Error,
                     hasError = status.HasError,
+                    toolVersion = ToolVersion,
                     schemaVersion = status.SchemaVersion,
-                    minimumSupportedSchemaVersion = status.MinimumSupportedSchemaVersion,
-                    maximumSupportedSchemaVersion = status.MaximumSupportedSchemaVersion,
+                    baselineId = status.BaselineId,
+                    schemaMetadataVersion = status.MetadataSchemaVersion,
+                    structureCompatible = status.StructureCompatible,
+                    migrationRequired = status.MigrationRequired,
+                    migrationBlocked = status.MigrationBlocked,
+                    databaseUnusable = status.DatabaseUnusable,
                     authenticationRequired = accessControl.RequiresAuthentication,
                     authenticated,
                     canChangeSource = !hostConfig.AllowRemoteAccess && authenticated,
@@ -166,12 +178,23 @@ namespace DfoGmTool
                     ? new { success = false, error = "远程访问模式下请在 config.ini 修改数据库和 PVF 路径。" }
                     : runtime.Configure(body.DatabasePath, body.PvfPath)));
 
-            app.MapGet("/api/inventory-migration/status", () =>
-                WithRuntime((gm, _) => gm.GetInventoryMigrationStatus()));
-            app.MapPost("/api/inventory-migration/legacy-to-new", () =>
-                WithRuntime((gm, _) => gm.MigrateLegacyInventoryToNew()));
-            app.MapPost("/api/inventory-migration/new-to-legacy", () =>
-                WithRuntime((gm, _) => gm.MigrateNewInventoryToLegacy()));
+            app.MapPost("/api/migrations/a12-to-a21/preview", (A12ToA21MigrationRequest body) =>
+            {
+                if (hostConfig.AllowRemoteAccess)
+                    return Results.Json(new { success = false, error = "远程访问模式禁止本地数据库替换，请在本机执行迁移。" });
+                if (body == null)
+                    return Results.Json(new { success = false, error = "请求不能为空。" });
+                return Results.Json(new A12ToA21MigrationService(body.DatabasePath, body.PvfPath).Preview());
+            });
+            app.MapPost("/api/migrations/a12-to-a21/execute", (A12ToA21MigrationRequest body) =>
+            {
+                if (hostConfig.AllowRemoteAccess)
+                    return Results.Json(new { success = false, error = "远程访问模式禁止本地数据库替换，请在本机执行迁移。" });
+                if (body == null)
+                    return Results.Json(new { success = false, error = "请求不能为空。" });
+                return Results.Json(new A12ToA21MigrationService(body.DatabasePath, body.PvfPath)
+                    .Execute(body.UserBackedUp, body.ConfirmText));
+            });
 
             app.MapGet("/api/accounts", () => WithRuntime((gm, _) => gm.ListAccounts()));
             app.MapGet("/api/accounts/{id:int}/detail", (int id) => WithRuntime((gm, pvfIndex) => gm.GetAccountDetail(id, pvfIndex)));

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using DfoGmTool.ServerCore.Game.Characters;
 using GmPvfLib;
 
 namespace DfoGmTool.Services
@@ -160,23 +161,8 @@ namespace DfoGmTool.Services
 
         private static string ResolveAwakeningQuestJobTag(int job)
         {
-            switch (job)
-            {
-                case 0: return "[swordman]";
-                case 1: return "[fighter]";
-                case 2: return "[gunner]";
-                case 3: return "[mage]";
-                case 4: return "[priest]";
-                case 5: return "[at gunner]";
-                case 6: return "[thief]";
-                case 7: return "[at fighter]";
-                case 8: return "[at mage]";
-                case 9: return null;
-                case 10: return null;
-                case 11: return "[at swordman]";
-                case 12: return "[knight]";
-                default: return null;
-            }
+            var token = PvfCharacterJobCatalog.Current.GetToken(job);
+            return string.IsNullOrWhiteSpace(token) ? null : "[" + token + "]";
         }
 
         private static readonly Regex IntPattern = new Regex(@"-?\d+", RegexOptions.Compiled);

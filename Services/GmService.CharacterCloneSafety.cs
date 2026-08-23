@@ -12,10 +12,11 @@ namespace DfoGmTool.Services
         {
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "characters", "character_items", "character_equipped_entries", "equipped_items",
-                "character_titlebook", "character_achievement_chunks", "character_new_items",
+                "characters", "character_inventory_items", "account_inventory_items",
+                "character_titlebook_items", "character_achievements",
                 "character_avatar_detail", "character_container_state",
                 "character_avatar_uid_sequence", "character_creature_uid_sequence",
+                "inventory_audit_log",
             };
             foreach (var group in CharacterCloneTableGroups.Values)
             {
@@ -185,19 +186,18 @@ WHERE account_id = @aid AND slot_index = @slot AND delete_flag = 0;";
                     throw new InvalidOperationException("目标账号角色槽位发生唯一性冲突");
             }
 
-            if (TableExists(conn, tx, "character_new_items"))
+            if (TableExists(conn, tx, "character_inventory_items"))
             {
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.Transaction = tx;
                     cmd.CommandText = @"
 SELECT COUNT(1)
-FROM character_new_items
-WHERE character_id = @cid
-  AND (owner_scope <> 'character' OR owner_id <> @cid);";
+FROM character_inventory_items
+WHERE character_id = @cid AND length(item_core) <> 99;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     if (Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
-                        throw new InvalidOperationException("复制后的物品归属校验失败");
+                        throw new InvalidOperationException("复制后的物品 ItemCore 校验失败");
                 }
             }
         }

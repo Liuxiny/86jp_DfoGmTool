@@ -409,15 +409,19 @@ function renderGrowOptions(fetched) {
 
   const firstSel = $('#grow-first');
   firstSel.innerHTML = '';
-  const baseOption = document.createElement('option');
-  baseOption.value = '0';
-  baseOption.textContent = growOptions.options.baseName || '未转职';
-  firstSel.appendChild(baseOption);
-  for (const g of growOptions.options.growTypes) {
+  const growTypes = growOptions.options.growTypes || [];
+  const hasBaseOption = growTypes.some((g) => Number(g.value) === 0);
+  if (!hasBaseOption) {
+    const baseOption = document.createElement('option');
+    baseOption.value = '0';
+    baseOption.textContent = growOptions.options.baseName || '未转职';
+    firstSel.appendChild(baseOption);
+  }
+  for (const g of growTypes) {
     const option = document.createElement('option');
     option.value = g.value;
     option.textContent = g.label;
-    option.disabled = currentChar && currentChar.level < 15;
+    option.disabled = Number(g.value) > 0 && currentChar && currentChar.level < 15;
     firstSel.appendChild(option);
   }
   firstSel.value = String(growOptions.first);

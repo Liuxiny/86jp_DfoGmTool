@@ -29,8 +29,6 @@ namespace DfoGmTool.Services
                 return Error("职业范围 0-255");
             if (first < 0 || first > 15 || second < 0 || second > 15)
                 return Error("转职/觉醒范围必须为 0-15");
-            if (second > 0 && first == 0)
-                return Error("未转职不能设置觉醒");
 
             string error;
             if (!ApplyJobAndGrowType(characterId, job, first, second, GrowSkillSyncMode.Rebuild, out error))
@@ -239,7 +237,9 @@ WHERE character_id = @cid;";
             int first,
             int second)
         {
-            if (first <= 0)
+            var directAwakening = first == 0
+                && _pvfIndex.TryValidateJobGrowOption(job, 0, 1, out _);
+            if (first <= 0 && !directAwakening)
                 return;
 
             using (var cmd = conn.CreateCommand())
@@ -250,9 +250,12 @@ WHERE character_id = @cid;";
                 cmd.ExecuteNonQuery();
             }
 
-            var flags = new HashSet<int>(DefaultPromotedQuestFlags);
-            foreach (var questId in ResolveProfessionQuestIds(job, first, stage: 1))
-                flags.Add(questId);
+            var flags = first > 0
+                ? new HashSet<int>(DefaultPromotedQuestFlags)
+                : new HashSet<int>();
+            if (first > 0)
+                foreach (var questId in ResolveProfessionQuestIds(job, first, stage: 1))
+                    flags.Add(questId);
             if (second >= 1)
                 foreach (var questId in ResolveProfessionQuestIds(job, first, stage: 2))
                     flags.Add(questId);
@@ -262,7 +265,14 @@ WHERE character_id = @cid;";
 
             foreach (var questId in flags)
             {
-                if (questId <= 0 || questId > ushort.MaxValue)
+                if (!TryValidateQuestWrite(
+                    conn,
+                    tx,
+                    characterId,
+                    questId,
+                    _pvfIndex,
+                    out _,
+                    out _))
                     continue;
                 QuestRepository.MarkQuestCleared(conn, tx, characterId, (ushort)questId);
             }
@@ -271,8 +281,27 @@ WHERE character_id = @cid;";
         private int[] ResolveProfessionQuestIds(int job, int first, int stage)
         {
             var all = _pvfIndex.AllQuestMeta;
-            if (all == null || first <= 0)
+            if (all == null)
                 return Array.Empty<int>();
+
+            if (first <= 0)
+            {
+                if (stage < 2
+                    || !_pvfIndex.TryValidateJobGrowOption(job, 0, stage - 1, out _))
+                    return Array.Empty<int>();
+
+                var directGrowNumber = stage - 1;
+                var directGrow = directGrowNumber << 4;
+                return all.Values
+                    .Where(m => m != null
+                        && QuestMatchesCharacter(m, job, directGrow)
+                        && m.RewardChainType == 2
+                        && m.GrowNumber == directGrowNumber)
+                    .OrderBy(m => EffectiveLevel(m))
+                    .ThenBy(m => m.Id)
+                    .Select(m => m.Id)
+                    .ToArray();
+            }
 
             if (stage == 2)
             {

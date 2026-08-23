@@ -42,6 +42,7 @@ namespace DfoGmTool.Services
                     InventoryListType.PersonalCargo => "个人仓库",
                     InventoryListType.AccountCargo => "账号金库",
                     InventoryListType.Pet => "宠物",
+                    InventoryListType.GuildMedal => "勋章/守护珠",
                     _ => "主背包",
                 };
                 var category = item.ListType switch
@@ -50,6 +51,7 @@ namespace DfoGmTool.Services
                     InventoryListType.Equipment => "穿戴装备",
                     InventoryListType.Avatar => "时装",
                     InventoryListType.Pet => ResolvePetSegment(item.SlotIndex),
+                    InventoryListType.GuildMedal => item.SlotIndex <= 48 ? "勋章" : "守护珠",
                     _ => container,
                 };
                 items.Add(new
@@ -120,7 +122,7 @@ namespace DfoGmTool.Services
                 return false;
             if (listType == InventoryListType.Main && slot <= 2)
                 return false;
-            if (listType == InventoryListType.Main && CurrencyService.IsCubeFragmentSlot(slot))
+            if (listType == InventoryListType.Main && CurrencyService.IsAccountWarehouseSlot(slot))
                 return false;
             return true;
         }
@@ -195,6 +197,7 @@ namespace DfoGmTool.Services
             if (slot <= 351) return "徽章";      // 289-351
             if (slot <= 353) return "保留槽";     // 352-353 不存放普通物品
             if (slot <= 359) return "账号晶块";   // 354-359 账号共享(accounts表列), 在账号面板调整
+            if (slot <= 364) return "账号灵魂";   // 360-364 账号共享(accounts表列), 在账号面板调整
             return "其他";
         }
 
@@ -227,8 +230,67 @@ namespace DfoGmTool.Services
             if (!TryGetAccountId(characterId, out accountId))
                 return Error("角色不存在: " + characterId);
 
-            // 名字解析不到通常意味着 ID 不存在, 直接发下去客户端会异常, 先拦住
             var name = pvfIndex.ResolveItemName(itemTemplateId);
+            // A21 原生史诗碎片不属于普通 ItemCore/邮件物品，必须更新账号图鉴 blob。
+            if (ItemMetadataResolver.IsEpicPieceItem(itemTemplateId))
+            {
+                using (var connection = new SqliteConnection(_config.ConnectionString))
+                {
+                    connection.Open();
+                    using var transaction = connection.BeginTransaction();
+                    if (!EpicPieceService.TryAdjust(
+                            connection,
+                            transaction,
+                            accountId,
+                            itemTemplateId,
+                            count,
+                            out var before,
+                            out var after,
+                            out var epicError))
+                        return Error(epicError ?? "史诗碎片发放失败");
+                    var appliedCount = after - before;
+
+                    using (var audit = connection.CreateCommand())
+                    {
+                        audit.Transaction = transaction;
+                        audit.CommandText = @"
+INSERT INTO inventory_audit_log (
+    owner_scope, owner_id, character_id, account_id, action_name,
+    item_id, item_kind, count_before, count_after, count_delta, payload_json)
+VALUES ('account', @aid, @cid, @aid, 'gm_grant',
+    @item, @kind, @before, @after, @delta, @payload);";
+                        audit.Parameters.AddWithValue("@aid", accountId);
+                        audit.Parameters.AddWithValue("@cid", characterId);
+                        audit.Parameters.AddWithValue("@item", itemTemplateId);
+                        audit.Parameters.AddWithValue("@kind", ItemCore.KindEpicPiece);
+                        audit.Parameters.AddWithValue("@before", before);
+                        audit.Parameters.AddWithValue("@after", after);
+                        audit.Parameters.AddWithValue("@delta", appliedCount);
+                        audit.Parameters.AddWithValue("@payload", "{\"source\":\"gm_tool\",\"delivery\":\"direct_epic_piece\"}");
+                        audit.ExecuteNonQuery();
+                    }
+
+                    transaction.Commit();
+                    return new
+                    {
+                        success = true,
+                        characterId,
+                        accountId,
+                        itemTemplateId,
+                        name,
+                        count,
+                        grantedCount = appliedCount,
+                        previousCount = before,
+                        finalCount = after,
+                        delivery = "direct_epic_piece",
+                        requiresReselect = true,
+                        replayed = false,
+                        deliveryHint = "史诗碎片已写入 A21 账号图鉴；请返回角色选择界面后重新进入以刷新显示。",
+                    };
+                }
+            }
+
+            // 名字解析不到通常意味着 ID 不存在, 直接发下去客户端会异常, 先拦住
             if (name == null
                 && pvfIndex.IsReady
                 && !CurrencyService.IsCubeFragment(itemTemplateId)
@@ -321,25 +383,36 @@ namespace DfoGmTool.Services
             {
                 options ??= new ItemGrantOptions();
 
-                if (CurrencyService.IsCubeFragment(itemTemplateId))
+                if (CurrencyService.IsAccountWarehouseItem(itemTemplateId))
                 {
-                    var slot = CurrencyService.GetCubeFragmentSlot(itemTemplateId);
+                    var isCube = CurrencyService.IsCubeFragment(itemTemplateId);
+                    var slot = isCube
+                        ? CurrencyService.GetCubeFragmentSlot(itemTemplateId)
+                        : CurrencyService.GetSoulWarehouseSlot(itemTemplateId);
                     try
                     {
                         using var connection = new SqliteConnection(_config.ConnectionString);
                         connection.Open();
                         using var transaction = connection.BeginTransaction(deferred: false);
-                        CurrencyService.AddCubeFragment(
-                            connection,
-                            transaction,
-                            accountId,
-                            itemTemplateId,
-                            count);
+                        if (isCube)
+                            CurrencyService.AddCubeFragment(
+                                connection,
+                                transaction,
+                                accountId,
+                                itemTemplateId,
+                                count);
+                        else
+                            CurrencyService.AddSoulWarehouse(
+                                connection,
+                                transaction,
+                                accountId,
+                                itemTemplateId,
+                                count);
                         transaction.Commit();
                     }
                     catch (Exception ex)
                     {
-                        return Error("晶块直充失败: " + ex.Message);
+                        return Error((isCube ? "晶块" : "灵魂") + "直充失败: " + ex.Message);
                     }
 
                     return new
@@ -351,12 +424,14 @@ namespace DfoGmTool.Services
                         name,
                         count,
                         grantedCount = count,
-                        delivery = "direct_cube",
+                        delivery = isCube ? "direct_cube" : "direct_soul",
                         slot,
                         slots = new[] { slot },
                         requiresReselect = true,
                         replayed = false,
-                        deliveryHint = "晶块已直接充入账号共享晶块；请返回角色选择界面后重新进入以刷新显示。",
+                        deliveryHint = isCube
+                            ? "晶块已直接充入账号共享晶块；请返回角色选择界面后重新进入以刷新显示。"
+                            : "灵魂已直接充入账号共享灵魂；请返回角色选择界面后重新进入以刷新显示。",
                     };
                 }
 
@@ -577,16 +652,17 @@ DO UPDATE SET end_time = @expire, updated_at = CURRENT_TIMESTAMP;";
             {
                 command.Transaction = transaction;
                 command.CommandText = @"
-INSERT INTO item_audit_log (
-    owner_scope, owner_id, character_id, action_name, list_type, slot_index,
-    item_template_id, delta_stack_count, payload_json)
+INSERT INTO inventory_audit_log (
+    owner_scope, owner_id, character_id, account_id, action_name,
+    item_id, item_kind, count_before, count_after, count_delta, payload_json)
 VALUES (
-    'account', @ownerId, @characterId, 'gm_grant', NULL, NULL,
-    @itemTemplateId, @deltaStackCount, @payloadJson);";
+    'account', @ownerId, @characterId, @ownerId, 'gm_grant',
+    @itemId, 0, 0, @countAfter, @countDelta, @payloadJson);";
                 command.Parameters.AddWithValue("@ownerId", accountId);
                 command.Parameters.AddWithValue("@characterId", characterId);
-                command.Parameters.AddWithValue("@itemTemplateId", grant.ItemTemplateId);
-                command.Parameters.AddWithValue("@deltaStackCount", grant.GrantedCount);
+                command.Parameters.AddWithValue("@itemId", grant.ItemTemplateId);
+                command.Parameters.AddWithValue("@countAfter", grant.GrantedCount);
+                command.Parameters.AddWithValue("@countDelta", grant.GrantedCount);
                 command.Parameters.AddWithValue("@payloadJson",
                     "{\"source\":\"gm_tool\",\"premiumActivated\":true"
                     + ",\"premiumType\":" + premiumType.ToString(CultureInfo.InvariantCulture)
@@ -612,6 +688,22 @@ VALUES (
                 return Error("itemTemplateId 无效");
             if (!TryLoadGrantCharacter(characterId, out var job, out var growType, out var level))
                 return Error("角色不存在: " + characterId);
+
+            if (ItemMetadataResolver.IsEpicPieceItem(itemTemplateId))
+            {
+                return new
+                {
+                    success = true,
+                    characterId,
+                    itemTemplateId,
+                    name = pvfIndex.ResolveItemName(itemTemplateId),
+                    kind = "epic_piece",
+                    direct = true,
+                    delivery = "direct_epic_piece",
+                    stackable = true,
+                    requiresReselect = true,
+                };
+            }
 
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
             if (metadata == null || metadata.ItemKind == "special")

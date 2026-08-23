@@ -407,6 +407,11 @@ VALUES(@messageId, @cid, 0);";
             long messageId,
             GmMailAttachmentDraft attachment)
         {
+            if (attachment == null
+                || attachment.ItemCoreData == null
+                || attachment.ItemCoreData.Length != ItemCore.Size)
+                throw new InvalidOperationException($"邮件附件 item_core 必须为 {ItemCore.Size}B");
+
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using DfoGmTool.ServerCore.Game.Inventory;
 using Microsoft.Data.Sqlite;
 
 namespace DfoGmTool.ServerCore.Game.Currency
@@ -19,9 +20,21 @@ namespace DfoGmTool.ServerCore.Game.Currency
             { 3262, ("cube_gold",  359) },
         };
 
+        private static readonly Dictionary<int, (string ColumnName, int Slot)> SoulWarehouseMap = new Dictionary<int, (string, int)>
+        {
+            { 10100115, ("soul_10100115", 360) },
+            { 10100116, ("soul_10100116", 361) },
+            { 10099773, ("soul_10099773", 362) },
+            { 10099774, ("soul_10099774", 363) },
+            { 10099775, ("soul_10099775", 364) },
+        };
+
         // 晶块固定 slot 范围 (FindEmptySlot 保护用)
         public const int CubeFragmentSlotStart = 354;
         public const int CubeFragmentSlotEnd = 359;
+
+        public const int SoulWarehouseSlotStart = 360;
+        public const int SoulWarehouseSlotEnd = 364;
 
         public static bool IsCubeFragment(int itemId) => CubeFragmentMap.ContainsKey(itemId);
 
@@ -46,6 +59,30 @@ namespace DfoGmTool.ServerCore.Game.Currency
         {
             return slot >= CubeFragmentSlotStart && slot <= CubeFragmentSlotEnd;
         }
+
+        public static bool IsSoulWarehouseItem(int itemId) => SoulWarehouseMap.ContainsKey(itemId);
+
+        public static int GetSoulWarehouseSlot(int itemId)
+        {
+            return SoulWarehouseMap.TryGetValue(itemId, out var entry) ? entry.Slot : -1;
+        }
+
+        public static int GetSoulWarehouseItemIdFromSlot(int slot)
+        {
+            foreach (var kv in SoulWarehouseMap)
+                if (kv.Value.Slot == slot)
+                    return kv.Key;
+            return -1;
+        }
+
+        public static bool IsSoulWarehouseSlot(int slot)
+            => slot >= SoulWarehouseSlotStart && slot <= SoulWarehouseSlotEnd;
+
+        public static bool IsAccountWarehouseItem(int itemId)
+            => IsCubeFragment(itemId) || IsSoulWarehouseItem(itemId);
+
+        public static bool IsAccountWarehouseSlot(int slot)
+            => IsCubeFragmentSlot(slot) || IsSoulWarehouseSlot(slot);
 
         /// <summary>
         /// 读取账号的 6 种晶块数量, 返回 (itemId, slot, count) 列表。
@@ -87,6 +124,59 @@ namespace DfoGmTool.ServerCore.Game.Currency
                 cmd.Transaction = tx;
                 cmd.CommandText = $"UPDATE accounts SET {entry.ColumnName} = {entry.ColumnName} + @count WHERE account_id = @aid;";
                 cmd.Parameters.AddWithValue("@count", count);
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        public static List<(int ItemId, int Slot, int Count)> LoadSoulWarehouseCounts(SqliteConnection conn, SqliteTransaction tx, int accountId)
+        {
+            var result = new List<(int, int, int)>();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT soul_10100115, soul_10100116, soul_10099773, soul_10099774, soul_10099775 FROM accounts WHERE account_id=@aid;";
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        result.Add((10100115, 360, reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0))));
+                        result.Add((10100116, 361, reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1))));
+                        result.Add((10099773, 362, reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2))));
+                        result.Add((10099774, 363, reader.IsDBNull(3) ? 0 : Convert.ToInt32(reader.GetValue(3))));
+                        result.Add((10099775, 364, reader.IsDBNull(4) ? 0 : Convert.ToInt32(reader.GetValue(4))));
+                    }
+                }
+            }
+            return result;
+        }
+
+        public static void AddSoulWarehouse(SqliteConnection conn, SqliteTransaction tx, int accountId, int itemId, int count)
+        {
+            if (!SoulWarehouseMap.TryGetValue(itemId, out var entry))
+                throw new ArgumentException($"itemId {itemId} is not a soul warehouse item");
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = $"UPDATE accounts SET {entry.ColumnName} = MAX(0, {entry.ColumnName} + @count) WHERE account_id=@aid;";
+                cmd.Parameters.AddWithValue("@count", count);
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        public static void SetSoulWarehouseCount(SqliteConnection conn, SqliteTransaction tx, int accountId, int itemId, int count)
+        {
+            if (!SoulWarehouseMap.TryGetValue(itemId, out var entry))
+                throw new ArgumentException($"itemId {itemId} is not a soul warehouse item");
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = $"UPDATE accounts SET {entry.ColumnName}=@count WHERE account_id=@aid;";
+                cmd.Parameters.AddWithValue("@count", Math.Max(0, count));
                 cmd.Parameters.AddWithValue("@aid", accountId);
                 cmd.ExecuteNonQuery();
             }
@@ -181,11 +271,15 @@ WHERE list_type = 0 AND slot_index >= 354 AND slot_index <= 359
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = "SELECT stack_count FROM character_items WHERE character_id = @cid AND list_type = 0 AND slot_index = 0;";
+                cmd.CommandText = "SELECT item_core FROM character_inventory_items WHERE character_id=@cid AND list_type=0 AND slot_index=0;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 var result = cmd.ExecuteScalar();
                 if (result != null && result != DBNull.Value)
-                    w.Gold = Convert.ToInt32(result);
+                {
+                    var core = (byte[])result;
+                    if (core.Length >= ItemCore.Size)
+                        w.Gold = Math.Max(0, ItemCore.FromBytes(core).Count);
+                }
             }
             using (var cmd = connection.CreateCommand())
             {
@@ -244,22 +338,8 @@ WHERE c.character_id = @cid;";
             if (amount == 0)
                 return;
 
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = @"
-UPDATE character_items
-SET stack_count = stack_count + @amt,
-    instance_value = instance_value + @amt
-WHERE character_id = @cid AND list_type = 0 AND slot_index = 0;";
-                cmd.Parameters.AddWithValue("@amt", amount);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                if (cmd.ExecuteNonQuery() > 0)
-                    return;
-            }
-
-            // 金币行不存在(新角色): 建行, 初值即发放额
-            InsertCurrencySlotRow(connection, transaction, characterId, 0, amount);
+            var current = LoadVirtualCount(connection, transaction, characterId, 0);
+            UpsertVirtualCount(connection, transaction, characterId, 0, checked(current + amount));
         }
 
         public static bool TrySpendGold(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
@@ -269,19 +349,11 @@ WHERE character_id = @cid AND list_type = 0 AND slot_index = 0;";
             if (amount == 0)
                 return true;
 
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = @"
-UPDATE character_items
-SET stack_count = stack_count - @amt,
-    instance_value = instance_value - @amt
-WHERE character_id = @cid AND list_type = 0 AND slot_index = 0
-  AND stack_count >= @amt;";
-                cmd.Parameters.AddWithValue("@amt", amount);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                return cmd.ExecuteNonQuery() > 0;
-            }
+            var current = LoadVirtualCount(connection, transaction, characterId, 0);
+            if (current < amount)
+                return false;
+            UpsertVirtualCount(connection, transaction, characterId, 0, current - amount);
+            return true;
         }
 
         public static void GrantCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
@@ -393,19 +465,50 @@ WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid)
             return (ushort)value;
         }
 
-        // 前置条件: 同事务内已确认该槽位无行(UPDATE命中0行)。
-        // 用普通INSERT而非OR REPLACE: REPLACE会把未列出的列(pet_serial_or_handle/equipment_lock_id/extra_json)清掉。
-        private static void InsertCurrencySlotRow(SqliteConnection connection, SqliteTransaction transaction, int characterId, int slot, int value)
+        private static int LoadVirtualCount(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slot)
         {
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"INSERT INTO character_items
-(owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16)
-VALUES ('character', @cid, @cid, 0, @slot, 0, 'special', @val, @val, 0, 0, 0, 0, 0);";
-                cmd.Parameters.AddWithValue("@val", value);
+                cmd.CommandText = "SELECT item_core FROM character_inventory_items WHERE character_id=@cid AND list_type=0 AND slot_index=@slot LIMIT 1;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@slot", slot);
+                var value = cmd.ExecuteScalar();
+                if (value == null || value == DBNull.Value)
+                    return 0;
+                var data = (byte[])value;
+                return data.Length >= ItemCore.Size ? Math.Max(0, ItemCore.FromBytes(data).Count) : 0;
+            }
+        }
+
+        private static void UpsertVirtualCount(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slot, int value)
+        {
+            var core = ItemCore.Create(ItemCore.KindSpecialMaterial, slot);
+            core.Count = Math.Max(0, value);
+            var data = core.ToBytes();
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE character_inventory_items
+SET item_core=@core, updated_at=CURRENT_TIMESTAMP
+WHERE character_id=@cid AND list_type=0 AND slot_index=@slot;";
+                cmd.Parameters.AddWithValue("@core", data);
                 cmd.Parameters.AddWithValue("@slot", slot);
                 cmd.Parameters.AddWithValue("@cid", characterId);
+                if (cmd.ExecuteNonQuery() > 0)
+                    return;
+            }
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"INSERT INTO character_inventory_items
+(character_id, list_type, slot_index, item_core)
+VALUES (@cid, 0, @slot, @core);";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@slot", slot);
+                cmd.Parameters.AddWithValue("@core", data);
                 cmd.ExecuteNonQuery();
             }
         }

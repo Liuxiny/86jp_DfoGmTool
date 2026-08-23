@@ -57,7 +57,7 @@ namespace DfoGmTool.Services
                             {
                                 cmd.Transaction = tx;
                                 cmd.CommandText = @"
-DELETE FROM character_achievement_complete
+DELETE FROM character_achievements
 WHERE character_id = @cid AND achievement_id = @qid;";
                                 cmd.Parameters.AddWithValue("@cid", characterId);
                                 cmd.Parameters.AddWithValue("@qid", slot.ShellQuestId);
@@ -211,7 +211,7 @@ WHERE character_id = @cid AND achievement_id = @qid;";
         private static bool NewTitleBookSlotHasItem(SqliteConnection connection, int characterId, int category, int slotIndex)
         {
             using var command = connection.CreateCommand();
-            command.CommandText = @"SELECT item_core FROM character_new_titlebook
+            command.CommandText = @"SELECT item_core FROM character_titlebook_items
 WHERE character_id=@cid AND category=@category AND slot_index=@slot LIMIT 1;";
             command.Parameters.AddWithValue("@cid", characterId);
             command.Parameters.AddWithValue("@category", category);
@@ -232,12 +232,12 @@ WHERE character_id=@cid AND category=@category AND slot_index=@slot LIMIT 1;";
             command.Transaction = transaction;
             if (core == null || core.IsEmpty)
             {
-                command.CommandText = @"DELETE FROM character_new_titlebook
+                command.CommandText = @"DELETE FROM character_titlebook_items
 WHERE character_id=@cid AND category=@category AND slot_index=@slot;";
             }
             else
             {
-                command.CommandText = @"INSERT INTO character_new_titlebook(character_id,category,slot_index,item_core,updated_at)
+                command.CommandText = @"INSERT INTO character_titlebook_items(character_id,category,slot_index,item_core,updated_at)
 VALUES(@cid,@category,@slot,@core,CURRENT_TIMESTAMP)
 ON CONFLICT(character_id,category,slot_index) DO UPDATE SET item_core=excluded.item_core,updated_at=CURRENT_TIMESTAMP;";
                 command.Parameters.AddWithValue("@core", core.ToBytes());

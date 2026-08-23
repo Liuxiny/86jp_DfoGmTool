@@ -155,17 +155,21 @@ function renderAccountPanel(accountId, detail) {
 
   const cubeBody = $('#cube-table tbody');
   cubeBody.innerHTML = '';
-  for (const cube of detail.cubes) {
+  const cubeRows = [
+    ...(detail.cubes || []).map((cube) => ({ ...cube, resourceLabel: '晶块' })),
+    ...(detail.souls || []).map((soul) => ({ ...soul, resourceLabel: '灵魂' })),
+  ];
+  for (const cube of cubeRows) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${cube.itemId}</td><td>${escapeHtml(cube.name || '')}</td>
-      <td>${cube.count.toLocaleString()}</td>
+    tr.innerHTML = `<td>${cube.resourceLabel}</td><td>${cube.itemId}</td><td>${escapeHtml(cube.name || '')}</td>
+      <td>${Number(cube.count).toLocaleString()}</td>
       <td><input type="number" min="0" class="val-input" value="${cube.count}"></td><td><button class="mini">覆写</button></td>`;
     tr.querySelector('button').onclick = async () => {
       const value = parseInt(tr.querySelector('input').value, 10);
       if (isNaN(value) || value < 0) return toast('请输入非负整数', true);
       try {
         await post(`/api/accounts/${accountId}/cube`, { itemId: cube.itemId, value });
-        toast('晶块已覆写');
+        toast(`${cube.resourceLabel}已覆写`);
         showAccountPanel();
       } catch (e) {
         toast(e.message, true);
@@ -271,14 +275,11 @@ function bindAccountBackupPanel(accountId) {
       if (state) state.textContent = `正在校验并恢复格式 v${backup.version || '?'} 的备份...`;
       const result = await post('/api/accounts/restore', backup);
       if (state) {
-        const upgradeText = result.upgradedFromVersion
-          ? `；已从 v${result.upgradedFromVersion} 安全升级到 v2`
-          : '';
         const remapCount = (result.remappedMailboxMessageIdCount || 0)
           + (result.remappedMailboxAuditIdCount || 0);
         const remapText = remapCount ? `；已安全处理 ${remapCount} 个邮件编号冲突` : '';
         state.textContent =
-          `已恢复账号 #${result.accountID}，角色 ${result.restoredCharacterCount} 个，覆盖旧角色 ${result.deletedExistingCharacterCount} 个；邮箱和待领取附件已恢复${upgradeText}${remapText}。`;
+          `已恢复账号 #${result.accountID}，角色 ${result.restoredCharacterCount} 个，覆盖旧角色 ${result.deletedExistingCharacterCount} 个；邮箱和待领取附件已恢复${remapText}。`;
       }
       toast('账号备份已恢复');
       await loadAccounts(runtimeSourceEpoch);

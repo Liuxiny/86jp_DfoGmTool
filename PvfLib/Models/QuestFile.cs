@@ -82,7 +82,12 @@ namespace GmPvfLib
 
         #region 标记
 
-        public bool CantGiveup { get; set; }
+        public int CantGiveupValue { get; set; }
+        public bool CantGiveup
+        {
+            get => CantGiveupValue != 0;
+            set => CantGiveupValue = value ? 1 : 0;
+        }
         public int JobChangeQuestValue { get; set; }
         public bool IsAccountQuest { get; set; }
         public bool IgnoreQuestLevel4Exp { get; set; }
@@ -184,7 +189,7 @@ namespace GmPvfLib
                             ClearRewardItemEntry.ParseList(data);
                         break;
 
-                    case "cant giveup": qst.CantGiveup = true; break;
+                    case "cant giveup": qst.CantGiveupValue = ParseInt(data); break;
                     case "job change quest": qst.JobChangeQuestValue = ParseInt(data); break;
                     case "account quest": qst.IsAccountQuest = true; break;
                     case "ignore quest level 4 exp": qst.IgnoreQuestLevel4Exp = true; break;

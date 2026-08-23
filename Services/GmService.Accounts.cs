@@ -96,6 +96,29 @@ FROM accounts WHERE account_id = @aid;";
                     });
                 }
 
+                var souls = new List<object>();
+                foreach (var soul in CurrencyService.LoadSoulWarehouseCounts(conn, null, accountId))
+                {
+                    souls.Add(new
+                    {
+                        itemId = soul.ItemId,
+                        slot = soul.Slot,
+                        name = pvfIndex.ResolveItemName(soul.ItemId),
+                        count = soul.Count,
+                    });
+                }
+
+                var epicPieces = new List<object>();
+                foreach (var piece in EpicPieceService.LoadEntries(conn, null, accountId))
+                {
+                    epicPieces.Add(new
+                    {
+                        itemId = piece.ItemId,
+                        name = pvfIndex.ResolveItemName(piece.ItemId),
+                        count = piece.Count,
+                    });
+                }
+
                 var cargo = new List<object>();
                 object cargoState = null;
                 using (var cmd = conn.CreateCommand())
@@ -137,7 +160,7 @@ WHERE account_id = @aid;";
                 if (!_accountProgress.TryLoad(accountId, out var progress))
                     return Error("账号不存在: " + accountId);
 
-                return new { accountId, currencies, cubes, cargo, cargoState, progress };
+                return new { accountId, currencies, cubes, souls, epicPieces, cargo, cargoState, progress };
             }
         }
 
@@ -267,8 +290,8 @@ WHERE account_id = @aid;";
 
         public object AdjustCubeFragment(int accountId, int itemId, int amount, long? setValue = null)
         {
-            if (!CurrencyService.IsCubeFragment(itemId))
-                return Error(itemId + " 不是晶块(可用: 3033黑 3034白 3035红 3036蓝 3037透明 3262金)");
+            if (!CurrencyService.IsAccountWarehouseItem(itemId))
+                return Error(itemId + " 不是 A21 账号共享物品(可用: 晶块3033-3037/3262，灵魂10100115/10100116/10099773-10099775)");
 
             if (setValue.HasValue)
             {
@@ -279,7 +302,10 @@ WHERE account_id = @aid;";
                 using (var conn = new SqliteConnection(_config.ConnectionString))
                 {
                     conn.Open();
-                    foreach (var cube in CurrencyService.LoadCubeFragments(conn, null, accountId))
+                    var values = CurrencyService.IsCubeFragment(itemId)
+                        ? CurrencyService.LoadCubeFragments(conn, null, accountId)
+                        : CurrencyService.LoadSoulWarehouseCounts(conn, null, accountId);
+                    foreach (var cube in values)
                     {
                         if (cube.ItemId == itemId) { current = cube.Count; break; }
                     }
@@ -304,7 +330,10 @@ WHERE account_id = @aid;";
                     if (amount < 0)
                     {
                         var current = 0;
-                        foreach (var cube in CurrencyService.LoadCubeFragments(conn, tx, accountId))
+                        var values = CurrencyService.IsCubeFragment(itemId)
+                            ? CurrencyService.LoadCubeFragments(conn, tx, accountId)
+                            : CurrencyService.LoadSoulWarehouseCounts(conn, tx, accountId);
+                        foreach (var cube in values)
                         {
                             if (cube.ItemId == itemId) { current = cube.Count; break; }
                         }
@@ -312,12 +341,24 @@ WHERE account_id = @aid;";
                             return Error("扣减失败(当前只有 " + current + ")");
                     }
 
-                    CurrencyService.AddCubeFragment(conn, tx, accountId, itemId, amount);
+                    if (CurrencyService.IsCubeFragment(itemId))
+                        CurrencyService.AddCubeFragment(conn, tx, accountId, itemId, amount);
+                    else
+                        CurrencyService.AddSoulWarehouse(conn, tx, accountId, itemId, amount);
                     tx.Commit();
                 }
             }
 
-            return new { success = true, accountId, itemId, amount };
+            return new
+            {
+                success = true,
+                accountId,
+                itemId,
+                amount,
+                slot = CurrencyService.IsCubeFragment(itemId)
+                    ? CurrencyService.GetCubeFragmentSlot(itemId)
+                    : CurrencyService.GetSoulWarehouseSlot(itemId),
+            };
         }
 
         // 与服务端 InventoryDbPrimitives.DeleteAccountCargoItem 同语义(该原语未公开, 表结构简单无关联行)

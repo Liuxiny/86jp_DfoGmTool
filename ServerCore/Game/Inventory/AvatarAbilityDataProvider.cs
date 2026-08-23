@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using DfoGmTool.ServerCore.Game.Characters;
 using DfoGmTool.ServerCore.Game.Skills;
 using DfoGmTool.ServerCore.GameWorld;
 using GmPvfLib;
@@ -262,24 +263,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         private static int JobFromToken(string token)
         {
-            var normalized = NormalizeJobToken(token);
-            return normalized switch
-            {
-                "swordman" => 0,
-                "fighter" => 1,
-                "gunner" => 2,
-                "mage" => 3,
-                "priest" => 4,
-                "atgunner" => 5,
-                "thief" => 6,
-                "atfighter" => 7,
-                "atmage" => 8,
-                "demonicswordman" => 9,
-                "creatormage" => 10,
-                "atswordman" => 11,
-                "knight" => 12,
-                _ => -1,
-            };
+            return PvfCharacterJobCatalog.Current.TryResolveToken(token, out var job) ? job : -1;
         }
 
         private static string NormalizeAbilityToken(string value)

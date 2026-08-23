@@ -1,0 +1,15 @@
+services:
+  dfo-gm-tool:
+    image: dfo-gm-tool:260823
+    container_name: dfo-gm-tool
+    restart: unless-stopped
+    environment:
+      GM_LISTEN_PORT: '5050'
+      GM_SERVER_BIN: /server
+      GM_DATABASE_PATH: /server/Data/inventory.db
+      GM_PVF_PATH: /server/Data/Pvf/Script.pvf
+      GM_REMOTE_PASSWORD: '${GM_REMOTE_PASSWORD:-ChangeMe123!}'
+    ports:
+      - '5050:5050/tcp'
+    volumes:
+      - /mnt/user/appdata/dfo-server/Data:/server/Data

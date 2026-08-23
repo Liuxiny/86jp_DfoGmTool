@@ -80,8 +80,8 @@ namespace DfoGmTool.SelfTests
                 Check("trigger failure returns error rather than fake success",
                     !IsSuccess(rollback));
                 Check("trigger failure rolls back every anomaly row",
-                    LoadInt(dbPath, "SELECT COUNT(*) FROM character_new_items WHERE item_uid IN (9001,9002,9003,9004);") == 4
-                    && LoadInt(dbPath, "SELECT COUNT(*) FROM account_cargo_new_items WHERE item_uid=9005;") == 1);
+                    LoadInt(dbPath, "SELECT COUNT(*) FROM character_inventory_items WHERE item_uid IN (9001,9002,9003,9004);") == 4
+                    && LoadInt(dbPath, "SELECT COUNT(*) FROM account_inventory_items WHERE item_uid=9005;") == 1);
                 DropMaintenanceFailureTrigger(dbPath);
 
                 var cleaned = gm.CleanInventoryAnomalies(index);
@@ -90,7 +90,7 @@ namespace DfoGmTool.SelfTests
                     && GetIntProperty(cleaned, "totalCount") == 0
                     && !GetBoolProperty(cleaned, "hasAnomalies"));
                 Check("legal and virtual rows remain",
-                    LoadInt(dbPath, "SELECT COUNT(*) FROM character_new_items WHERE item_uid IN (9000,9006);") == 2);
+                    LoadInt(dbPath, "SELECT COUNT(*) FROM character_inventory_items WHERE item_uid IN (9000,9006);") == 2);
                 Check("avatar/creature details and locks tied to deleted cores are removed",
                     LoadInt(dbPath, "SELECT COUNT(*) FROM character_avatar_detail WHERE item_uid=7001;") == 0
                     && LoadInt(dbPath, "SELECT COUNT(*) FROM character_creatures WHERE character_id=810011 AND creature_key=8001;") == 0
@@ -100,7 +100,7 @@ namespace DfoGmTool.SelfTests
                     && LoadInt(dbPath, "SELECT COUNT(*) FROM character_creatures WHERE character_id=810011 AND creature_key=8002;") == 1
                     && LoadInt(dbPath, "SELECT COUNT(*) FROM character_item_locks WHERE character_id=810011 AND equipment_lock_id=99;") == 1);
                 Check("cleanup writes character and account audit rows",
-                    LoadInt(dbPath, "SELECT COUNT(*) FROM inventory_audit_log_v2 WHERE action_name='gm_inventory_anomaly_cleanup';") == 5);
+                    LoadInt(dbPath, "SELECT COUNT(*) FROM inventory_audit_log WHERE action_name='gm_inventory_anomaly_cleanup';") == 5);
 
                 var second = gm.CleanInventoryAnomalies(index);
                 Check("second cleanup is idempotent", IsSuccess(second)
@@ -188,9 +188,9 @@ VALUES(810011,9,3,0,1),(810011,10,7,0,1),(810011,99,0,65,1);");
             Exec(connection, transaction, "PRAGMA ignore_check_constraints=OFF;");
 
             var accountValid = ItemCore.Create(ItemCore.KindMaterial, legalId);
-            InsertAccountCargo(connection, transaction, 9006, AccountOne, 12, 0, accountValid.ToBytes());
+            InsertAccountCargo(connection, transaction, 9006, AccountOne, 0, accountValid.ToBytes());
             var accountInvalid = ItemCore.Create(ItemCore.KindMaterial, 987654322);
-            InsertAccountCargo(connection, transaction, 9005, AccountTwo, 12, 0, accountInvalid.ToBytes());
+            InsertAccountCargo(connection, transaction, 9005, AccountTwo, 0, accountInvalid.ToBytes());
             transaction.Commit();
         }
 
@@ -206,8 +206,8 @@ VALUES(810011,9,3,0,1),(810011,10,7,0,1),(810011,99,0,65,1);");
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-INSERT INTO character_new_items(item_uid,owner_scope,owner_id,character_id,list_type,slot_index,item_core)
-VALUES(@uid,'character',@cid,@cid,@list,@slot,@core);";
+INSERT INTO character_inventory_items(item_uid,character_id,list_type,slot_index,item_core)
+VALUES(@uid,@cid,@list,@slot,@core);";
             command.Parameters.AddWithValue("@uid", itemUid);
             command.Parameters.AddWithValue("@cid", characterId);
             command.Parameters.AddWithValue("@list", listType);
@@ -221,18 +221,16 @@ VALUES(@uid,'character',@cid,@cid,@list,@slot,@core);";
             SqliteTransaction transaction,
             long itemUid,
             int accountId,
-            int listType,
             int slot,
             byte[] itemCore)
         {
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-INSERT INTO account_cargo_new_items(item_uid,account_id,character_id,list_type,slot_index,item_core)
-VALUES(@uid,@aid,NULL,@list,@slot,@core);";
+INSERT INTO account_inventory_items(item_uid,account_id,slot_index,item_core)
+VALUES(@uid,@aid,@slot,@core);";
             command.Parameters.AddWithValue("@uid", itemUid);
             command.Parameters.AddWithValue("@aid", accountId);
-            command.Parameters.AddWithValue("@list", listType);
             command.Parameters.AddWithValue("@slot", slot);
             command.Parameters.Add("@core", SqliteType.Blob).Value = itemCore;
             command.ExecuteNonQuery();
@@ -244,7 +242,7 @@ VALUES(@uid,@aid,NULL,@list,@slot,@core);";
             using var transaction = connection.BeginTransaction();
             Exec(connection, transaction, @"
 CREATE TRIGGER inventory_maintenance_abort_audit
-BEFORE INSERT ON inventory_audit_log_v2
+BEFORE INSERT ON inventory_audit_log
 WHEN NEW.action_name='gm_inventory_anomaly_cleanup'
 BEGIN SELECT RAISE(ABORT,'inventory maintenance selftest failure'); END;");
             transaction.Commit();
@@ -360,7 +358,12 @@ BEGIN SELECT RAISE(ABORT,'inventory maintenance selftest failure'); END;");
                 var codesRoot = Path.Combine(root, "Codes");
                 if (!Directory.Exists(codesRoot))
                     continue;
-                foreach (var serverDir in Directory.GetDirectories(codesRoot, "ServerS4A12_*").OrderByDescending(value => value))
+
+                var exact = Path.Combine(codesRoot, "ServerS4A21_git", "Server", "DfoServer", "Data", "Pvf", "Script.pvf");
+                if (File.Exists(exact))
+                    return exact;
+
+                foreach (var serverDir in Directory.GetDirectories(codesRoot, "ServerS4A21_*").OrderByDescending(value => value))
                 {
                     foreach (var path in new[]
                     {

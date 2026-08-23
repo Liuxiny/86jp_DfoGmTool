@@ -1,6 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
+using DfoGmTool.ServerCore.Game.Inventory;
 using DfoGmTool.ServerCore.GameWorld;
 using DfoGmTool.ServerCore.Infrastructure;
 using GmPvfLib;
@@ -14,6 +14,9 @@ namespace DfoGmTool.Services
         private readonly ReaderWriterLockSlim _gate = new ReaderWriterLockSlim();
         private ActiveEnvironment _active;
         private string _startupError;
+        private bool _migrationRequired;
+        private bool _migrationBlocked;
+        private bool _databaseUnusable;
 
         public GmRuntimeEnvironment(GmConfig initialConfig)
         {
@@ -72,7 +75,34 @@ namespace DfoGmTool.Services
             {
                 try
                 {
-                    var databaseCompatibility = VerifyDataSource(config);
+                    _migrationRequired = false;
+                    _migrationBlocked = false;
+                    _databaseUnusable = false;
+                    DatabaseCompatibilityReport databaseCompatibility;
+                    try
+                    {
+                        databaseCompatibility = DatabaseCompatibilityGuard.Validate(config.DatabasePath);
+                    }
+                    catch (Exception databaseError)
+                    {
+                        var classified = ClassifyRejectedDatabase(config, databaseError);
+                        if (classified != null)
+                            return classified;
+                        throw new InvalidOperationException(
+                            "数据库校验失败: " + databaseError.GetBaseException().Message,
+                            databaseError);
+                    }
+
+                    try
+                    {
+                        VerifyPvf(config);
+                    }
+                    catch (Exception pvfError)
+                    {
+                        throw new InvalidOperationException(
+                            "PVF校验失败: " + pvfError.GetBaseException().Message,
+                            pvfError);
+                    }
 
                     // Construct the new services before replacing the live source.
                     var pvfIndex = new PvfIndexService(config.PvfPath);
@@ -108,32 +138,113 @@ namespace DfoGmTool.Services
             }
         }
 
-        private static DatabaseCompatibilityReport VerifyDataSource(
-            GmConfig config)
+        private object ClassifyRejectedDatabase(
+            GmConfig config,
+            Exception databaseError)
         {
-            var errors = new List<string>();
-            DatabaseCompatibilityReport databaseCompatibility = null;
-            AddVerificationError(
-                errors,
-                "数据库",
-                () => databaseCompatibility =
-                    DatabaseCompatibilityGuard.Validate(config.DatabasePath));
-            AddVerificationError(errors, "PVF", () => VerifyPvf(config));
-            if (errors.Count > 0)
-                throw new InvalidOperationException(string.Join(Environment.NewLine, errors));
-            return databaseCompatibility;
+            SqliteConnection.ClearAllPools();
+            var preview = new A12ToA21MigrationService(
+                config.DatabasePath,
+                config.PvfPath).Preview();
+            var guardMessage = databaseError.GetBaseException().Message;
+            var previewMessage = preview.Error ?? string.Empty;
+            if (preview.Success)
+            {
+                ReleaseRejectedSource(
+                    migrationRequired: true,
+                    migrationBlocked: false,
+                    databaseUnusable: false,
+                    message: "已识别可迁移旧库，数据库已释放，请预览/升级。" );
+                SqliteConnection.ClearAllPools();
+                return new
+                {
+                    success = true,
+                    migrationRequired = true,
+                    migrationBlocked = false,
+                    databaseUnusable = false,
+                    error = _startupError,
+                    preview,
+                    diagnostic = new { databaseGuardError = guardMessage },
+                    status = BuildStatus()
+                };
+            }
+
+            if (IsMigrationBlockedProbe(guardMessage, previewMessage))
+            {
+                ReleaseRejectedSource(
+                    migrationRequired: true,
+                    migrationBlocked: true,
+                    databaseUnusable: false,
+                    message: previewMessage);
+                SqliteConnection.ClearAllPools();
+                return new
+                {
+                    success = true,
+                    migrationRequired = true,
+                    migrationBlocked = true,
+                    databaseUnusable = false,
+                    error = _startupError,
+                    preview,
+                    diagnostic = new { databaseGuardError = guardMessage },
+                    status = BuildStatus()
+                };
+            }
+
+            if (!IsUnusableDatabaseProbe(guardMessage, previewMessage))
+                return null;
+
+            ReleaseRejectedSource(
+                migrationRequired: false,
+                migrationBlocked: false,
+                databaseUnusable: true,
+                message: "数据库不可用；请移除该文件等待服务端自动生成，或选择正确数据库。" );
+            SqliteConnection.ClearAllPools();
+            return new
+            {
+                success = true,
+                migrationRequired = false,
+                migrationBlocked = false,
+                databaseUnusable = true,
+                error = _startupError,
+                preview,
+                diagnostic = new { databaseGuardError = guardMessage },
+                status = BuildStatus()
+            };
         }
 
-        private static void AddVerificationError(List<string> errors, string label, Action verify)
+        private void ReleaseRejectedSource(
+            bool migrationRequired,
+            bool migrationBlocked,
+            bool databaseUnusable,
+            string message)
         {
-            try
-            {
-                verify();
-            }
-            catch (Exception ex)
-            {
-                errors.Add(label + "校验失败: " + ex.GetBaseException().Message);
-            }
+            _active = null;
+            _migrationRequired = migrationRequired;
+            _migrationBlocked = migrationBlocked;
+            _databaseUnusable = databaseUnusable;
+            _startupError = message;
+        }
+
+        private static bool IsMigrationBlockedProbe(string guardMessage, string previewMessage)
+        {
+            var message = (guardMessage ?? string.Empty) + "\n" + (previewMessage ?? string.Empty);
+            return message.IndexOf("未合并的 WAL", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("被占用的 WAL", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("被占用的 SHM", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsUnusableDatabaseProbe(string guardMessage, string previewMessage)
+        {
+            var message = (guardMessage ?? string.Empty) + "\n" + (previewMessage ?? string.Empty);
+            return message.IndexOf("database disk image is malformed", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("not a database", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("unable to open database", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("缺少 A12 核心表", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("缺少 A12 旧物品表", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("此 S4A12 数据库结构版本不再支持", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("数据库文件不存在", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("无法打开数据库", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("拒绝访问", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void VerifyPvf(GmConfig config)
@@ -164,10 +275,12 @@ namespace DfoGmTool.Services
                 Error = includeSourceDetails ? (config == null ? _startupError : indexError) : null,
                 HasError = !string.IsNullOrWhiteSpace(config == null ? _startupError : indexError),
                 SchemaVersion = _active?.DatabaseCompatibility.SchemaVersion,
-                MinimumSupportedSchemaVersion =
-                    DatabaseCompatibilityGuard.MinimumSupportedVersion,
-                MaximumSupportedSchemaVersion =
-                    DatabaseCompatibilityGuard.MaximumSupportedVersion,
+                BaselineId = _active?.DatabaseCompatibility.BaselineId,
+                MetadataSchemaVersion = _active?.DatabaseCompatibility.MetadataSchemaVersion,
+                StructureCompatible = _active?.DatabaseCompatibility.StructureCompatible,
+                MigrationRequired = _migrationRequired,
+                MigrationBlocked = _migrationBlocked,
+                DatabaseUnusable = _databaseUnusable,
             };
         }
 
@@ -210,7 +323,11 @@ namespace DfoGmTool.Services
         public string Error { get; set; }
         public bool HasError { get; set; }
         public long? SchemaVersion { get; set; }
-        public int MinimumSupportedSchemaVersion { get; set; }
-        public int MaximumSupportedSchemaVersion { get; set; }
+        public string BaselineId { get; set; }
+        public long? MetadataSchemaVersion { get; set; }
+        public bool? StructureCompatible { get; set; }
+        public bool MigrationRequired { get; set; }
+        public bool MigrationBlocked { get; set; }
+        public bool DatabaseUnusable { get; set; }
     }
 }

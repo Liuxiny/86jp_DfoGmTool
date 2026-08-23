@@ -6,7 +6,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 {
     internal sealed class ItemCore
     {
-        public const int Size = 82;
+        public const int LegacySize = 82;
+        public const int A21TailSize = 17;
+        public const int Size = LegacySize + A21TailSize;
         public const int Marker16Default = -1;
         public const byte RandomOptionChangedIndexDefault = 0xFF;
 
@@ -22,6 +24,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public const byte KindAvatarEmblem = 9;
         public const byte KindExpertJobMaterial = 10;
         public const byte KindSpecialMaterial = 11;
+        public const byte KindGuildMedal = 12;
+        public const byte KindGuardianGem = 13;
+        public const byte KindEpicPiece = 14;
 
         public const int ItemKindOffset = 0;
         public const int ItemIdOffset = 1;
@@ -60,6 +65,14 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public const int RemainUseCountOffset = 79;
         public const int SortLockFlagOffset = 80;
         public const int EquipmentLockIdOffset = 81;
+        public const int A21TailUnknown84Offset = 82;
+        public const int GuardianGemKey0Offset = 86;
+        public const int A21TailUnknown96Offset = 94;
+        public const int A21TailUnknown97Offset = 95;
+        public const int GuardianGemSlotCount = 4;
+        public const int GuardianGemBaseItemId = 89999;
+
+        private readonly ushort[] _guardianGemKeys = new ushort[GuardianGemSlotCount];
 
         public ItemCore()
         {
@@ -141,6 +154,12 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public byte SortLockFlag { get; set; }
 
         public byte EquipmentLockId { get; set; }
+
+        public uint A21Tail_Unknown84 { get; set; }
+
+        public byte A21Tail_Unknown96 { get; set; }
+
+        public uint A21Tail_Unknown97 { get; set; }
 
         public bool IsEmpty => ItemKind == KindUnknown && ItemId == 0;
 
@@ -291,6 +310,10 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             RemainUseCount = 0;
             SortLockFlag = 0;
             EquipmentLockId = 0;
+            A21Tail_Unknown84 = 0;
+            Array.Clear(_guardianGemKeys, 0, _guardianGemKeys.Length);
+            A21Tail_Unknown96 = 0;
+            A21Tail_Unknown97 = 0;
         }
 
         public static ItemCore Create(byte itemKind, int itemId)
@@ -342,6 +365,10 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             RemainUseCount = source.RemainUseCount;
             SortLockFlag = source.SortLockFlag;
             EquipmentLockId = source.EquipmentLockId;
+            A21Tail_Unknown84 = source.A21Tail_Unknown84;
+            Array.Copy(source._guardianGemKeys, _guardianGemKeys, GuardianGemSlotCount);
+            A21Tail_Unknown96 = source.A21Tail_Unknown96;
+            A21Tail_Unknown97 = source.A21Tail_Unknown97;
         }
 
         public ItemCore Copy()
@@ -430,6 +457,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public bool IsEquipmentItem()
         {
             return ItemKind == KindEquipment
+                || ItemKind == KindGuildMedal
                 || ItemKind == KindCreature
                 || ItemKind == KindCreatureEquipment
                 || ItemKind == KindAvatar;
@@ -438,6 +466,93 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         public bool IsAvatarItem()
         {
             return ItemKind == KindAvatar;
+        }
+
+        public ushort GetGuardianGemKey(int index)
+        {
+            ValidateGuardianGemIndex(index);
+            return _guardianGemKeys[index];
+        }
+
+        public ushort[] GetGuardianGemKeys()
+        {
+            var result = new ushort[GuardianGemSlotCount];
+            Array.Copy(_guardianGemKeys, result, GuardianGemSlotCount);
+            return result;
+        }
+
+        public void SetGuardianGemKey(int index, ushort key)
+        {
+            ValidateGuardianGemIndex(index);
+            _guardianGemKeys[index] = key;
+        }
+
+        public void SetGuardianGemKeys(IReadOnlyList<ushort> keys)
+        {
+            Array.Clear(_guardianGemKeys, 0, _guardianGemKeys.Length);
+            if (keys == null)
+                return;
+
+            for (var index = 0; index < keys.Count && index < GuardianGemSlotCount; index++)
+                _guardianGemKeys[index] = keys[index];
+        }
+
+        public int GetGuardianGemItemId(int index)
+        {
+            return DecodeGuardianGemItemId(GetGuardianGemKey(index));
+        }
+
+        public int[] GetGuardianGemItemIds()
+        {
+            var result = new int[GuardianGemSlotCount];
+            for (var index = 0; index < GuardianGemSlotCount; index++)
+                result[index] = DecodeGuardianGemItemId(_guardianGemKeys[index]);
+            return result;
+        }
+
+        public void SetGuardianGemItemId(int index, int itemId)
+        {
+            SetGuardianGemKey(index, EncodeGuardianGemKey(itemId));
+        }
+
+        public void SetGuardianGemItemIds(IReadOnlyList<int> itemIds)
+        {
+            Array.Clear(_guardianGemKeys, 0, _guardianGemKeys.Length);
+            if (itemIds == null)
+                return;
+
+            for (var index = 0; index < itemIds.Count && index < GuardianGemSlotCount; index++)
+                _guardianGemKeys[index] = EncodeGuardianGemKey(itemIds[index]);
+        }
+
+        public int GetGuardianGemKeyWriteCount()
+        {
+            for (var index = GuardianGemSlotCount - 1; index >= 0; index--)
+            {
+                if (_guardianGemKeys[index] != 0)
+                    return index + 1;
+            }
+
+            return 0;
+        }
+
+        public static ushort EncodeGuardianGemKey(int itemId)
+        {
+            if (itemId <= 0)
+                return 0;
+            if (itemId <= GuardianGemBaseItemId)
+                throw new ArgumentOutOfRangeException(nameof(itemId), itemId, "守护珠物品ID必须大于89999。");
+
+            var key = itemId - GuardianGemBaseItemId;
+            if (key > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(itemId), itemId, "守护珠key超过UInt16范围。");
+
+            return (ushort)key;
+        }
+
+        public static int DecodeGuardianGemItemId(ushort key)
+        {
+            return key == 0 ? 0 : GuardianGemBaseItemId + key;
         }
 
         public byte[] ToBytes()
@@ -480,6 +595,11 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             buffer[RemainUseCountOffset] = RemainUseCount;
             buffer[SortLockFlagOffset] = SortLockFlag;
             buffer[EquipmentLockIdOffset] = EquipmentLockId;
+            WriteUInt32(buffer, A21TailUnknown84Offset, A21Tail_Unknown84);
+            for (var index = 0; index < GuardianGemSlotCount; index++)
+                WriteUInt16(buffer, GuardianGemKey0Offset + index * 2, _guardianGemKeys[index]);
+            buffer[A21TailUnknown96Offset] = A21Tail_Unknown96;
+            WriteUInt32(buffer, A21TailUnknown97Offset, A21Tail_Unknown97);
             return buffer;
         }
 
@@ -527,7 +647,13 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 RemainUseCount = data[RemainUseCountOffset],
                 SortLockFlag = data[SortLockFlagOffset],
                 EquipmentLockId = data[EquipmentLockIdOffset],
+                A21Tail_Unknown84 = ReadUInt32(data, A21TailUnknown84Offset),
+                A21Tail_Unknown96 = data[A21TailUnknown96Offset],
+                A21Tail_Unknown97 = ReadUInt32(data, A21TailUnknown97Offset),
             };
+
+            for (var index = 0; index < GuardianGemSlotCount; index++)
+                item._guardianGemKeys[index] = ReadUInt16(data, GuardianGemKey0Offset + index * 2);
 
             ReadChronicleOption(data, ChronicleOption0Offset, item.ChronicleOption0);
             ReadChronicleOption(data, ChronicleOption1Offset, item.ChronicleOption1);
@@ -582,6 +708,11 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             return BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(offset, 2));
         }
 
+        private static uint ReadUInt32(ReadOnlySpan<byte> data, int offset)
+        {
+            return BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(offset, 4));
+        }
+
         private static void WriteInt32(byte[] buffer, int offset, int value)
         {
             BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(offset, 4), value);
@@ -590,6 +721,17 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         private static void WriteUInt16(byte[] buffer, int offset, ushort value)
         {
             BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(offset, 2), value);
+        }
+
+        private static void WriteUInt32(byte[] buffer, int offset, uint value)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(offset, 4), value);
+        }
+
+        private static void ValidateGuardianGemIndex(int index)
+        {
+            if (index < 0 || index >= GuardianGemSlotCount)
+                throw new ArgumentOutOfRangeException(nameof(index), index, "守护珠槽位范围是0-3。");
         }
     }
 }

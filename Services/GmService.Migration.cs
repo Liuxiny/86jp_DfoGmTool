@@ -1,14 +1,10 @@
 namespace DfoGmTool.Services
 {
-    public sealed partial class GmService
+    public sealed class A12ToA21MigrationRequest
     {
-        public object GetInventoryMigrationStatus()
-            => _inventoryMigration.GetStatus();
-
-        public object MigrateLegacyInventoryToNew()
-            => _inventoryMigration.MigrateLegacyToNew();
-
-        public object MigrateNewInventoryToLegacy()
-            => _inventoryMigration.MigrateNewToLegacy();
+        public string DatabasePath { get; set; }
+        public string PvfPath { get; set; }
+        public bool UserBackedUp { get; set; }
+        public string ConfirmText { get; set; }
     }
 }

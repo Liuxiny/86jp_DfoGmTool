@@ -15,7 +15,7 @@ namespace DfoGmTool.Services
             int characterId,
             HashSet<string> selected)
         {
-            if (!selected.Contains("equipped") || !TableExists(conn, tx, "character_new_items"))
+            if (!selected.Contains("equipped") || !TableExists(conn, tx, "character_inventory_items"))
                 return 0;
 
             var itemIndex = (_pvfIndex.AllItems ?? Array.Empty<PvfIndexService.ItemEntry>())
@@ -27,7 +27,7 @@ namespace DfoGmTool.Services
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
 SELECT item_uid, slot_index, item_core
-FROM character_new_items
+FROM character_inventory_items
 WHERE character_id = @cid AND list_type = 3
 ORDER BY slot_index;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
@@ -68,7 +68,7 @@ ORDER BY slot_index;";
                 using (var move = conn.CreateCommand())
                 {
                     move.Transaction = tx;
-                    move.CommandText = @"UPDATE character_new_items
+                    move.CommandText = @"UPDATE character_inventory_items
 SET list_type=@targetList,slot_index=@target,updated_at=CURRENT_TIMESTAMP
 WHERE item_uid=@uid AND character_id=@cid AND list_type=3;";
                     move.Parameters.AddWithValue("@targetList", (int)destinationList);
@@ -123,7 +123,7 @@ WHERE character_id = @cid AND equipment_lock_id = @lockId;";
                 using (var verify = conn.CreateCommand())
                 {
                     verify.Transaction = tx;
-                    verify.CommandText = "SELECT item_core FROM character_new_items WHERE character_id = @cid AND list_type=3;";
+                    verify.CommandText = "SELECT item_core FROM character_inventory_items WHERE character_id = @cid AND list_type=3;";
                     verify.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = verify.ExecuteReader())
                     {
@@ -155,7 +155,7 @@ WHERE character_id = @cid AND equipment_lock_id = @lockId;";
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"SELECT list_type,slot_index,item_core
-FROM character_new_items
+FROM character_inventory_items
 WHERE character_id=@cid
 ORDER BY list_type,slot_index;";
             command.Parameters.AddWithValue("@cid", characterId);
@@ -175,9 +175,49 @@ ORDER BY list_type,slot_index;";
                 if ((listTypeValue == (int)InventoryListType.Main && slot >= 3 && slot <= 8)
                     || listTypeValue == (int)InventoryListType.PersonalCargo)
                     continue;
-                if (!ItemSlotBoundService.TryResolveItemKindForMigration((InventoryListType)listTypeValue, slot, core.ItemId, out var expectedKind)
+                if (!TryResolveA21SlotKind((InventoryListType)listTypeValue, slot, out var expectedKind)
                     || expectedKind != core.ItemKind)
                     throw new InvalidOperationException($"复制后的物品容器不匹配: list={listTypeValue} slot={slot} kind={core.ItemKind} expected={expectedKind} itemId={core.ItemId}");
+            }
+        }
+
+        private static bool TryResolveA21SlotKind(InventoryListType listType, short slot, out byte kind)
+        {
+            kind = ItemCore.KindUnknown;
+            switch (listType)
+            {
+                case InventoryListType.Main:
+                    if (slot >= 9 && slot <= 64) kind = ItemCore.KindEquipment;
+                    else if (slot >= 65 && slot <= 120) kind = ItemCore.KindConsumable;
+                    else if (slot >= 121 && slot <= 176) kind = ItemCore.KindMaterial;
+                    else if (slot >= 177 && slot <= 232) kind = ItemCore.KindQuest;
+                    else if (slot >= 233 && slot <= 288) kind = ItemCore.KindExpertJobMaterial;
+                    else if (slot >= 289 && slot <= 351) kind = ItemCore.KindAvatarEmblem;
+                    else return false;
+                    return true;
+                case InventoryListType.Avatar:
+                    kind = ItemCore.KindAvatar;
+                    return slot >= 0 && slot <= 209;
+                case InventoryListType.Pet:
+                    if (slot >= 0 && slot <= 139) kind = ItemCore.KindCreature;
+                    else if (slot >= 140 && slot <= 188) kind = ItemCore.KindCreatureEquipment;
+                    else if (slot >= 189 && slot <= 239) kind = ItemCore.KindCreatureConsumable;
+                    else return false;
+                    return true;
+                case InventoryListType.GuildMedal:
+                    if (slot >= 0 && slot <= 48) kind = ItemCore.KindGuildMedal;
+                    else if (slot >= 49 && slot <= 97) kind = ItemCore.KindGuardianGem;
+                    else return false;
+                    return true;
+                case InventoryListType.Equipment:
+                    if (slot >= 0 && slot <= 10) kind = ItemCore.KindAvatar;
+                    else if ((slot >= 11 && slot <= 23) || slot == 29) kind = ItemCore.KindEquipment;
+                    else if (slot == 24) kind = ItemCore.KindCreature;
+                    else if (slot >= 25 && slot <= 27) kind = ItemCore.KindCreatureEquipment;
+                    else return false;
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -211,6 +251,8 @@ ORDER BY list_type,slot_index;";
                 return slot >= 0 && slot < personalCargoCapacity;
             if (listType == (int)InventoryListType.Pet)
                 return slot >= 0 && slot <= 239;
+            if (listType == (int)InventoryListType.GuildMedal)
+                return slot >= 0 && slot <= 97;
             if (listType != (int)InventoryListType.Equipment)
                 return false;
 

@@ -6,11 +6,16 @@ namespace DfoGmTool.ServerCore.Game.Quests
 {
     // 任务两张表的唯一数据访问点:
     //   character_active_quests   进行中任务(槽位/任务号/触发器值)
-    //   character_invisible_falgs 完成标记(slot_index=任务号, flag_value=完成值/问答分支值)
+    //   character_quest_completions 完成标记(quest_id=任务号, completion_value=完成值/问答分支值)
     // 这两张表的 SQL 只出现在这个文件里。需要并入外部事务的操作提供
     // (conn, tx) 静态变体; 实例方法自开连接, 供没有现成事务的调用方使用。
     public sealed class QuestRepository
     {
+        public const int MinimumQuestId = 1;
+        public const int MaximumQuestId = 29999;
+        public const int MinimumCompletionValue = 1;
+        public const int MaximumCompletionValue = byte.MaxValue;
+
         private readonly string _connStr;
 
         public QuestRepository(string connStr)
@@ -93,6 +98,7 @@ namespace DfoGmTool.ServerCore.Game.Quests
             uint triggerValue,
             QuestActivationId activationId = default)
         {
+            EnsureQuestId(questId);
             if (!activationId.IsValid)
                 activationId = QuestActivationId.New();
             using (var cmd = new SqliteCommand(
@@ -178,6 +184,24 @@ namespace DfoGmTool.ServerCore.Game.Quests
                 cmd.Parameters.AddWithValue("@version", expectedVersion);
                 cmd.Parameters.AddWithValue("@trigger", (long)expectedTrigger);
                 return cmd.ExecuteNonQuery() == 1;
+            }
+        }
+
+        internal static int DeleteActiveQuestsByQuestId(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            ushort questId)
+        {
+            using (var cmd = new SqliteCommand(
+                @"DELETE FROM character_active_quests
+                  WHERE character_id=@cid AND quest_id=@qid",
+                conn,
+                tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@qid", (int)questId);
+                return cmd.ExecuteNonQuery();
             }
         }
 
@@ -297,7 +321,7 @@ namespace DfoGmTool.ServerCore.Game.Quests
         public static int ReadClearedFlagValue(SqliteConnection conn, SqliteTransaction tx, int characterId, int questId)
         {
             using (var cmd = new SqliteCommand(
-                "SELECT flag_value FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx",
+                "SELECT completion_value FROM character_quest_completions WHERE character_id=@cid AND quest_id=@idx",
                 conn,
                 tx))
             {
@@ -322,7 +346,7 @@ namespace DfoGmTool.ServerCore.Game.Quests
         {
             var flags = new Dictionary<int, int>();
             using (var cmd = new SqliteCommand(
-                "SELECT slot_index, flag_value FROM character_invisible_falgs WHERE character_id=@cid ORDER BY slot_index", conn, tx))
+                "SELECT quest_id, completion_value FROM character_quest_completions WHERE character_id=@cid ORDER BY quest_id", conn, tx))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 using (var r = cmd.ExecuteReader())
@@ -344,7 +368,7 @@ namespace DfoGmTool.ServerCore.Game.Quests
         {
             var entries = new List<KeyValuePair<int, int>>();
             using (var cmd = new SqliteCommand(
-                "SELECT slot_index, flag_value FROM character_invisible_falgs WHERE character_id=@cid ORDER BY slot_index", conn, tx))
+                "SELECT quest_id, completion_value FROM character_quest_completions WHERE character_id=@cid ORDER BY quest_id", conn, tx))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 using (var r = cmd.ExecuteReader())
@@ -359,11 +383,14 @@ namespace DfoGmTool.ServerCore.Game.Quests
         // 写完成标记的同时抬高 init 载荷长度水位, 保证选角初始化包能覆盖到该任务号。
         public static void MarkQuestCleared(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId, int flagValue = 1)
         {
+            EnsureQuestId(questId);
             if (flagValue == 0)
                 flagValue = 1;
+            if (flagValue < MinimumCompletionValue || flagValue > MaximumCompletionValue)
+                throw new ArgumentOutOfRangeException(nameof(flagValue), "completion_value must be between 1 and 255.");
 
             using (var cmd = new SqliteCommand(
-                "INSERT OR REPLACE INTO character_invisible_falgs (character_id, slot_index, flag_value) VALUES (@cid, @idx, @flag)", conn, tx))
+                "INSERT OR REPLACE INTO character_quest_completions (character_id, quest_id, completion_value) VALUES (@cid, @idx, @flag)", conn, tx))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@idx", (int)questId);
@@ -381,10 +408,16 @@ namespace DfoGmTool.ServerCore.Game.Quests
             }
         }
 
+        private static void EnsureQuestId(int questId)
+        {
+            if (questId < MinimumQuestId || questId > MaximumQuestId)
+                throw new ArgumentOutOfRangeException(nameof(questId), "quest_id must be between 1 and 29999.");
+        }
+
         public static void DeleteClearedFlag(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId)
         {
             using (var cmd = new SqliteCommand(
-                "DELETE FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx",
+                "DELETE FROM character_quest_completions WHERE character_id=@cid AND quest_id=@idx",
                 conn,
                 tx))
             {
@@ -447,7 +480,7 @@ WHERE character_id=@cid AND quest_id=@qid;";
         // 初始化路径的整表重建(先清后写), 供选角种子数据载入使用。
         public static void ReplaceAllClearedFlags(SqliteConnection conn, SqliteTransaction tx, int characterId, IReadOnlyList<KeyValuePair<int, int>> flags)
         {
-            using (var cmd = new SqliteCommand("DELETE FROM character_invisible_falgs WHERE character_id = @cid", conn, tx))
+            using (var cmd = new SqliteCommand("DELETE FROM character_quest_completions WHERE character_id = @cid", conn, tx))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.ExecuteNonQuery();
@@ -459,7 +492,7 @@ WHERE character_id=@cid AND quest_id=@qid;";
             foreach (var flag in flags)
             {
                 using (var cmd = new SqliteCommand(
-                    "INSERT INTO character_invisible_falgs (character_id, slot_index, flag_value) VALUES (@cid, @si, @fv)", conn, tx))
+                    "INSERT INTO character_quest_completions (character_id, quest_id, completion_value) VALUES (@cid, @si, @fv)", conn, tx))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     cmd.Parameters.AddWithValue("@si", flag.Key);

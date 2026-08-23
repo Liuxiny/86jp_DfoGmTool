@@ -120,6 +120,23 @@ namespace GmPvfLib
         public List<ScriptNode> Nodes { get; set; } = new List<ScriptNode>();
     }
 
+    public sealed class DungeonStoryIndependentRateInfo
+    {
+        public int[] Values { get; set; } = Array.Empty<int>();
+        public int ReferencedQuestId { get; set; }
+    }
+
+    public sealed class DungeonStoryModeInfo
+    {
+        public int DifficultySize { get; set; } = -1;
+        public int[] FirstDifficultyRates { get; set; } = Array.Empty<int>();
+        public int[] IncreaseDifficultyRates { get; set; } = Array.Empty<int>();
+        public int[] IncreaseExperienceRates { get; set; } = Array.Empty<int>();
+        public List<int> QuestIds { get; set; } = new List<int>();
+        public List<DungeonStoryIndependentRateInfo> IndependentRates { get; set; } =
+            new List<DungeonStoryIndependentRateInfo>();
+    }
+
     /// <summary>
     /// PVF 中的 .dgn 地下城文件。
     /// 核心字段类型化，不常用字段通过 Root/Content 属性或 GetValue 方法动态访问。
@@ -151,6 +168,7 @@ namespace GmPvfLib
         public int[] RecommendedLevel { get; set; }         // [min, max]
         public int LimitPartyCount { get; set; } = -1;
         public int[] QuestConnection { get; set; }          // DGN 顶层 [flag, questId, value]
+        public DungeonStoryModeInfo StoryMode { get; set; }
 
         // 进本/经济
         public int HellDungeon { get; set; } = -1;
@@ -468,6 +486,9 @@ namespace GmPvfLib
                         float f;
                         if (float.TryParse(data, NumberStyles.Float, CultureInfo.InvariantCulture, out f))
                             dgn.ExperienceIncreasingPoint = f;
+                        break;
+                    case "story mode":
+                        dgn.StoryMode = ParseStoryMode(node, text);
                         break;
                     case "background pos":
                         dgn.BackgroundPos = ParseInt(data);
@@ -1549,6 +1570,155 @@ namespace GmPvfLib
                 return Array.Empty<string>();
 
             return data.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        private static DungeonStoryModeInfo ParseStoryMode(
+            ScriptNode node,
+            string text)
+        {
+            var result = new DungeonStoryModeInfo();
+            if (node?.Children == null)
+                return result;
+
+            foreach (var child in node.Children)
+            {
+                var data = ReadAllNodeData(child, text);
+                switch (child.Tag.ToLowerInvariant())
+                {
+                    case "difficulty size":
+                        result.DifficultySize = ParseInt(data);
+                        break;
+                    case "first difficulty rate":
+                        result.FirstDifficultyRates =
+                            ParseIntArray(data) ?? Array.Empty<int>();
+                        break;
+                    case "increase difficulty rate":
+                        result.IncreaseDifficultyRates =
+                            ParseIntArray(data) ?? Array.Empty<int>();
+                        break;
+                    case "increase exp rate":
+                        result.IncreaseExperienceRates =
+                            ParseIntArray(data) ?? Array.Empty<int>();
+                        break;
+                    case "quest list":
+                        ParseStoryQuestList(child, text, result);
+                        break;
+                }
+            }
+
+            return result;
+        }
+
+        private static void ParseStoryQuestList(
+            ScriptNode node,
+            string text,
+            DungeonStoryModeInfo result)
+        {
+            AppendPositiveIntegers(node?.DataItems, text, result.QuestIds);
+            if (node?.Children == null)
+                return;
+
+            foreach (var child in node.Children)
+            {
+                if (!child.Tag.Equals(
+                        "independent rate",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var values = ReadAllNodeIntegers(child, text);
+                if (values.Length == 0)
+                    continue;
+
+                var referencedQuestId = values[values.Length - 1];
+                result.IndependentRates.Add(new DungeonStoryIndependentRateInfo
+                {
+                    Values = values,
+                    ReferencedQuestId = referencedQuestId > 0
+                        ? referencedQuestId
+                        : 0,
+                });
+                if (referencedQuestId > 0)
+                    result.QuestIds.Add(referencedQuestId);
+            }
+        }
+
+        private static int[] ReadAllNodeIntegers(ScriptNode node, string text)
+        {
+            var values = new List<int>();
+            AppendIntegers(node?.DataItems, text, values);
+            return values.ToArray();
+        }
+
+        private static void AppendPositiveIntegers(
+            IReadOnlyList<ScriptDataItem> items,
+            string text,
+            ICollection<int> destination)
+        {
+            if (items == null || destination == null)
+                return;
+
+            foreach (var item in items)
+            {
+                var values = ParseIntArray(RemoveBraceSections(
+                    item.GetContent(text)?.Trim()));
+                if (values == null)
+                    continue;
+                foreach (var value in values)
+                    if (value > 0)
+                        destination.Add(value);
+            }
+        }
+
+        private static void AppendIntegers(
+            IReadOnlyList<ScriptDataItem> items,
+            string text,
+            ICollection<int> destination)
+        {
+            if (items == null || destination == null)
+                return;
+
+            foreach (var item in items)
+            {
+                var values = ParseIntArray(RemoveBraceSections(
+                    item.GetContent(text)?.Trim()));
+                if (values == null)
+                    continue;
+                foreach (var value in values)
+                    destination.Add(value);
+            }
+        }
+
+        private static string RemoveBraceSections(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value;
+
+            var chars = value.ToCharArray();
+            var depth = 0;
+            for (var index = 0; index < chars.Length; index++)
+            {
+                if (chars[index] == '{')
+                {
+                    depth++;
+                    chars[index] = ' ';
+                    continue;
+                }
+
+                if (chars[index] == '}')
+                {
+                    if (depth > 0)
+                        depth--;
+                    chars[index] = ' ';
+                    continue;
+                }
+
+                if (depth > 0)
+                    chars[index] = ' ';
+            }
+
+            return new string(chars);
         }
 
         #endregion

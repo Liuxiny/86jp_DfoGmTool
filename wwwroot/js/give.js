@@ -99,42 +99,6 @@ const EQUIP_GROUPS = [
 const STACK_SEGMENTS = ['消耗品', '材料', '任务品', '副职业材料', '徽章', '特殊材料'];
 
 let giveCategory = null; // {kind:'equipment', tag/tags} 或 {kind:'stackable', segment/segments}
-let giveJobLabelByValue = new Map();
-
-const USABLE_JOB_TOKEN_TO_JOB = {
-  swordman: 0,
-  fighter: 1,
-  gunner: 2,
-  mage: 3,
-  priest: 4,
-  'at gunner': 5,
-  thief: 6,
-  'at fighter': 7,
-  'at mage': 8,
-  demonicswordman: 9,
-  'demonic swordman': 9,
-  creatormage: 10,
-  'creator mage': 10,
-  'at swordman': 11,
-  atswordman: 11,
-  knight: 12,
-};
-
-const USABLE_JOB_FALLBACK_LABELS = {
-  0: '鬼剑士',
-  1: '格斗家',
-  2: '神枪手',
-  3: '魔法师',
-  4: '圣职者',
-  5: '女神枪手',
-  6: '暗夜使者',
-  7: '男格斗家',
-  8: '男魔法师',
-  9: '黑暗武士',
-  10: '缔造者',
-  11: '女鬼剑士',
-  12: '守护者',
-};
 
 function giveCategoryMatches(left, right) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
@@ -158,40 +122,8 @@ function usableJobChipsHtml(item) {
 }
 
 function usableJobDisplayLabels(item) {
-  const raw = String(item?.usableJob || '').trim();
-  if (!raw || /\[all\]/i.test(raw)) return ['无限制'];
-
-  const parsed = [];
-  for (const match of raw.matchAll(/\[([^\]]+)\]/g)) {
-    const token = normalizeUsableJobToken(match[1]);
-    if (!token || token === 'all') continue;
-    const job = USABLE_JOB_TOKEN_TO_JOB[token];
-    const label = job != null ? giveJobLabelByValue.get(String(job)) : null;
-    parsed.push(label || usableJobFallbackLabel(job, token));
-  }
-
-  const unique = parsed.filter((label, index) => label && parsed.indexOf(label) === index);
-  if (unique.length) return unique;
   if (Array.isArray(item?.usableJobLabels) && item.usableJobLabels.length) return item.usableJobLabels;
   return [item?.usableJobLabel || '无限制'];
-}
-
-function normalizeUsableJobToken(token) {
-  return String(token || '')
-    .replace(/_/g, ' ')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-}
-
-function usableJobTokenFallbackLabel(token) {
-  return token || '无限制';
-}
-
-function usableJobFallbackLabel(job, token) {
-  if (job != null && USABLE_JOB_FALLBACK_LABELS[job])
-    return giveJobLabelWithGender(job, USABLE_JOB_FALLBACK_LABELS[job]);
-  return usableJobTokenFallbackLabel(token);
 }
 
 function giveCatEl(label, count, isActive, rawTitle, onClick) {
@@ -287,12 +219,10 @@ function syncGiveUsableJobOptions(jobs) {
   const previous = select.value;
   const defaultValue = currentChar ? String(currentChar.job) : '-1';
   select.innerHTML = '<option value="-1">全部职业</option><option value="-2">无限制</option>';
-  giveJobLabelByValue = new Map();
   for (const job of jobs || []) {
     const option = document.createElement('option');
     option.value = job.value;
     option.textContent = giveJobLabelWithGender(job.value, job.label || `job ${job.value}`);
-    giveJobLabelByValue.set(String(job.value), option.textContent);
     select.appendChild(option);
   }
   select.value = previous && [...select.options].some((option) => option.value === previous)

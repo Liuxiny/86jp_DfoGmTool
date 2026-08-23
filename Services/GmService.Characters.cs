@@ -125,7 +125,7 @@ FROM characters WHERE character_id = @cid;";
         }
 
         // 基础属性表: 用服务端 CharacterStatComputer 按 职业/等级/转职/觉醒 计算,
-        // 与改等级时服务端落库的战斗属性同源同值。解码 82B 布局的具名字段。
+        // 与改等级时服务端落库的战斗属性同源同值，解码服务端属性布局的具名字段。
         public object GetCharacterStats(int characterId)
         {
             byte job, level, growType;
@@ -416,12 +416,15 @@ WHERE character_id = @cid;";
                     var clearedSet = new HashSet<int>(cleared.Keys);
                     foreach (var questId in ExtraEquipmentSlotQuestIds)
                     {
-                        var meta = _pvfIndex.GetQuestMeta(questId);
-                        if (meta == null
-                            || !QuestMatchesCharacter(meta, job, growType)
-                            || !IsAcceptableQuestLikeServer(meta, level, clearedSet, cleared)
-                            || questId <= 0
-                            || questId > ushort.MaxValue)
+                        if (!TryValidateQuestWrite(
+                            conn,
+                            tx,
+                            characterId,
+                            questId,
+                            _pvfIndex,
+                            out var meta,
+                            out _)
+                            || !IsAcceptableQuestLikeServer(meta, level, clearedSet, cleared))
                             continue;
 
                         QuestRepository.MarkQuestCleared(conn, tx, characterId, (ushort)questId, 1);
@@ -606,8 +609,7 @@ WHERE character_id = @cid
                     }
 
                     var deletedQuestRows = 0;
-                    var deletedAuditRows = 0;
-                    var deletedInventoryAuditV2Rows = 0;
+                    var deletedInventoryAuditRows = 0;
                     var deletedItemRows = 0;
                     var deletedAvatarDetailRows = 0;
                     var deletedAccountEntryRows = 0;
@@ -622,16 +624,9 @@ WHERE character_id = @cid
                             "DELETE FROM character_active_quests WHERE character_id = @cid;",
                             ("@cid", characterId));
 
-                    if (TableExists(conn, tx, "item_audit_log"))
-                        deletedAuditRows = ExecuteNonQuery(conn, tx, @"
-DELETE FROM item_audit_log
-WHERE character_id = @cid
-   OR (owner_scope = 'character' AND owner_id = @cid);",
-                            ("@cid", characterId));
-
-                    if (TableExists(conn, tx, "inventory_audit_log_v2"))
-                        deletedInventoryAuditV2Rows = ExecuteNonQuery(conn, tx, @"
-DELETE FROM inventory_audit_log_v2
+                    if (TableExists(conn, tx, "inventory_audit_log"))
+                        deletedInventoryAuditRows = ExecuteNonQuery(conn, tx, @"
+DELETE FROM inventory_audit_log
 WHERE character_id = @cid
    OR (owner_scope = 'character' AND owner_id = @cid);",
                             ("@cid", characterId));
@@ -643,11 +638,10 @@ WHERE character_id = @cid
    OR owner_id = @cid;",
                             ("@cid", characterId));
 
-                    if (TableExists(conn, tx, "character_new_items"))
+                    if (TableExists(conn, tx, "character_inventory_items"))
                         deletedItemRows = ExecuteNonQuery(conn, tx, @"
-DELETE FROM character_new_items
-WHERE character_id = @cid
-   OR (owner_scope = 'character' AND owner_id = @cid);",
+DELETE FROM character_inventory_items
+WHERE character_id = @cid;",
                              ("@cid", characterId));
 
                     // The dungeon outbox has no character FK and must be cleared
@@ -728,8 +722,7 @@ WHERE seed_character_id = @cid
                         accountId,
                         name,
                         deletedQuestRows,
-                        deletedAuditRows,
-                        deletedInventoryAuditV2Rows,
+                        deletedInventoryAuditRows,
                         deletedItemRows,
                         deletedAvatarDetailRows,
                         deletedAccountEntryRows,

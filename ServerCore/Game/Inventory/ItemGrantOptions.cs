@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using DfoGmTool.ServerCore.Game.Characters;
 using DfoGmTool.ServerCore.Game.Skills;
 using DfoGmTool.ServerCore.Game.ItemUpgrade;
 using GmPvfLib;
@@ -221,46 +222,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
     internal static class AvatarGrantPolicy
     {
-        private static readonly IReadOnlyDictionary<int, string[]> JobTokens =
-            new Dictionary<int, string[]>
-            {
-                [0] = new[] { "swordman" },
-                [1] = new[] { "fighter" },
-                [2] = new[] { "gunner" },
-                [3] = new[] { "mage" },
-                [4] = new[] { "priest" },
-                [5] = new[] { "atgunner" },
-                [6] = new[] { "thief" },
-                [7] = new[] { "atfighter" },
-                [8] = new[] { "atmage" },
-                [9] = new[] { "demonicswordman" },
-                [10] = new[] { "creatormage" },
-                [11] = new[] { "atswordman" },
-                [12] = new[] { "knight" },
-            };
-
         internal static bool IsUsableByJob(string usableJob, int job)
         {
-            var normalized = (usableJob ?? string.Empty)
-                .Trim()
-                .Trim('`')
-                .ToLowerInvariant()
-                .Replace("`", string.Empty)
-                .Replace("_", string.Empty)
-                .Replace(" ", string.Empty)
-                .Replace("\t", string.Empty)
-                .Replace("\r", string.Empty)
-                .Replace("\n", string.Empty);
-            if (normalized.Contains("[all]", StringComparison.Ordinal))
-                return true;
-            if (!JobTokens.TryGetValue(job, out var expected))
-                return false;
-            foreach (var token in expected)
-            {
-                if (normalized.Contains("[" + token + "]", StringComparison.Ordinal))
-                    return true;
-            }
-            return false;
+            return PvfCharacterJobCatalog.Current.IsUsableByJob(usableJob, job);
         }
 
         internal static List<AvatarGrantOption> ResolveOptions(

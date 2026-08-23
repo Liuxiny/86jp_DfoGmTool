@@ -52,19 +52,21 @@ function setLoginState(text, isError) {
 
 function updateRuntimeActionButtons(status) {
   $('#btn-runtime-source').classList.toggle('hidden', !(status && status.canChangeSource));
-  $('#btn-inventory-migration').classList.add('hidden');
-  if (status && status.ready && (!status.authenticationRequired || status.authenticated)
-      && typeof refreshInventoryMigrationShortcut === 'function')
-    refreshInventoryMigrationShortcut();
   $('#btn-logout').classList.toggle('hidden', !(status && status.authenticationRequired && status.authenticated));
 }
 
 function updateRuntimeSourceInputs(status, force) {
-  if (!status) return;
   const database = $('#runtime-database-path');
   const pvf = $('#runtime-pvf-path');
-  if (force || !database.value) database.value = status.database || '';
-  if (force || !pvf.value) pvf.value = status.pvf || '';
+  const stored = readStoredRuntimeSource();
+  const databasePath = String(status && status.database || '').trim()
+    || (stored && stored.databasePath)
+    || database.value;
+  const pvfPath = String(status && status.pvf || '').trim()
+    || (stored && stored.pvfPath)
+    || pvf.value;
+  if (databasePath) database.value = databasePath;
+  if (pvfPath) pvf.value = pvfPath;
 }
 
 function showLoginPanel() {
@@ -120,6 +122,8 @@ function startRuntimeWorkspace() {
 
 function applyRuntimeStatus(status) {
   runtimeStatus = status;
+  if (typeof updateA12A21MigrationEnvironment === 'function')
+    updateA12A21MigrationEnvironment(status);
   const authenticationRequired = Boolean(status && status.authenticationRequired);
   const authenticated = !authenticationRequired || Boolean(status && status.authenticated);
   renderRuntimeStatus(status);
@@ -204,13 +208,14 @@ async function configureRuntimeEnvironment() {
     return;
   }
 
+  saveRuntimeSource(databasePath, pvfPath);
   setRuntimeSourceState('正在加载…', false);
   runtimeConfiguring = true;
   $('#btn-load-runtime-source').disabled = true;
   $('#btn-close-runtime-source').classList.add('hidden');
   try {
     const result = await post('/api/environment', { databasePath, pvfPath });
-    saveRuntimeSource(result.status.database || databasePath, result.status.pvf || pvfPath);
+    const classified = Boolean(result.migrationRequired || result.databaseUnusable);
     runtimeReady = false;
     runtimeSourceEpoch++;
     resetRuntimeWorkspace();
@@ -220,6 +225,20 @@ async function configureRuntimeEnvironment() {
       authenticated: true,
       canChangeSource: true,
     });
+    if (result.migrationRequired) {
+      if (typeof showA12A21MigrationRequired === 'function')
+        showA12A21MigrationRequired(result.preview);
+      const migrationError = result.migrationBlocked && result.preview && result.preview.error
+        ? `迁移预览被阻止：${result.preview.error}`
+        : '已识别可迁移旧库，数据库已释放，请预览/升级。';
+      setRuntimeSourceState(migrationError, Boolean(result.migrationBlocked));
+    } else if (result.databaseUnusable) {
+      if (typeof showA12A21DatabaseUnusable === 'function')
+        showA12A21DatabaseUnusable(result.error);
+      setRuntimeSourceState('数据库不可用；请移除该文件等待服务端自动生成，或选择正确数据库。', true);
+    } else if (classified) {
+      setRuntimeSourceState(result.error || '数据源不可用', true);
+    }
   } catch (e) {
     setRuntimeSourceState(e.message, true);
   } finally {
