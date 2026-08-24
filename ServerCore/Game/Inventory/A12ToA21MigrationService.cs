@@ -16,7 +16,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     /// <summary>
     /// Offline, one-way S4A12 -> S4A21 file conversion.
     ///
-    /// The input path is the old database itself.  A new A21 schema-v5 file is
+    /// The input path is the old database itself.  A new A21 schema-v8 file is
     /// built beside it and only after all checks pass is it atomically moved to
     /// the original path.  There is intentionally no A21 -> A12 path and no
     /// in-place table clearing.
@@ -24,6 +24,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     public sealed class A12ToA21MigrationService
     {
         public const string RequiredConfirmation = "update";
+        public const int TargetSchemaVersion = 8;
 
         private static readonly object MigrationGate = new object();
         private readonly string _databasePath;
@@ -250,6 +251,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             }
 
             if (includeItemAnalysis)
+                ValidateMainExpandStages(context.Source, characterIds);
+            if (includeItemAnalysis)
                 AnalyzeItems(context, report, characterIds, accountIds);
             AnalyzeQuestState(context, report, characterIds);
             report.MigratedRows += report.MigratedAccounts + report.MigratedCharacters;
@@ -290,7 +293,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     Issue(report, "character_new_items", Long(row, "item_uid"), "pvf_missing", "当前 A21 PVF 不包含该物品。", core.ItemId);
                     continue;
                 }
-                if (TryResolveRange(core.ItemKind, list, slot, out _, out _, out _)) report.MigratedRows++;
+                if (TryResolveRange(core.ItemKind, list, slot, ResolveMainExpandStage(context.Source, characterId), out _, out _, out _)) report.MigratedRows++;
                 else Issue(report, "character_new_items", Long(row, "item_uid"), "slot_invalid", "A21 原生物品类型没有可用槽位。");
             }
             foreach (var row in context.Source.Rows("character_items"))
@@ -323,7 +326,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     Issue(report, "character_items", Long(row, "item_uid"), "pvf_missing", "当前 A21 PVF 不包含该物品。", core.ItemId);
                     continue;
                 }
-                if (!TryResolveRange(core.ItemKind, Int(row, "list_type"), Int(row, "slot_index"), out _, out _, out _))
+                if (!TryResolveRange(core.ItemKind, Int(row, "list_type"), Int(row, "slot_index"), ResolveMainExpandStage(context.Source, characterId), out _, out _, out _))
                     Issue(report, "character_items", Long(row, "item_uid"), "slot_invalid", "A21 原生物品类型没有可用槽位。");
                 else
                     report.MigratedRows++;
@@ -391,6 +394,10 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 {
                     report.NameTagRows++;
                     report.MigratedRows++;
+                }
+                else if (!TryResolveEquipmentRange(core.ItemKind, Int(row, "slot"), out _, out _, out _))
+                {
+                    Issue(report, "character_equipped_entries", Int(row, "slot"), "slot_invalid", "A12 穿戴槽位无法映射到 A21。", core.ItemId);
                 }
                 else if (!_containsItemId(core.ItemId))
                 {
@@ -630,7 +637,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 ["character_collectbox_slots"] = "character_collectbox_slots", ["character_container_state"] = "character_container_state",
                 ["character_dimension_flags"] = "character_dimension_flags", ["character_dimensions"] = "character_dimensions",
                 ["character_dungeon_permissions"] = "character_dungeon_permissions", ["character_growth_weapon_stages"] = "character_growth_weapon_stages",
-                ["character_hotkey_slots"] = "character_hotkey_slots", ["character_item_values"] = "character_item_values",
+                ["character_hotkey_slots"] = "character_hotkey_slots",
                 ["character_pvp_missions"] = "character_pvp_missions", ["character_subtype0_fields"] = "character_subtype0_fields",
                 ["character_subtype1_fields"] = "character_subtype1_fields", ["character_init_flags"] = "character_init_flags",
                 ["character_skills"] = "character_skills",
@@ -933,7 +940,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     Issue(report, "character_new_items", Long(row, "item_uid"), "pvf_missing", "当前 A21 PVF 不包含该物品。", core.ItemId);
                     continue;
                 }
-                if (!TryResolveRange(core.ItemKind, sourceList, sourceSlot, out var list, out var start, out var end))
+                if (!TryResolveRange(core.ItemKind, sourceList, sourceSlot, ResolveMainExpandStage(source, character), out var list, out var start, out var end))
                 {
                     Issue(report, "character_new_items", Long(row, "item_uid"), "slot_invalid", "A21 原生物品类型没有可用槽位。");
                     continue;
@@ -966,7 +973,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 if (sourceSlot >= 354) continue;
                 ApplySourceLock(core, source, character, sourceList, sourceSlot);
                 if (!_containsItemId(core.ItemId)) continue;
-                if (!TryResolveRange(core.ItemKind, sourceList, sourceSlot, out var list, out var start, out var end)) continue;
+                if (!TryResolveRange(core.ItemKind, sourceList, sourceSlot, ResolveMainExpandStage(source, character), out var list, out var start, out var end)) continue;
                 var requested = sourceSlot;
                 var slot = FindFree(occupied, character, (int)list, requested, start, end);
                 if (slot < 0) { Issue(report, "character_items", Long(row, "item_uid"), "target_full", "A21 背包槽位不足，未覆盖目标物品。"); continue; }
@@ -1057,9 +1064,11 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     InsertNameTag(target, tx, character, Int(row, "item_id"), Int(row, "expire_time"));
                     continue;
                 }
-                if (!_containsItemId(core.ItemId) || !TryResolveEquipmentRange(core.ItemKind, sourceSlot, out var start, out var end)) continue;
+                if (!_containsItemId(core.ItemId)
+                    || !TryResolveEquipmentRange(core.ItemKind, sourceSlot, out var requestedSlot, out var start, out var end))
+                    continue;
                 var destinationList = ResolveEquippedList(core.ItemKind);
-                var slot = FindFreeEquipment(occupied, character, destinationList, sourceSlot, start, end);
+                var slot = FindFreeEquipment(occupied, character, destinationList, requestedSlot, start, end);
                 if (slot < 0) { Issue(report, "character_equipped_entries", sourceSlot, "target_full", "A21 穿戴槽位已占用。"); continue; }
                 occupied.Add((character, (int)destinationList, slot));
                 InsertItemWithDetails(target, tx, character, FindAccountForCharacter(source, character), destinationList, (short)slot, core, row, source, report);
@@ -1423,9 +1432,10 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
         private static InventoryListType ResolveEquippedList(byte kind)
         {
-            if (kind == ItemCore.KindAvatar) return InventoryListType.Avatar;
-            if (kind == ItemCore.KindCreature || kind == ItemCore.KindCreatureEquipment || kind == ItemCore.KindCreatureConsumable)
-                return InventoryListType.Pet;
+            // All character_equipped_entries are worn state in A21.  The
+            // equipment list owns avatar slots 0-11 as well as equipment,
+            // creature, artifact, charm and medal slots; list 1 is the
+            // avatar bag only.
             return InventoryListType.Equipment;
         }
 
@@ -1497,23 +1507,160 @@ SET item_count = (SELECT COUNT(*) FROM account_inventory_items i WHERE i.account
 
         private static int FindFree(HashSet<(int Character, int List, int Slot)> occupied, int character, int list, int requested, int start, int end)
         {
-            if (requested >= start && requested <= end && occupied.Add((character, list, requested))) { occupied.Remove((character, list, requested)); return requested; }
-            for (var slot = start; slot <= end; slot++) if (!occupied.Contains((character, list, slot))) return slot; return -1;
+            var compactMain = list == (int)InventoryListType.Main && start >= 9 && start <= 351;
+            if (!compactMain && requested >= start && requested <= end && !occupied.Contains((character, list, requested)))
+                return requested;
+            // Main-bag migration is intentionally compact: source coordinates
+            // are not stable across the A12 -> A21 range layout.
+            for (var slot = start; slot <= end; slot++)
+                if (!occupied.Contains((character, list, slot))) return slot;
+            return -1;
         }
         private static int FindFreeAccount(HashSet<(int Account, int Slot)> occupied, int account, int requested)
-        { if (requested >= 0 && requested < 64 && !occupied.Contains((account, requested))) return requested; for (var slot = 0; slot < 64; slot++) if (!occupied.Contains((account, slot))) return slot; return -1; }
+        {
+            if (requested >= A21InventorySlotPolicy.AccountCargoSlotStart
+                && requested <= A21InventorySlotPolicy.AccountCargoSlotEnd
+                && !occupied.Contains((account, requested)))
+                return requested;
+            for (var slot = A21InventorySlotPolicy.AccountCargoSlotStart;
+                 slot <= A21InventorySlotPolicy.AccountCargoSlotEnd;
+                 slot++)
+                if (!occupied.Contains((account, slot)))
+                    return slot;
+            return -1;
+        }
         private static int FindFreeEquipment(HashSet<(int Character, int List, int Slot)> occupied, int character, InventoryListType list, int requested, int start, int end)
         { if (requested >= start && requested <= end && !occupied.Contains((character, (int)list, requested))) return requested; for (var slot = start; slot <= end; slot++) if (!occupied.Contains((character, (int)list, slot))) return slot; return -1; }
 
-        private static bool TryResolveRange(byte kind, int sourceList, int sourceSlot, out InventoryListType list, out int start, out int end)
+        private static void ValidateMainExpandStages(SourceDatabase source, IEnumerable<int> characterIds)
+        {
+            foreach (var characterId in characterIds)
+                ResolveMainExpandStage(source, characterId);
+        }
+
+        private static int ResolveMainExpandStage(SourceDatabase source, int characterId)
+        {
+            var row = source.Rows("character_container_state")
+                .FirstOrDefault(value => Int(value, "character_id") == characterId
+                    && Int(value, "list_type") == (int)InventoryListType.Main);
+            var stage = row == null ? A21InventorySlotPolicy.MainExpandStageFull : Int(row, "list_param16");
+            if (!IsValidMainExpandStage(stage))
+                throw new InvalidOperationException($"角色 {characterId} 主背包扩展状态无效: {stage}");
+            return stage;
+        }
+
+        private static bool IsValidMainExpandStage(int stage)
+        {
+            return A21InventorySlotPolicy.TryNormalizeMainExpandStage(stage, out _);
+        }
+
+        private static bool TryResolveRange(byte kind, int sourceList, int sourceSlot, int mainExpandStage, out InventoryListType list, out int start, out int end)
         {
             list = InventoryListType.Main; start = end = 0;
-            if (sourceList == (int)InventoryListType.PersonalCargo) { list = InventoryListType.PersonalCargo; start = 0; end = 151; return true; }
+            if (sourceList == (int)InventoryListType.PersonalCargo)
+            {
+                list = InventoryListType.PersonalCargo;
+                start = A21InventorySlotPolicy.PersonalCargoSlotStart;
+                end = A21InventorySlotPolicy.PersonalCargoSlotEnd;
+                return true;
+            }
+            if (sourceList == (int)InventoryListType.Main
+                && sourceSlot >= A21InventorySlotPolicy.MainQuickSlotStart
+                && sourceSlot <= A21InventorySlotPolicy.MainQuickSlotEnd)
+            {
+                start = end = sourceSlot;
+                return true;
+            }
             if (kind == ItemCore.KindSpecialMaterial && sourceList == 0 && sourceSlot <= 2) { start = end = sourceSlot; return true; }
-            if (!NewInventoryStore.TryGetRange(kind, out list, out var s, out var e)) return false; start = s; end = e; return true;
+            if (sourceList == (int)InventoryListType.GuildMedal)
+            {
+                if (kind == ItemCore.KindGuildMedal
+                    && sourceSlot >= A21InventorySlotPolicy.GuildMedalSlotStart
+                    && sourceSlot <= A21InventorySlotPolicy.GuildMedalSlotEnd)
+                {
+                    list = InventoryListType.GuildMedal;
+                    start = A21InventorySlotPolicy.GuildMedalSlotStart;
+                    end = A21InventorySlotPolicy.GuildMedalSlotEnd;
+                    return true;
+                }
+                if (kind == ItemCore.KindGuardianGem
+                    && sourceSlot >= A21InventorySlotPolicy.GuardianGemSlotStart
+                    && sourceSlot <= A21InventorySlotPolicy.GuardianGemSlotEnd)
+                {
+                    list = InventoryListType.GuildMedal;
+                    start = A21InventorySlotPolicy.GuardianGemSlotStart;
+                    end = A21InventorySlotPolicy.GuardianGemSlotEnd;
+                    return true;
+                }
+                return false;
+            }
+            if (!NewInventoryStore.TryGetRange(kind, out list, out var s, out var e)) return false;
+            start = s;
+            end = e;
+            if (list == InventoryListType.Main
+                && kind != ItemCore.KindAvatarEmblem
+                && start >= A21InventorySlotPolicy.MainEquipmentSlotStart
+                && start <= A21InventorySlotPolicy.MainExpertSlotEnd)
+            {
+                if (!A21InventorySlotPolicy.TryGetMainRange(kind, mainExpandStage, out var openStart, out var openEnd))
+                    return false;
+                start = openStart;
+                end = openEnd;
+            }
+            return end >= start;
         }
-        private static bool TryResolveEquipmentRange(byte kind, int sourceSlot, out int start, out int end)
-        { start = end = 0; if (kind == ItemCore.KindAvatar) { start = 0; end = 10; return true; } if (kind == ItemCore.KindEquipment) { start = sourceSlot >= 21 && sourceSlot <= 23 ? 21 : 11; end = sourceSlot >= 21 && sourceSlot <= 23 ? 23 : 29; return true; } if (kind == ItemCore.KindCreature) { start = end = 24; return true; } if (kind == ItemCore.KindCreatureEquipment) { start = 25; end = 27; return true; } return false; }
+        private static bool TryResolveEquipmentRange(byte kind, int sourceSlot, out int requestedSlot, out int start, out int end)
+        {
+            requestedSlot = start = end = 0;
+            if (kind == ItemCore.KindAvatar && sourceSlot >= 0 && sourceSlot <= 10)
+            {
+                requestedSlot = sourceSlot;
+                start = 0;
+                end = 11;
+                return true;
+            }
+            if (kind == ItemCore.KindEquipment)
+            {
+                if (sourceSlot >= 11 && sourceSlot <= 20)
+                {
+                    requestedSlot = sourceSlot + 1;
+                    start = 12;
+                    end = 21;
+                    return true;
+                }
+                if (sourceSlot >= 21 && sourceSlot <= 23)
+                {
+                    requestedSlot = sourceSlot + 1;
+                    start = 22;
+                    end = 24;
+                    return true;
+                }
+                if (sourceSlot == 29)
+                {
+                    requestedSlot = 30;
+                    start = end = 30;
+                    return true;
+                }
+            }
+            if (kind == ItemCore.KindCreature && sourceSlot == 24)
+            {
+                requestedSlot = start = end = 25;
+                return true;
+            }
+            if (kind == ItemCore.KindCreatureEquipment && sourceSlot >= 25 && sourceSlot <= 27)
+            {
+                requestedSlot = sourceSlot + 1;
+                start = 26;
+                end = 28;
+                return true;
+            }
+            if (kind == ItemCore.KindGuildMedal && sourceSlot == 30)
+            {
+                requestedSlot = start = end = 31;
+                return true;
+            }
+            return false;
+        }
 
         private void ConfigurePvf()
         {
@@ -1537,11 +1684,16 @@ SET item_count = (SELECT COUNT(*) FROM account_inventory_items i WHERE i.account
             if (ItemMetadataResolver.IsEpicPieceItem(itemId)) return ItemCore.KindEpicPiece;
             var metadata = ItemMetadataResolver.Resolve(itemId);
             if (metadata == null) return ItemCore.KindUnknown;
-            if (metadata.ItemKind == "equipment")
-            { if (ItemMetadataResolver.IsAvatarMetadata(metadata)) return ItemCore.KindAvatar; if (ItemMetadataResolver.IsPetCreatureMetadata(metadata)) return ItemCore.KindCreature; if (ItemMetadataResolver.IsPetArtifactMetadata(metadata)) return ItemCore.KindCreatureEquipment; if (string.Equals(ItemMetadataResolver.ResolvePvfTypeTag(metadata), "flag", StringComparison.OrdinalIgnoreCase)) return ItemCore.KindGuildMedal; return ItemCore.KindEquipment; }
-            if (metadata.ItemKind == "stackable")
-            { var tag = ItemMetadataResolver.ResolvePvfTypeTag(metadata); if (string.Equals(tag, "flag gem", StringComparison.OrdinalIgnoreCase)) return ItemCore.KindGuardianGem; if (tag == "quest") return ItemCore.KindQuest; if (tag == "material") return ItemCore.KindMaterial; if (tag == "material expert job") return ItemCore.KindExpertJobMaterial; if (tag == "avatar emblem") return ItemCore.KindAvatarEmblem; return ItemCore.KindConsumable; }
-            return ItemCore.KindUnknown;
+            return NewInventoryStore.TryResolveKindAndRange(
+                metadata,
+                null,
+                out var kind,
+                out _,
+                out _,
+                out _,
+                out _)
+                ? kind
+                : ItemCore.KindUnknown;
         }
 
         private void ValidateInputPaths()
@@ -1698,13 +1850,13 @@ SET item_count = (SELECT COUNT(*) FROM account_inventory_items i WHERE i.account
             using var command = connection.CreateCommand();
             command.CommandText = File.ReadAllText(schemaPath);
             command.ExecuteNonQuery();
-            command.CommandText = "PRAGMA user_version = 5;";
+            command.CommandText = "PRAGMA user_version = " + TargetSchemaVersion.ToString(CultureInfo.InvariantCulture) + ";";
             command.ExecuteNonQuery();
             command.CommandText = @"
 INSERT OR REPLACE INTO schema_metadata
     (singleton_id, baseline_id, schema_version, created_at, updated_at)
 VALUES
-    (1, '86jp-database-v1', 5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);";
+    (1, '86jp-database-v1', " + TargetSchemaVersion.ToString(CultureInfo.InvariantCulture) + @", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);";
             command.ExecuteNonQuery();
         }
 
@@ -1924,7 +2076,7 @@ VALUES
         { if (cols.Count == 0) return false; using var cmd = c.CreateCommand(); cmd.Transaction = tx; cmd.CommandText = (ignore && ignoreConflicts ? "INSERT OR IGNORE" : "INSERT") + " INTO " + table + "(" + string.Join(",", cols) + ") VALUES(" + string.Join(",", cols.Select((_, i) => "@p" + i)) + ");"; for (var i = 0; i < vals.Count; i++) cmd.Parameters.AddWithValue("@p" + i, vals[i] ?? DBNull.Value); return cmd.ExecuteNonQuery() > 0; }
         private static long AllocateSequence(SqliteConnection c, SqliteTransaction tx, string table) { using var cmd = c.CreateCommand(); cmd.Transaction = tx; cmd.CommandText = "INSERT INTO " + table + " DEFAULT VALUES; SELECT last_insert_rowid();"; return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture); }
 
-        private static readonly HashSet<string> A21Tables = new HashSet<string>(new[] { "accounts", "characters", "account_settings", "account_premiums", "account_cargo_state", "character_collectbox_slots", "character_container_state", "character_dimension_flags", "character_dimensions", "character_dungeon_permissions", "character_growth_weapon_stages", "character_hotkey_slots", "character_item_values", "character_pvp_missions", "character_subtype0_fields", "character_subtype1_fields", "character_init_flags", "character_skills", "character_active_quests", "character_quest_completions", "character_item_locks", "character_achievements", "character_titlebook_items", "character_inventory_items", "account_inventory_items", "character_avatar_detail", "character_avatar_uid_sequence", "character_creature_uid_sequence", "character_creatures", "character_name_tag_state", "schema_metadata", "get_userinfo_template", "inventory_audit_log" }, StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> A21Tables = new HashSet<string>(new[] { "accounts", "characters", "account_settings", "account_premiums", "account_cargo_state", "character_collectbox_slots", "character_container_state", "character_dimension_flags", "character_dimensions", "character_dungeon_permissions", "character_growth_weapon_stages", "character_hotkey_slots", "character_pvp_missions", "character_subtype0_fields", "character_subtype1_fields", "character_init_flags", "character_skills", "character_active_quests", "character_quest_completions", "character_item_locks", "character_achievements", "character_titlebook_items", "character_inventory_items", "account_inventory_items", "character_avatar_detail", "character_avatar_uid_sequence", "character_creature_uid_sequence", "character_creatures", "character_name_tag_state", "character_daily_challenge_entry_claims", "character_daily_challenge_progress_events", "character_item_states", "schema_metadata", "get_userinfo_template", "inventory_audit_log" }, StringComparer.OrdinalIgnoreCase);
 
         private static readonly string[] MigrationSourceTables =
         {
@@ -1941,7 +2093,7 @@ VALUES
             "character_collectbox_slots", "character_container_state",
             "character_dimension_flags", "character_dimensions",
             "character_dungeon_permissions", "character_growth_weapon_stages",
-            "character_hotkey_slots", "character_item_values",
+            "character_hotkey_slots",
             "character_pvp_missions", "character_subtype0_fields",
             "character_subtype1_fields", "character_init_flags", "character_skills"
         };

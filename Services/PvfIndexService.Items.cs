@@ -90,6 +90,8 @@ namespace DfoGmTool.Services
             if (string.IsNullOrWhiteSpace(stackableType))
                 return "消耗品";
             var st = stackableType.Replace("`", "").Trim().ToLowerInvariant();
+            if (st.StartsWith("[creature]") || st.StartsWith("[feed]"))
+                return "宠物消耗品";
             if (st.StartsWith("[material]"))
                 return "材料";
             if (st.StartsWith("[quest]"))

@@ -4,6 +4,18 @@ using System.Globalization;
 
 namespace GmPvfLib
 {
+    public sealed class EquipmentEmancipateEntry
+    {
+        public int ItemId { get; set; }
+        public int Count { get; set; }
+    }
+
+    public sealed class EquipmentEmancipateInfo
+    {
+        public int Type { get; set; } = -1;
+        public List<EquipmentEmancipateEntry> Inputs { get; } = new List<EquipmentEmancipateEntry>();
+        public List<EquipmentEmancipateEntry> Outputs { get; } = new List<EquipmentEmancipateEntry>();
+    }
     
     
     
@@ -109,6 +121,7 @@ namespace GmPvfLib
         /// PVF [item category] 段值，用于判定克隆装扮等特殊类别。
         /// </summary>
         public string ItemCategory { get; set; }
+        public EquipmentEmancipateInfo Emancipate { get; set; }
 
         #endregion
         #region 解析
@@ -179,6 +192,7 @@ namespace GmPvfLib
                     case "cool time": equ.CoolTime = ParseInt(data); break;
                     case "inventory limit": equ.InventoryLimit = ParseInt(data); break;
                     case "need material": equ.NeedMaterial = data; break;
+                    case "emancipate": equ.Emancipate = ParseEmancipate(node, content); break;
                     case "upgrade prob increase": equ.UpgradeProbabilityIncrease = ParseInt(data); break;
 
                     
@@ -219,6 +233,56 @@ namespace GmPvfLib
             }
 
             return result;
+        }
+
+        private static EquipmentEmancipateInfo ParseEmancipate(ScriptNode node, string content)
+        {
+            var info = new EquipmentEmancipateInfo();
+            if (node == null)
+                return info;
+
+            foreach (var child in node.Children)
+            {
+                switch (child.Tag.ToLowerInvariant())
+                {
+                    case "emancipate type":
+                        info.Type = ParseInt(child.GetFirstDataContent(content));
+                        break;
+                    case "input":
+                        ParseEmancipateEntries(child, content, info.Inputs);
+                        break;
+                    case "output":
+                        ParseEmancipateEntries(child, content, info.Outputs);
+                        break;
+                }
+            }
+
+            return info;
+        }
+
+        private static void ParseEmancipateEntries(
+            ScriptNode node,
+            string content,
+            List<EquipmentEmancipateEntry> entries)
+        {
+            if (node == null || entries == null)
+                return;
+
+            foreach (var item in node.DataItems)
+            {
+                var values = ParseIntArray(item.GetContent(content));
+                for (var index = 0; index + 1 < values.Length; index += 2)
+                {
+                    if (values[index] <= 0 || values[index + 1] <= 0)
+                        continue;
+
+                    entries.Add(new EquipmentEmancipateEntry
+                    {
+                        ItemId = values[index],
+                        Count = values[index + 1],
+                    });
+                }
+            }
         }
 
         #endregion

@@ -1,6 +1,11 @@
 let a12A21Busy = false;
 let a12A21Preview = null;
 
+function setA12A21PanelOpen(open) {
+  const panel = $('#a12-a21-migration');
+  if (panel) panel.open = Boolean(open);
+}
+
 function a12A21Payload(value) {
   if (!value || typeof value !== 'object') return {};
   const preview = value.preview && typeof value.preview === 'object' ? value.preview : {};
@@ -116,12 +121,13 @@ function renderA12A21Preview(result) {
 function renderA12A21Report(result) {
   const panel = $('#a12-a21-migration-report');
   panel.innerHTML = renderA12A21Summary(result, '升级执行报告') +
-    `<div><b>原文件：</b>已在同一路径完成 A21 schema-v5 替换</div>` +
+    `<div><b>原文件：</b>已在同一路径完成 A21 schema-v8 替换</div>` +
     `<div class="hint">请按报告确认结果后重启服务端并让玩家重新登录。</div>`;
   panel.classList.remove('hidden');
 }
 
 function showA12A21MigrationRequired(preview) {
+  setA12A21PanelOpen(true);
   a12A21Preview = preview || null;
   if (a12A21Preview) renderA12A21Preview(a12A21Preview);
   setA12A21State(a12A21Preview && a12A21Preview.success === false
@@ -132,6 +138,7 @@ function showA12A21MigrationRequired(preview) {
 }
 
 function showA12A21DatabaseUnusable(message) {
+  setA12A21PanelOpen(false);
   invalidateA12A21Preview();
   setA12A21State(message || '数据库不可用；请移除该文件等待服务端自动生成，或选择正确数据库。', true);
 }
@@ -202,6 +209,10 @@ async function executeA12ToA21() {
 }
 
 function updateA12A21MigrationEnvironment(status) {
+  if (status && status.migrationRequired)
+    setA12A21PanelOpen(true);
+  else if (status && (status.ready || status.databaseUnusable))
+    setA12A21PanelOpen(false);
   if (!status || !status.ready) {
     if (!a12A21Busy)
       setA12A21State(status && status.loading ? '可直接预览当前库；请等待其他环境状态更新。' : '可直接预览当前库，无需先通过 A21 结构门禁。', false);

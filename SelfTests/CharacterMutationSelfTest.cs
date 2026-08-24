@@ -69,6 +69,7 @@ namespace DfoGmTool.SelfTests
                 CheckQuestActivationIdentity(gm, pvfIndex, tempDb);
                 CheckQuestWriteGates(gm, pvfIndex, tempDb);
                 CheckPetGrantPersistence(gm, pvfIndex, tempDb);
+                CheckCharmAndTitleGrantPersistence(gm, pvfIndex, tempDb);
                 CheckAvatarMailPersistence(gm, pvfIndex, tempDb);
                 CheckNameTagGrantPersistence(gm, pvfIndex, tempDb);
                 CheckAccountPremiumGrantPersistence(gm, tempDb, pvfIndex);
@@ -676,6 +677,187 @@ WHERE character_id=926014 AND event_id='{eventId:N}' AND event_kind='gm-selftest
                 && CountCoreItem(dbPath, CharacterId, creature.Id) == 0);
         }
 
+        private static void CheckCharmAndTitleGrantPersistence(GmService gm, PvfIndexService pvfIndex, string dbPath)
+        {
+            const int charmId = 400360005;
+            var charmMetadata = ItemMetadataResolver.Resolve(charmId);
+            Check("A21 PVF charm sample resolves with positive durability",
+                charmMetadata != null
+                && string.Equals(charmMetadata.ItemKind, "equipment", StringComparison.Ordinal)
+                && string.Equals(charmMetadata.EquipmentType, "[charm]", StringComparison.OrdinalIgnoreCase)
+                && charmMetadata.Durability > 0);
+
+            if (charmMetadata != null
+                && string.Equals(charmMetadata.ItemKind, "equipment", StringComparison.Ordinal)
+                && charmMetadata.Durability > 0)
+            {
+                var charmMail = gm.GiveItem(
+                    CharacterId,
+                    charmId,
+                    1,
+                    null,
+                    pvfIndex,
+                    "charm-mail-926014");
+                var charmMailCore = LoadMailAttachmentCore(dbPath, charmId);
+                Check("charm mail grant succeeds with PVF durability as full energy",
+                    IsSuccess(charmMail)
+                    && charmMailCore != null
+                    && charmMailCore.ItemId == charmId
+                    && charmMailCore.Durability == charmMetadata.Durability);
+
+                var charmDirect = gm.GiveItem(
+                    CharacterId,
+                    charmId,
+                    1,
+                    null,
+                    pvfIndex,
+                    "charm-direct-926014",
+                    "inventory");
+                var charmSlot = GetIntProperty(charmDirect, "slot");
+                var charmCore = charmSlot >= 0 ? LoadCore(dbPath, CharacterId, 0, charmSlot) : null;
+                Check("charm direct grant writes PVF durability as full energy",
+                    IsSuccess(charmDirect)
+                    && charmCore != null
+                    && charmCore.ItemId == charmId
+                    && charmCore.Durability == charmMetadata.Durability);
+                if (charmSlot >= 0)
+                    gm.DeleteItemAt(CharacterId, GetIntProperty(charmDirect, "listType"), charmSlot, 0);
+            }
+
+            var title = pvfIndex.AllItems.FirstOrDefault(item =>
+                string.Equals(item.Kind, "equipment", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.TypeTag, "title name", StringComparison.OrdinalIgnoreCase));
+            Check("A21 PVF contains a title equipment", title != null);
+            if (title == null)
+                return;
+
+            var titleOptions = gm.GetItemGrantOptions(CharacterId, title.Id, pvfIndex);
+            var titleEquipment = GetObjectProperty(titleOptions, "equipment");
+            var qualityOptions = GetObjectProperty(titleEquipment, "qualityOptions") as System.Collections.IEnumerable;
+            var qualityLabels = qualityOptions == null
+                ? new List<string>()
+                : qualityOptions.Cast<object>().Select(value => GetStringProperty(value, "label")).ToList();
+            Check("title grant options expose middle full/random quality",
+                IsSuccess(titleOptions)
+                && GetBoolProperty(titleOptions, "requiresConfiguration")
+                && GetBoolProperty(titleEquipment, "supportsQuality")
+                && qualityLabels.Contains("满属性（中级，默认）")
+                && qualityLabels.Contains("随机属性（中级）"));
+
+            var titleTop = gm.GiveItem(
+                CharacterId,
+                title.Id,
+                1,
+                new ItemGrantOptions { QualityMode = ItemQualityMode.Top },
+                pvfIndex,
+                "title-top-926014");
+            var titleTopCore = LoadMailAttachmentCore(dbPath, title.Id);
+            Check("title default/top grant writes the full-stat seed",
+                IsSuccess(titleTop)
+                && titleTopCore != null
+                && titleTopCore.Value == (int)ItemQuality.TopQualitySeed);
+
+            var titleRandom = gm.GiveItem(
+                CharacterId,
+                title.Id,
+                1,
+                new ItemGrantOptions { QualityMode = ItemQualityMode.Random },
+                pvfIndex,
+                "title-random-926014");
+            var titleRandomCore = LoadMailAttachmentCore(dbPath, title.Id);
+            Check("title random grant writes a non-top seed",
+                IsSuccess(titleRandom)
+                && titleRandomCore != null
+                && titleRandomCore.Value != 0
+                && titleRandomCore.Value != (int)ItemQuality.TopQualitySeed);
+
+            var expired = pvfIndex.AllItems.FirstOrDefault(item =>
+                item.AbsoluteExpirationUnixTime > 0
+                && item.AbsoluteExpirationUnixTime <= DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                && string.Equals(item.Kind, "equipment", StringComparison.OrdinalIgnoreCase)
+                && ItemMetadataResolver.Resolve(item.Id) != null
+                && !ItemMetadataResolver.IsAvatarMetadata(ItemMetadataResolver.Resolve(item.Id))
+                && !ItemMetadataResolver.IsNameTagMetadata(ItemMetadataResolver.Resolve(item.Id)));
+            Check("A21 PVF contains a non-avatar expired fixed-deadline template", expired != null);
+            if (expired == null)
+                return;
+
+            var expiredOptions = gm.GetItemGrantOptions(CharacterId, expired.Id, pvfIndex);
+            Check("expired fixed-deadline template exposes editable grant options",
+                IsSuccess(expiredOptions)
+                && GetBoolProperty(GetObjectProperty(expiredOptions, "expiration"), "expired")
+                && GetBoolProperty(GetObjectProperty(expiredOptions, "expiration"), "canOverride"));
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var expiredMailExplicit = gm.GiveItem(
+                CharacterId,
+                expired.Id,
+                1,
+                new ItemGrantOptions { ExpirationDays = 7 },
+                pvfIndex,
+                "expired-mail-explicit-926014");
+            var explicitMailCore = LoadMailAttachmentCore(dbPath, expired.Id);
+            Check("expired template mail grant accepts explicit days",
+                IsSuccess(expiredMailExplicit)
+                && explicitMailCore != null
+                && explicitMailCore.ExpireTime >= now + 6L * 86400L
+                && explicitMailCore.ExpireTime <= now + 8L * 86400L);
+
+            var expiredMailDefault = gm.GiveItem(
+                CharacterId,
+                expired.Id,
+                1,
+                null,
+                pvfIndex,
+                "expired-mail-default-926014");
+            var defaultMailCore = LoadMailAttachmentCore(dbPath, expired.Id);
+            Check("expired template mail grant defaults to 30 days",
+                IsSuccess(expiredMailDefault)
+                && defaultMailCore != null
+                && defaultMailCore.ExpireTime >= now + 29L * 86400L
+                && defaultMailCore.ExpireTime <= now + 31L * 86400L);
+
+            var expiredDirectExplicit = gm.GiveItem(
+                CharacterId,
+                expired.Id,
+                1,
+                new ItemGrantOptions { ExpirationDays = 7 },
+                pvfIndex,
+                "expired-direct-explicit-926014",
+                "inventory");
+            var explicitDirectSlot = GetIntProperty(expiredDirectExplicit, "slot");
+            var explicitDirectCore = explicitDirectSlot >= 0
+                ? LoadCore(dbPath, CharacterId, GetIntProperty(expiredDirectExplicit, "listType"), explicitDirectSlot)
+                : null;
+            Check("expired template direct grant accepts explicit days",
+                IsSuccess(expiredDirectExplicit)
+                && explicitDirectCore != null
+                && explicitDirectCore.ExpireTime >= now + 6L * 86400L
+                && explicitDirectCore.ExpireTime <= now + 8L * 86400L);
+
+            var expiredDirectDefault = gm.GiveItem(
+                CharacterId,
+                expired.Id,
+                1,
+                null,
+                pvfIndex,
+                "expired-direct-default-926014",
+                "inventory");
+            var defaultDirectSlot = GetIntProperty(expiredDirectDefault, "slot");
+            var defaultDirectCore = defaultDirectSlot >= 0
+                ? LoadCore(dbPath, CharacterId, GetIntProperty(expiredDirectDefault, "listType"), defaultDirectSlot)
+                : null;
+            Check("expired template direct grant defaults to 30 days",
+                IsSuccess(expiredDirectDefault)
+                && defaultDirectCore != null
+                && defaultDirectCore.ExpireTime >= now + 29L * 86400L
+                && defaultDirectCore.ExpireTime <= now + 31L * 86400L);
+            if (explicitDirectSlot >= 0)
+                gm.DeleteItemAt(CharacterId, GetIntProperty(expiredDirectExplicit, "listType"), explicitDirectSlot, 0);
+            if (defaultDirectSlot >= 0)
+                gm.DeleteItemAt(CharacterId, GetIntProperty(expiredDirectDefault, "listType"), defaultDirectSlot, 0);
+        }
+
         private static void CheckNameTagGrantPersistence(GmService gm, PvfIndexService pvfIndex, string dbPath)
         {
             var nameTags = pvfIndex.AllItems
@@ -889,6 +1071,9 @@ WHERE character_id=926014 AND event_id='{eventId:N}' AND event_kind='gm-selftest
                     value.Metadata.GetSlotRange(out var start, out var end);
                     return start == 65 && end == 120;
                 })
+                .Where(value => !value.Item.HasInvalidExpirationDefinition
+                    && (value.Item.AbsoluteExpirationUnixTime <= 0
+                        || value.Item.AbsoluteExpirationUnixTime > DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
                 .OrderBy(value => value.Metadata.StackLimit)
                 .FirstOrDefault();
             Check("PVF contains an inventory stack candidate", stackCandidate != null);
@@ -1575,6 +1760,9 @@ VALUES({unrelatedOrphanAuditId},0,910002,'stackable',1);");
                 return;
             Check("CloneCharacter assigns the next free slot",
                 LoadInt(dbPath, $"SELECT slot_index FROM characters WHERE character_id={clonedId}") == 1);
+            Check("CloneCharacter resets target growup change count",
+                LoadInt(dbPath, $"SELECT growup_change_count FROM characters WHERE character_id={clonedId}") == 0
+                && LoadInt(dbPath, "SELECT growup_change_count FROM characters WHERE character_id=926014") == 7);
             Check("CloneCharacter does not rename the source character",
                 LoadInt(dbPath, "SELECT COUNT(1) FROM characters WHERE character_id=926014 AND name='character-mutation-selftest'") == 1);
             Check("CloneCharacter leaves no duplicate active slots",
@@ -1657,9 +1845,12 @@ FROM (
                 NewName = "clunknown",
                 Options = new List<string> { "basic" },
             });
-            Check("clone rejects an unregistered character-owned table",
-                !IsSuccess(unknownTableResult)
-                && GetStringProperty(unknownTableResult, "error").Contains("未登记", StringComparison.Ordinal));
+            var unknownTableCloneId = GetIntProperty(unknownTableResult, "characterId");
+            Check("clone ignores an unregistered character-owned table",
+                IsSuccess(unknownTableResult)
+                && unknownTableCloneId > 0
+                && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_dynamic_clone_selftest WHERE character_id={unknownTableCloneId}") == 0);
+            DeleteCharacterRow(dbPath, unknownTableCloneId);
             using (var conn = Open(dbPath))
             using (var tx = conn.BeginTransaction())
             {
@@ -1699,7 +1890,10 @@ FROM (
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_dungeon_permissions WHERE character_id={id} AND dungeon_id=4242") > 0);
             CheckCloneOption(gm, dbPath, "daily", "cldail", id =>
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_daily_counters WHERE character_id={id} AND counter_key='clone_option_daily'") > 0
-                && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_daily_challenge_claims WHERE character_id={id} AND group_index=4") == 1);
+                && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_daily_challenge_claims WHERE character_id={id} AND group_index=4") == 1
+                && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_daily_challenge_entry_claims WHERE character_id={id} AND group_index=4 AND entry_index=2") == 1
+                && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_daily_challenge_progress_events WHERE character_id={id}") == 0
+                && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_item_states WHERE character_id={id}") == 0);
             CheckCloneOption(gm, dbPath, "wallet", "clwall", id => HasClonedItem(dbPath, id, 0, 0, "stackable"));
             CheckCloneOption(gm, dbPath, "quickSlots", "clquik", id => HasClonedItem(dbPath, id, 0, 3, "stackable"));
             CheckCloneOption(gm, dbPath, "mainEquipment", "cleqip", id => HasClonedItem(dbPath, id, 0, 9, "equipment"));
@@ -1707,23 +1901,60 @@ FROM (
             CheckCloneOption(gm, dbPath, "materials", "clmatr", id => HasClonedItem(dbPath, id, 0, 121, "stackable"));
             CheckCloneOption(gm, dbPath, "questItems", "clqitm", id => HasClonedItem(dbPath, id, 0, 177, "stackable"));
             CheckCloneOption(gm, dbPath, "expertMaterials", "clexpm", id => HasClonedItem(dbPath, id, 0, 233, "stackable"));
-            CheckCloneOption(gm, dbPath, "emblems", "clembl", id => HasClonedItem(dbPath, id, 0, 289, "stackable"));
+            CheckCloneOption(gm, dbPath, "emblems", "clembl", id =>
+                HasClonedItem(dbPath, id, 0, 289, "stackable")
+                && HasClonedItem(dbPath, id, 0, 351, "stackable"));
+            CheckCloneOption(gm, dbPath, "guildMedals", "clgmed", id =>
+                HasClonedItem(dbPath, id, (int)InventoryListType.GuildMedal, 3, "guild-medal")
+                && !HasClonedItem(dbPath, id, (int)InventoryListType.GuildMedal, 49, "guardian-gem")
+                && LoadInt(dbPath, $"SELECT list_param16 FROM character_container_state WHERE character_id={id} AND list_type={(int)InventoryListType.GuildMedal}") == 42);
+            CheckCloneOption(gm, dbPath, "guardianGems", "clggem", id =>
+                HasClonedItem(dbPath, id, (int)InventoryListType.GuildMedal, 49, "guardian-gem")
+                && !HasClonedItem(dbPath, id, (int)InventoryListType.GuildMedal, 3, "guild-medal")
+                && LoadInt(dbPath, $"SELECT list_param16 FROM character_container_state WHERE character_id={id} AND list_type={(int)InventoryListType.GuildMedal}") == 42);
             CheckCloneOption(gm, dbPath, "personalCargo", "clpcar", id =>
                 HasClonedItem(dbPath, id, 2, 0, "stackable")
                 && HasClonedItem(dbPath, id, 2, 7, "stackable")
                 && !HasClonedItem(dbPath, id, 2, 8, "stackable"));
-            CheckCloneOption(gm, dbPath, "equipped", "cleqed", id =>
-                HasClonedItem(dbPath, id, 3, 12, "equipment")
-                && CountCoreKind(dbPath, id, ItemCore.KindAvatar, listType: 0) == 0
+            var equippedId = CloneForOption(gm, "cleqed", "equipped", "locks");
+            Check("Clone option equipped has effect", equippedId > 0
+                && HasClonedItem(dbPath, equippedId, 3, 12, "equipment")
+                && LoadCore(dbPath, equippedId, 3, 31)?.ItemKind == ItemCore.KindGuildMedal
+                && CountCoreKind(dbPath, equippedId, ItemCore.KindAvatar, listType: 0) == 0
                 && (restrictedEquipment == null
-                    || (CountCoreItem(dbPath, id, restrictedEquipment.Id, listType: 3) == 0
-                        && CountCoreItem(dbPath, id, restrictedEquipment.Id, listType: 0) == 1))
+                    || (CountCoreItem(dbPath, equippedId, restrictedEquipment.Id, listType: 3) == 0
+                        && CountCoreItem(dbPath, equippedId, restrictedEquipment.Id, listType: 0) == 1
+                        && LoadCore(dbPath, equippedId, 0, 9)?.ItemId == restrictedEquipment.Id
+                        && LoadCore(dbPath, equippedId, 0, 9)?.EquipmentLockId == 211
+                        && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_item_locks WHERE character_id={equippedId} AND equipment_lock_id=211 AND inventory_list_type=0 AND slot=9") == 1))
                 && (compatibleRestrictedEquipment == null
-                    || (CountCoreItem(dbPath, id, compatibleRestrictedEquipment.Id, listType: 3) == 0
-                        && CountCoreItem(dbPath, id, compatibleRestrictedEquipment.Id, listType: 0) == 1))
+                    || (CountCoreItem(dbPath, equippedId, compatibleRestrictedEquipment.Id, listType: 3) == 0
+                        && CountCoreItem(dbPath, equippedId, compatibleRestrictedEquipment.Id, listType: 0) == 1))
                 && (compatibleRestrictedAvatar == null
-                    || (CountCoreItem(dbPath, id, compatibleRestrictedAvatar.Id, listType: 3) == 0
-                        && CountCoreItem(dbPath, id, compatibleRestrictedAvatar.Id, listType: 1) == 1)));
+                    || (CountCoreItem(dbPath, equippedId, compatibleRestrictedAvatar.Id, listType: 3) == 0
+                        && CountCoreItem(dbPath, equippedId, compatibleRestrictedAvatar.Id, listType: 1) == 1)));
+            DeleteCharacterRow(dbPath, equippedId);
+            var countBeforeInvalidSlot = LoadInt(dbPath, "SELECT COUNT(1) FROM characters WHERE account_id=926014 AND delete_flag=0");
+            using (var conn = Open(dbPath))
+            using (var tx = conn.BeginTransaction())
+            {
+                SeedCloneOptionItem(conn, tx, (int)InventoryListType.GuildMedal, 4, 980004, "guardian-gem");
+                tx.Commit();
+            }
+            var invalidSlot = gm.CloneCharacter(CharacterId, new CharacterCloneRequest
+            {
+                TargetAccountId = AccountId,
+                NewName = "clbadmedal",
+                Options = new List<string> { "guildMedals" },
+            });
+            Check("clone rejects a cross-segment guild-medal slot", !IsSuccess(invalidSlot)
+                && LoadInt(dbPath, "SELECT COUNT(1) FROM characters WHERE account_id=926014 AND delete_flag=0") == countBeforeInvalidSlot);
+            using (var conn = Open(dbPath))
+            using (var tx = conn.BeginTransaction())
+            {
+                Exec(conn, tx, "DELETE FROM character_inventory_items WHERE character_id=926014 AND list_type=38 AND slot_index=4;");
+                tx.Commit();
+            }
             CheckCloneOption(gm, dbPath, "avatars", "clavat", id => HasClonedItem(dbPath, id, 1, 1, "avatar"));
             CheckCloneOption(gm, dbPath, "pets", "clpets", id =>
                 HasClonedItem(dbPath, id, 7, 0, "pet")
@@ -1732,13 +1963,13 @@ FROM (
             CheckCloneOption(gm, dbPath, "petEquipment", "clpequ", id => HasClonedItem(dbPath, id, 7, 140, "equipment"));
             CheckCloneOption(gm, dbPath, "petConsumables", "clpcon", id =>
                 HasClonedItem(dbPath, id, 7, 189, "pet")
+                && HasClonedItem(dbPath, id, 7, 239, "pet")
                 && (LoadCore(dbPath, id, 7, 189)?.Count ?? 0) == 37
                 && GetListedItemCount(gm.ListItems(id, pvfIndex), 7, 189) == 37);
             CheckCloneOption(gm, dbPath, "locks", "cllock", id =>
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM character_item_locks WHERE character_id={id} AND equipment_lock_id=4242") > 0);
             CheckCloneOption(gm, dbPath, "misc", "clmisc", id =>
-                LoadInt(dbPath, $"SELECT COUNT(1) FROM character_item_values WHERE character_id={id} AND list_kind='clone_option'") > 0
-                && LoadInt(dbPath, $"SELECT enchanter_endurance FROM character_expert_job WHERE character_id={id}") == 4242
+                LoadInt(dbPath, $"SELECT enchanter_endurance FROM character_expert_job WHERE character_id={id}") == 4242
                 && LoadInt(dbPath, $"SELECT COUNT(1) FROM character_expert_job_recipes WHERE character_id={id} AND recipe_id=4242") == 1);
             CheckCloneOption(gm, dbPath, "audit", "claudi", id =>
                 LoadInt(dbPath, $"SELECT COUNT(1) FROM inventory_audit_log WHERE character_id={id} AND action_name='clone_option_audit'") > 0);
@@ -1865,6 +2096,7 @@ BEGIN SELECT RAISE(ABORT, 'gm audit failure'); END;");
                 Exec(conn, tx, "INSERT OR REPLACE INTO account_cargo_state(account_id,selection_key) VALUES(926014,1);");
                 SeedCloneOptionItem(conn, tx, 3, 21, equipment.Id, "equipment");
                 SeedCloneOptionItem(conn, tx, 3, 22, equipment.Id, "equipment");
+                SeedCloneOptionItem(conn, tx, 3, 29, equipment.Id, "equipment");
                 SeedCloneOptionItem(conn, tx, 2, 7, equipment.Id, "equipment");
                 SeedCloneOptionItem(conn, tx, 2, 8, equipment.Id, "equipment");
                 SeedAccountCargoItem(conn, tx, 0, equipment.Id);
@@ -1878,13 +2110,13 @@ BEGIN SELECT RAISE(ABORT, 'gm audit failure'); END;");
                 Options = configureOptions,
             }, pvfIndex);
             Check("configuration accepts an unlocked special-equipment slot", IsSuccess(openSpecialConfigure));
-            var closedSpecialConfigure = gm.ConfigureInventoryItem(CharacterId, new InventoryItemConfigureRequest
+            var invalidNameTagSlotConfigure = gm.ConfigureInventoryItem(CharacterId, new InventoryItemConfigureRequest
             {
                 ListType = (int)InventoryListType.Equipment,
-                Slot = 22,
+                Slot = 29,
                 Options = configureOptions,
             }, pvfIndex);
-            Check("configuration rejects a locked special-equipment slot", !IsSuccess(closedSpecialConfigure));
+            Check("configuration rejects the A21 name-tag state slot as ItemCore", !IsSuccess(invalidNameTagSlotConfigure));
 
             var schema = Path.Combine(AppContext.BaseDirectory, "ServerCore", "Sqlite", "item_schema.sql");
             var inventory = new NewInventoryStore(dbPath, schema);
@@ -1905,7 +2137,7 @@ BEGIN SELECT RAISE(ABORT, 'gm audit failure'); END;");
             using (var tx = conn.BeginTransaction())
             {
                 Exec(conn, tx, "DELETE FROM character_inventory_items WHERE character_id=926014 AND list_type=0 AND slot_index BETWEEN 9 AND 64;");
-                Exec(conn, tx, "DELETE FROM character_inventory_items WHERE character_id=926014 AND list_type=3 AND slot_index IN (21,22);");
+                Exec(conn, tx, "DELETE FROM character_inventory_items WHERE character_id=926014 AND list_type=3 AND slot_index IN (21,22,29);");
                 Exec(conn, tx, "DELETE FROM character_inventory_items WHERE character_id=926014 AND list_type=2 AND slot_index IN (7,8);");
                 Exec(conn, tx, "DELETE FROM account_inventory_items WHERE account_id=926014 AND slot_index IN (0,1);");
                 Exec(conn, tx, "UPDATE character_container_state SET list_param16=24 WHERE character_id=926014 AND list_type=0;");
@@ -1939,9 +2171,25 @@ BEGIN SELECT RAISE(ABORT, 'gm audit failure'); END;");
             using (var tx = conn.BeginTransaction())
             {
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,0,0);");
+                Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,2,8);");
+                Exec(conn, tx, "INSERT OR REPLACE INTO account_cargo_state(account_id,selection_key) VALUES(926014,1);");
                 Exec(conn, tx, "UPDATE characters SET ex_equip_slot_stat=1 WHERE character_id=926014;");
                 tx.Commit();
             }
+
+            var maxPersonal = gm.MaxPersonalCargo(CharacterId);
+            Check("个人仓库最大容量为 200 且末格 199 开放",
+                IsSuccess(maxPersonal)
+                && LoadInt(dbPath, "SELECT list_param16 FROM character_container_state WHERE character_id=926014 AND list_type=2") == 200);
+            var maxAccount = gm.MaxAccountCargo(AccountId);
+            Check("账号仓库最大容量为 120 且末格 119 开放",
+                IsSuccess(maxAccount)
+                && LoadInt(dbPath, "SELECT selection_key FROM account_cargo_state WHERE account_id=926014") == 120);
+
+            var highCargoId = CloneForOption(gm, "clcargohigh", "personalCargo");
+            Check("clone 复制个人仓库高位 199",
+                highCargoId > 0 && HasClonedItem(dbPath, highCargoId, 2, 199, "stackable"));
+            DeleteCharacterRow(dbPath, highCargoId);
 
             var mainId = CloneForOption(gm, "clcapm", "mainEquipment");
             Check("clone respects source main-bag expansion stage",
@@ -1951,17 +2199,19 @@ BEGIN SELECT RAISE(ABORT, 'gm audit failure'); END;");
             DeleteCharacterRow(dbPath, mainId);
 
             var equippedId = CloneForOption(gm, "clcape", "equipped");
-            Check("clone respects each special-equipment unlock bit",
+            Check("clone accepts the A21 equipment slots without legacy unlock gating",
                 equippedId > 0
                 && HasClonedItem(dbPath, equippedId, 3, 21, "equipment")
-                && !HasClonedItem(dbPath, equippedId, 3, 22, "equipment")
-                && !HasClonedItem(dbPath, equippedId, 3, 23, "equipment"));
+                && HasClonedItem(dbPath, equippedId, 3, 22, "equipment")
+                && HasClonedItem(dbPath, equippedId, 3, 23, "equipment"));
             DeleteCharacterRow(dbPath, equippedId);
 
             using (var conn = Open(dbPath))
             using (var tx = conn.BeginTransaction())
             {
                 Exec(conn, tx, "UPDATE character_container_state SET list_param16=24 WHERE character_id=926014 AND list_type=0;");
+                Exec(conn, tx, "UPDATE character_container_state SET list_param16=8 WHERE character_id=926014 AND list_type=2;");
+                Exec(conn, tx, "UPDATE account_cargo_state SET selection_key=1 WHERE account_id=926014;");
                 Exec(conn, tx, "UPDATE characters SET ex_equip_slot_stat=7 WHERE character_id=926014;");
                 tx.Commit();
             }
@@ -2035,6 +2285,11 @@ VALUES(926014,44,42420,7,'clone-active-quest');");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_dungeon_permissions(character_id, sort_order, dungeon_id, clear_state) VALUES(926014, 42, 4242, 4);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_daily_counters(character_id, counter_key, period, value) VALUES(926014, 'clone_option_daily', 'day', 1);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_daily_challenge_claims(character_id,group_index) VALUES(926014,4);");
+                Exec(conn, tx, "INSERT OR REPLACE INTO character_daily_challenge_groups(character_id,group_index,group_id) VALUES(926014,4,424204);");
+                Exec(conn, tx, "INSERT OR REPLACE INTO character_daily_challenge_entries(character_id,group_index,entry_index,track_like_id,value_a,value_b) VALUES(926014,4,2,42420,1,2);");
+                Exec(conn, tx, "INSERT OR REPLACE INTO character_daily_challenge_entry_claims(character_id,group_index,entry_index,quest_id) VALUES(926014,4,2,42420);");
+                Exec(conn, tx, "INSERT OR REPLACE INTO character_daily_challenge_progress_events(character_id,source_event_id,group_index,entry_index,quest_id) VALUES(926014,'clone-progress-event',4,2,42420);");
+                Exec(conn, tx, "INSERT OR REPLACE INTO character_item_states(character_id,state_kind,item_id,expire_time) VALUES(926014,'cooltime',424212,999999);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_expert_job(character_id,enchanter_endurance) VALUES(926014,4242);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_expert_job_recipes(character_id,recipe_id) VALUES(926014,4242);");
                 SeedCloneOptionItem(conn, tx, 3, 12, 424212, "equipment");
@@ -2042,6 +2297,7 @@ VALUES(926014,44,42420,7,'clone-active-quest');");
                 if (restrictedEquipment != null)
                 {
                     SeedCloneOptionItem(conn, tx, 3, 11, restrictedEquipment.Id, "equipment");
+                    SeedCloneOptionEquipmentLock(conn, tx, 3, 11, 211);
                 }
                 if (compatibleRestrictedEquipment != null)
                 {
@@ -2049,11 +2305,11 @@ VALUES(926014,44,42420,7,'clone-active-quest');");
                 }
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_creatures(character_id, sort_order, creature_key, field04) VALUES(926014, 77, 424277, 1);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_item_locks(character_id, equipment_lock_id, inventory_list_type, slot, state) VALUES(926014, 4242, 0, 9, 1);");
-                Exec(conn, tx, "INSERT OR REPLACE INTO character_item_values(character_id, list_kind, sort_order, item_id, value) VALUES(926014, 'clone_option', 1, 4242, 9);");
                 Exec(conn, tx, "INSERT INTO inventory_audit_log(owner_scope, owner_id, character_id, account_id, action_name, list_type, slot_index, item_id, item_kind, count_delta, payload_json) VALUES('character', 926014, 926014, 926014, 'clone_option_audit', 0, 0, 4242, 1, 1, '{}');");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,0,24);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,1,0);");
                 Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,2,8);");
+                Exec(conn, tx, "INSERT OR REPLACE INTO character_container_state(character_id,list_type,list_param16) VALUES(926014,38,42);");
 
                 SeedCloneOptionItem(conn, tx, 0, 0, 910000, "stackable");
                 SeedCloneOptionItem(conn, tx, 0, 3, 910003, "stackable");
@@ -2065,16 +2321,28 @@ VALUES(926014,44,42420,7,'clone-active-quest');");
                 SeedCloneOptionItem(conn, tx, 0, 177, 910177, "stackable");
                 SeedCloneOptionItem(conn, tx, 0, 233, 910233, "stackable");
                 SeedCloneOptionItem(conn, tx, 0, 289, 910289, "stackable");
+                SeedCloneOptionItem(conn, tx, 0, 351, 910351, "stackable");
                 SeedCloneOptionItem(conn, tx, 2, 0, 920000, "stackable");
                 SeedCloneOptionItem(conn, tx, 2, 7, 920007, "stackable");
                 SeedCloneOptionItem(conn, tx, 2, 8, 920008, "stackable");
+                SeedCloneOptionItem(conn, tx, 2, 199, 920199, "stackable");
                 SeedCloneOptionItem(conn, tx, 1, 1, 930001, "avatar");
                 SeedCloneOptionItem(conn, tx, 3, 21, 930021, "equipment");
                 SeedCloneOptionItem(conn, tx, 3, 22, 930022, "equipment");
                 SeedCloneOptionItem(conn, tx, 3, 23, 930023, "equipment");
+                SeedCloneOptionItem(conn, tx, 3, 24, 930024, "equipment");
+                SeedCloneOptionItem(conn, tx, 3, 25, 930025, "pet");
+                SeedCloneOptionItem(conn, tx, 3, 26, 930026, "pet-equipment");
+                SeedCloneOptionItem(conn, tx, 3, 27, 930027, "pet-equipment");
+                SeedCloneOptionItem(conn, tx, 3, 28, 930028, "pet-equipment");
+                SeedCloneOptionItem(conn, tx, 3, 30, 930030, "equipment");
+                SeedCloneOptionItem(conn, tx, 3, 31, 930031, "guild-medal");
+                SeedCloneOptionItem(conn, tx, (int)InventoryListType.GuildMedal, 3, 938003, "guild-medal");
+                SeedCloneOptionItem(conn, tx, (int)InventoryListType.GuildMedal, 49, 938049, "guardian-gem");
                 SeedCloneOptionItem(conn, tx, 7, 0, 970000, "pet");
                 SeedCloneOptionItem(conn, tx, 7, 140, 970140, "equipment");
                 SeedCloneOptionItem(conn, tx, 7, 189, 970189, "pet", 37);
+                SeedCloneOptionItem(conn, tx, 7, 239, 970239, "pet", 23);
                 tx.Commit();
             }
         }
@@ -2083,9 +2351,13 @@ VALUES(926014,44,42420,7,'clone-active-quest');");
         {
             byte coreKind;
             if (string.Equals(kind, "avatar", StringComparison.OrdinalIgnoreCase)) coreKind = ItemCore.KindAvatar;
+            else if (string.Equals(kind, "guild-medal", StringComparison.OrdinalIgnoreCase)) coreKind = ItemCore.KindGuildMedal;
+            else if (string.Equals(kind, "guardian-gem", StringComparison.OrdinalIgnoreCase)) coreKind = ItemCore.KindGuardianGem;
             else if (listType == 7 && slot <= 139) coreKind = ItemCore.KindCreature;
             else if (listType == 7 && slot <= 188) coreKind = ItemCore.KindCreatureEquipment;
             else if (listType == 7) coreKind = ItemCore.KindCreatureConsumable;
+            else if (string.Equals(kind, "pet", StringComparison.OrdinalIgnoreCase)) coreKind = ItemCore.KindCreature;
+            else if (string.Equals(kind, "pet-equipment", StringComparison.OrdinalIgnoreCase)) coreKind = ItemCore.KindCreatureEquipment;
             else if (listType == 2 || listType == 3 || (listType == 0 && slot >= 9 && slot <= 64)) coreKind = ItemCore.KindEquipment;
             else if (listType == 0 && slot == 0) coreKind = ItemCore.KindSpecialMaterial;
             else if (listType == 0 && slot >= 121 && slot <= 176) coreKind = ItemCore.KindMaterial;
@@ -2113,6 +2385,33 @@ VALUES (926014, @list, @slot, @core);";
             if (coreKind == ItemCore.KindAvatar)
                 Exec(conn, tx, $@"INSERT OR REPLACE INTO character_avatar_detail
 (item_uid,owner_id,character_id,item_id,jewel_socket) VALUES(424201,926014,926014,{itemId},zeroblob(30));");
+        }
+
+        private static void SeedCloneOptionEquipmentLock(SqliteConnection conn, SqliteTransaction tx, int listType, int slot, int lockId)
+        {
+            byte[] bytes;
+            using (var load = conn.CreateCommand())
+            {
+                load.Transaction = tx;
+                load.CommandText = "SELECT item_core FROM character_inventory_items WHERE character_id=926014 AND list_type=@list AND slot_index=@slot;";
+                load.Parameters.AddWithValue("@list", listType);
+                load.Parameters.AddWithValue("@slot", slot);
+                bytes = load.ExecuteScalar() as byte[];
+            }
+            if (bytes == null || bytes.Length != ItemCore.Size)
+                throw new InvalidOperationException("clone lock fixture item missing");
+            var core = ItemCore.FromBytes(bytes);
+            core.EquipmentLockId = checked((byte)lockId);
+            using (var update = conn.CreateCommand())
+            {
+                update.Transaction = tx;
+                update.CommandText = "UPDATE character_inventory_items SET item_core=@core WHERE character_id=926014 AND list_type=@list AND slot_index=@slot;";
+                update.Parameters.AddWithValue("@core", core.ToBytes());
+                update.Parameters.AddWithValue("@list", listType);
+                update.Parameters.AddWithValue("@slot", slot);
+                update.ExecuteNonQuery();
+            }
+            Exec(conn, tx, $"INSERT OR REPLACE INTO character_item_locks(character_id,equipment_lock_id,inventory_list_type,slot,state) VALUES(926014,{lockId},{listType},{slot},1);");
         }
 
         private static void SeedAccountCargoItem(SqliteConnection conn, SqliteTransaction tx, int slot, int itemId)
@@ -2199,6 +2498,11 @@ VALUES(824246,824245,0,910000,'stackable',7);");
             Check("account backup captures mercenary reward item relations",
                 exported.Tables.Any(t => t.Name.Equals("mercenary_reward_outbox", StringComparison.OrdinalIgnoreCase))
                 && exported.Tables.Any(t => t.Name.Equals("mercenary_reward_items", StringComparison.OrdinalIgnoreCase)));
+            Check("account backup includes daily entry claims", exported.Tables.Any(t =>
+                t.Name.Equals("character_daily_challenge_entry_claims", StringComparison.OrdinalIgnoreCase)));
+            Check("account backup excludes runtime item/event ledgers", !exported.Tables.Any(t =>
+                t.Name.Equals("character_item_states", StringComparison.OrdinalIgnoreCase)
+                || t.Name.Equals("character_daily_challenge_progress_events", StringComparison.OrdinalIgnoreCase)));
 
             var slotIndex = characterDump.Columns.FindIndex(c => c.Equals("slot_index", StringComparison.OrdinalIgnoreCase));
             Check("current account backup captures slot_index", slotIndex >= 0);
@@ -2591,8 +2895,8 @@ WHERE message_id IN (SELECT message_id FROM mailbox_messages WHERE receiver_char
             {
                 Exec(conn, tx, "INSERT INTO accounts(account_id, m_id, password_hash) VALUES(926014, 'character-mutation-selftest', '');");
                 Exec(conn, tx, @"
-INSERT INTO characters(character_id, account_id, name, job, grow_type, level, exp, bonus_sp, bonus_tp)
-VALUES(926014, 926014, 'character-mutation-selftest', 0, 0, 60, 0, 10, 3);");
+INSERT INTO characters(character_id, account_id, name, job, grow_type, growup_change_count, level, exp, bonus_sp, bonus_tp)
+VALUES(926014, 926014, 'character-mutation-selftest', 0, 0, 7, 60, 0, 10, 3);");
                 Exec(conn, tx, "INSERT INTO character_subtype1_fields(character_id) VALUES(926014);");
                 Exec(conn, tx, "INSERT INTO character_init_flags(character_id) VALUES(926014);");
                 Exec(conn, tx, @"
@@ -2843,6 +3147,14 @@ WHERE item_template_id=@item ORDER BY attachment_id DESC LIMIT 1;";
             if (value == null) return null;
             var prop = value.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
             return prop?.GetValue(value)?.ToString();
+        }
+
+        private static object GetObjectProperty(object value, string propertyName)
+        {
+            if (value == null)
+                return null;
+            var prop = value.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            return prop?.GetValue(value);
         }
 
         private static bool IsSuccess(object result)

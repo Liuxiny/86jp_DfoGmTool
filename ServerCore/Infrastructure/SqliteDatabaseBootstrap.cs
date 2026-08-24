@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using DfoGmTool.ServerCore.Game.Inventory;
 
 namespace DfoGmTool.ServerCore.Infrastructure
 {
@@ -62,13 +63,13 @@ namespace DfoGmTool.ServerCore.Infrastructure
                 {
                     command.CommandText = File.ReadAllText(schemaFilePath);
                     command.ExecuteNonQuery();
-                    command.CommandText = "PRAGMA user_version = 5;";
+                    command.CommandText = "PRAGMA user_version = " + A12ToA21MigrationService.TargetSchemaVersion + ";";
                     command.ExecuteNonQuery();
                     command.CommandText = @"
 INSERT OR REPLACE INTO schema_metadata
     (singleton_id, baseline_id, schema_version, created_at, updated_at)
 VALUES
-    (1, '86jp-database-v1', 5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);";
+    (1, '86jp-database-v1', " + A12ToA21MigrationService.TargetSchemaVersion + @", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);";
                     command.ExecuteNonQuery();
                 }
             }

@@ -16,26 +16,30 @@ namespace DfoGmTool.ServerCore.Game.ItemUpgrade
         SkinAvatar = 8,
         AuroraAvatar = 9,
         WeaponAvatar = 10,
-        Weapon = 11,
-        TitleName = 12,
-        Coat = 13,
-        Shoulder = 14,
-        Pants = 15,
-        Shoes = 16,
-        Waist = 17,
-        Amulet = 18,
-        Wrist = 19,
-        Ring = 20,
-        Support = 21,
-        MagicStone = 22,
-        SupportWeapon = 23,
-        Creature = 24,
-        ArtifactRed = 25,
-        ArtifactBlue = 26,
-        ArtifactGreen = 27,
-        NameTag = 28,
-        Charm = 29,
-        Unknown = 30,
+        AuraSkinAvatar = 11,
+        AuroraIllusionAvatar = AuraSkinAvatar,
+        Weapon = 12,
+        TitleName = 13,
+        Coat = 14,
+        Shoulder = 15,
+        Pants = 16,
+        Shoes = 17,
+        Waist = 18,
+        Amulet = 19,
+        Wrist = 20,
+        Ring = 21,
+        Support = 22,
+        MagicStone = 23,
+        SupportWeapon = 24,
+        Creature = 25,
+        ArtifactRed = 26,
+        ArtifactBlue = 27,
+        ArtifactGreen = 28,
+        NameTag = 29,
+        Charm = 30,
+        GuildMedal = 31,
+        Flag = GuildMedal,
+        Unknown = -1,
     }
 
     public static class EquipmentTypeInfo
@@ -53,6 +57,10 @@ namespace DfoGmTool.ServerCore.Game.ItemUpgrade
             ["[skin avatar]"] = EquipmentType.SkinAvatar,
             ["[aurora avatar]"] = EquipmentType.AuroraAvatar,
             ["[weapon avatar]"] = EquipmentType.WeaponAvatar,
+            ["[aura skin avatar]"] = EquipmentType.AuraSkinAvatar,
+            ["[aurora illusion avatar]"] = EquipmentType.AuraSkinAvatar,
+            ["[aurora skin avatar]"] = EquipmentType.AuraSkinAvatar,
+            ["[aurora change avatar]"] = EquipmentType.AuraSkinAvatar,
             ["[weapon]"] = EquipmentType.Weapon,
             ["[title name]"] = EquipmentType.TitleName,
             ["[coat]"] = EquipmentType.Coat,
@@ -72,6 +80,7 @@ namespace DfoGmTool.ServerCore.Game.ItemUpgrade
             ["[artifact green]"] = EquipmentType.ArtifactGreen,
             ["[name tag]"] = EquipmentType.NameTag,
             ["[charm]"] = EquipmentType.Charm,
+            ["[flag]"] = EquipmentType.GuildMedal,
         };
 
         private static readonly Dictionary<EquipmentType, string> TypeToText = BuildReverseMap();
@@ -91,6 +100,43 @@ namespace DfoGmTool.ServerCore.Game.ItemUpgrade
         public static string ToPvfToken(EquipmentType type)
         {
             return TypeToText.TryGetValue(type, out var token) ? token : null;
+        }
+
+        // PVF/旧外观编码中的 200-230 使用插槽前的编号；A21 在槽 11 插入光环皮肤。
+        public static int ToA21AppearanceSlot(int slot)
+        {
+            if (slot >= 200 && slot <= 230)
+            {
+                var encodedSlot = slot - 200;
+                return encodedSlot >= 11 ? encodedSlot + 1 : encodedSlot;
+            }
+
+            return slot;
+        }
+
+        public static bool IsA21RosterAppearanceSlot(int slot)
+        {
+            return slot >= (short)EquipmentType.HatAvatar
+                && slot <= (short)EquipmentType.TitleName;
+        }
+
+        public static bool IsA21Noti2EquippedSlot(int slot)
+        {
+            return (slot >= (short)EquipmentType.HatAvatar
+                    && slot <= (short)EquipmentType.ArtifactGreen)
+                || slot == (short)EquipmentType.GuildMedal;
+        }
+
+        public static bool IsCostumeBarSlot(short slot)
+        {
+            return slot >= (short)EquipmentType.HatAvatar
+                && slot <= (short)EquipmentType.AuraSkinAvatar;
+        }
+
+        public static bool IsAvatarPart(EquipmentType type)
+        {
+            return type >= EquipmentType.HatAvatar
+                && type <= EquipmentType.AuraSkinAvatar;
         }
 
         public static bool IsWeapon(EquipmentType type)

@@ -56,10 +56,12 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     return Fail(result, "背包中已有护石，不能再次发放");
             }
 
+            var expirationNeedsOverride = false;
             if (!ItemGrantExpirationResolver.TryResolve(itemTemplateId, metadata, out var expireTime, out var expirationError))
             {
-                if (options?.ExpirationDays == null || !IsExpiredExpirationError(expirationError))
+                if (!IsExpiredExpirationError(expirationError))
                     return Fail(result, expirationError);
+                expirationNeedsOverride = true;
                 expireTime = 0;
             }
 
@@ -79,6 +81,11 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 || manualGrantType == "avatar";
             var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata)
                 || manualGrantType == "pet-consumable";
+            var pvfTag = ItemMetadataResolver.ResolvePvfTypeTag(metadata);
+            var isGuildMedal = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal)
+                && string.Equals(pvfTag, "flag", StringComparison.OrdinalIgnoreCase);
+            var isGuardianGem = metadata.IsStackable
+                && string.Equals(pvfTag, "flag gem", StringComparison.OrdinalIgnoreCase);
             var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal)
                 && (ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId)
                     || manualGrantType == "pet"
@@ -116,8 +123,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
                 listType = InventoryListType.Avatar;
                 itemKind = "avatar";
-                slotStart = 0;
-                slotEnd = 500;
+                slotStart = A21InventorySlotPolicy.AvatarSlotStart;
+                slotEnd = A21InventorySlotPolicy.AvatarSlotEnd;
                 marker16 = SqliteInventoryStore.DefaultAvatarUnknownFixed30;
                 durability = 0;
                 extraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson();
@@ -126,8 +133,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 listType = InventoryListType.Pet;
                 itemKind = "pet";
-                slotStart = SqliteInventoryStore.PetInventorySlotStart;
-                slotEnd = SqliteInventoryStore.PetInventorySlotEnd;
+                slotStart = A21InventorySlotPolicy.PetCreatureSlotStart;
+                slotEnd = A21InventorySlotPolicy.PetCreatureSlotEnd;
                 expireTime = 0;
                 marker16 = 0;
                 durability = 0;
@@ -136,8 +143,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 listType = InventoryListType.Pet;
                 itemKind = "pet";
-                slotStart = SqliteInventoryStore.PetEquipmentSlotStart;
-                slotEnd = SqliteInventoryStore.PetEquipmentSlotEnd;
+                slotStart = A21InventorySlotPolicy.PetEquipmentSlotStart;
+                slotEnd = A21InventorySlotPolicy.PetEquipmentSlotEnd;
                 expireTime = 0;
                 marker16 = 0;
                 durability = 0;
@@ -146,16 +153,36 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 listType = InventoryListType.Pet;
                 itemKind = "pet";
-                slotStart = SqliteInventoryStore.PetConsumableSlotStart;
-                slotEnd = SqliteInventoryStore.PetConsumableSlotEnd;
+                slotStart = A21InventorySlotPolicy.PetConsumableSlotStart;
+                slotEnd = A21InventorySlotPolicy.PetConsumableSlotEnd;
                 expireTime = 0;
                 marker16 = 0;
                 durability = 0;
             }
+            else if (isGuildMedal)
+            {
+                listType = InventoryListType.GuildMedal;
+                itemKind = "equipment";
+                slotStart = A21InventorySlotPolicy.GuildMedalSlotStart;
+                slotEnd = A21InventorySlotPolicy.GuildMedalSlotEnd;
+            }
+            else if (isGuardianGem)
+            {
+                listType = InventoryListType.GuildMedal;
+                itemKind = "stackable";
+                slotStart = A21InventorySlotPolicy.GuardianGemSlotStart;
+                slotEnd = A21InventorySlotPolicy.GuardianGemSlotEnd;
+            }
             else
             {
-                if (options?.ExpirationDays != null
-                    && !TryResolveExpirationOverride(itemTemplateId, metadata, expireTime, options.ExpirationDays.Value, out expireTime, out var overrideError))
+                if ((expirationNeedsOverride || options?.ExpirationDays != null)
+                    && !TryResolveExpirationOverride(
+                        itemTemplateId,
+                        metadata,
+                        expireTime,
+                        options?.ExpirationDays ?? ItemGrantExpirationOverride.DefaultExpiredTemplateDays,
+                        out expireTime,
+                        out var overrideError))
                 {
                     return Fail(result, overrideError);
                 }
@@ -401,7 +428,6 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     || manualGrantType == "quest"
                     || manualGrantType == "expert-material"
                     || manualGrantType == "avatar-emblem"
-                    || manualGrantType == "special-material"
                     || manualGrantType == "pet-consumable";
             }
 
@@ -413,32 +439,28 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             switch (manualGrantType)
             {
                 case "equipment":
-                    slotStart = 9;
-                    slotEnd = 64;
+                    slotStart = A21InventorySlotPolicy.MainEquipmentSlotStart;
+                    slotEnd = A21InventorySlotPolicy.MainEquipmentSlotEnd;
                     return;
                 case "material":
-                    slotStart = 121;
-                    slotEnd = 176;
+                    slotStart = A21InventorySlotPolicy.MainMaterialSlotStart;
+                    slotEnd = A21InventorySlotPolicy.MainMaterialSlotEnd;
                     return;
                 case "quest":
-                    slotStart = 177;
-                    slotEnd = 232;
+                    slotStart = A21InventorySlotPolicy.MainQuestSlotStart;
+                    slotEnd = A21InventorySlotPolicy.MainQuestSlotEnd;
                     return;
                 case "expert-material":
-                    slotStart = 233;
-                    slotEnd = 288;
+                    slotStart = A21InventorySlotPolicy.MainExpertSlotStart;
+                    slotEnd = A21InventorySlotPolicy.MainExpertSlotEnd;
                     return;
                 case "avatar-emblem":
-                    slotStart = 289;
-                    slotEnd = 344;
-                    return;
-                case "special-material":
-                    slotStart = 345;
-                    slotEnd = 359;
+                    slotStart = A21InventorySlotPolicy.MainAvatarEmblemSlotStart;
+                    slotEnd = A21InventorySlotPolicy.MainAvatarEmblemSlotEnd;
                     return;
                 default:
-                    slotStart = 65;
-                    slotEnd = 120;
+                    slotStart = A21InventorySlotPolicy.MainConsumableSlotStart;
+                    slotEnd = A21InventorySlotPolicy.MainConsumableSlotEnd;
                     return;
             }
         }

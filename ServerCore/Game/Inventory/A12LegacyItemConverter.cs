@@ -614,6 +614,12 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 return true;
             }
 
+            if (slotIndex == 30)
+            {
+                itemKind = ItemCore.KindGuildMedal;
+                return true;
+            }
+
             itemKind = ItemCore.KindUnknown;
             return false;
         }

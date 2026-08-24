@@ -377,7 +377,8 @@ WHERE account_id = @aid;";
 
         public object MaxAccountCargo(int accountId)
         {
-            const int MaxCargoSelectionKey = 64;
+            const int MaxCargoSelectionKey = A21InventorySlotPolicy.AccountCargoSlotEnd
+                - A21InventorySlotPolicy.AccountCargoSlotStart + 1;
 
             using (var conn = new SqliteConnection(_config.ConnectionString))
             {

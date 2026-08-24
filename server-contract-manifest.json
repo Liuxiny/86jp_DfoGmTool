@@ -1,14 +1,18 @@
 {
-    "serverCommit":  "04656d5f175068bd4d1c844634b3f109a9188f91",
+    "serverCommit":  "f6a0318c908bd11ee578bf0fb32f0ae82d5ad1ea",
     "baselineId":  "86jp-database-v1",
-    "schemaVersion":  5,
-    "schemaSha256":  "afabbf97033668001a562d1302d963d2d5ba3e36da00ac820f375b44882b7b03",
+    "schemaVersion":  8,
+    "schemaSha256":  "c508e095d1d4867f49087f4fbfaa28e7a3e2f65900c806727ef0e7229a0fe6a3",
+    "equipmentTypeSourceFile":  {
+                                    "path":  "ServerCore/Game/ItemUpgrade/EquipmentType.cs",
+                                    "sha256":  "e10b31091fbe497ce521a6795a5c8bcea8b40a25133ac6e2f7abb9852dad8198"
+                                },
     "compatibilityPatches":  [
-
+                                 "ServerCore/Game/Quests/QuestRepository.cs: retain GM quest_id 1..29999 and completion_value 1..255 guards"
                              ],
     "questContractSourceFiles":  {
                                      "ActiveQuest.cs":  "08c42ea188fb8506fa6d5295d0f6afc12c40b9016a2991e30085168c2402543d",
-                                     "QuestRepository.cs":  "8733373c7536e34f28de3dee0f94b8ff1d0e11362d76d47779194ce9b830050b",
+                                     "QuestRepository.cs":  "56281b0607fd8b88181ff558f970f4d49c5a11a5e9358970970977cad8bee7c9",
                                      "QuestSlotLayout.cs":  "2b5068732ef1b94aae575ffeba2c06c8ebeabcd3235f13e994a6772aed7201b8"
                                  },
     "pvfSourceFiles":  {
@@ -26,8 +30,8 @@
                            "Models\\ConfigFile.cs":  "668466bcf4c93426b80acf286fae167a678cdbd8139a056b6fb446de7be2bae4",
                            "Models\\CreatureFile.cs":  "4a3756b45c888e9f931d009f6f6bc81a407de15d402278867148f651d7368459",
                            "Models\\DisjointFile.cs":  "92353db75823432f01e80a68c3bd7af859fb7e787b9f4facca5aaf4484092539",
-                           "Models\\DungeonFile.cs":  "40ed04e0a4bc012a157bb4a64c9aebc183d724c4a5df8ce510e31d48ed2d8539",
-                           "Models\\EquipmentFile.cs":  "2095fd3ebcf79e3757cd863a501e26a7e512cb361d4fb1a8784f761ce8cf6eb9",
+                           "Models\\DungeonFile.cs":  "118c215ed99fea84966e4401a665922213ebd7dd0bd318f1c0932c346633a41a",
+                           "Models\\EquipmentFile.cs":  "05ee335735ee177eb315112b5ac6ca171ec965c83cfed3a5f03e70fa92179056",
                            "Models\\EvtFile.cs":  "1feec297c66e601e411333dc575309788ae6b3b6d9b2665e41c19fd24a965061",
                            "Models\\ItemShopFile.cs":  "a00224078b44ee81c4531d8616fbc0cefceff3b43301b5ec0da044698e5524d9",
                            "Models\\KeyFile.cs":  "dd9d5cf51c5c95ce72f61acee2259c3d7034aa7ee0cac18d7dd856f568357ba8",
@@ -49,7 +53,7 @@
                            "Models\\RaidEtcFile.cs":  "5d2838d13285cd713388f583a0d4aed9cd124549c29ea95e7cacc37f12a127d8",
                            "Models\\ScriptNode.cs":  "c354fa05be63dda7da35273ff9f34d7ce3583445c6664dc666926bcab4719972",
                            "Models\\SkillFile.cs":  "fc336cae05d4eb56b35f6221426cf43bf80201fe01b64b647260968841973e07",
-                           "Models\\StackableItemFile.cs":  "0a1d63601934b29c115710bd4156abebb2858d39d32e6512409efea957857aa0",
+                           "Models\\StackableItemFile.cs":  "c8a6e48eca7f578841b706c5f535088a95b706fdee2ed210a15b4d8f8c4021b7",
                            "Models\\TableFile.cs":  "9d5e0235aff08458f24443c1947ed7b5dfee110bd911e1cf67ca81b04522c549",
                            "Models\\TitleChangeTableFile.cs":  "37dce93482a14f8949be4137bd758e350ec0b6920da561682e97a0a047223059",
                            "Models\\TownFile.cs":  "88b6bc767c88b493ded91ba2ebad1fb06efe28dc88762a1f9bd375ed43f1781e",

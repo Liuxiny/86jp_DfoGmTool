@@ -148,10 +148,21 @@ WHERE character_id = @cid AND equipment_lock_id = @lockId;";
             SqliteTransaction transaction,
             int characterId)
         {
-            var mainExpandStage = LoadCloneContainerListParam(connection, transaction, characterId, 0, 24);
-            var personalCargoCapacity = LoadCloneContainerListParam(connection, transaction, characterId, 2, 8);
-            personalCargoCapacity = personalCargoCapacity <= 0 ? 8 : Math.Min(personalCargoCapacity, 152);
-            var exEquipSlotStat = LoadCloneExtraEquipmentSlotStat(connection, transaction, characterId);
+            var mainExpandStage = LoadCloneContainerListParam(
+                connection,
+                transaction,
+                characterId,
+                (int)InventoryListType.Main,
+                A21InventorySlotPolicy.MainExpandStageFull);
+            if (!A21InventorySlotPolicy.TryNormalizeMainExpandStage(mainExpandStage, out mainExpandStage))
+                throw new InvalidOperationException($"复制后的主背包扩展状态无效: {mainExpandStage}");
+            var personalCargoCapacity = A21InventorySlotPolicy.NormalizePersonalCapacity(
+                LoadCloneContainerListParam(
+                    connection,
+                    transaction,
+                    characterId,
+                    (int)InventoryListType.PersonalCargo,
+                    A21InventorySlotPolicy.PersonalCargoDefaultCapacity));
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"SELECT list_type,slot_index,item_core
@@ -170,54 +181,17 @@ ORDER BY list_type,slot_index;";
                 var core = ItemCore.FromBytes(bytes);
                 if (listTypeValue == (int)InventoryListType.Main && slot >= 0 && slot <= 2)
                     continue;
-                if (!IsCloneSlotOpen(listTypeValue, slot, mainExpandStage, personalCargoCapacity, exEquipSlotStat))
+                if (!IsCloneSlotOpen(listTypeValue, slot, mainExpandStage, personalCargoCapacity))
                     throw new InvalidOperationException($"复制后的物品位未开放或已保留: list={listTypeValue} slot={slot} itemId={core.ItemId}");
                 if ((listTypeValue == (int)InventoryListType.Main && slot >= 3 && slot <= 8)
                     || listTypeValue == (int)InventoryListType.PersonalCargo)
                     continue;
-                if (!TryResolveA21SlotKind((InventoryListType)listTypeValue, slot, out var expectedKind)
-                    || expectedKind != core.ItemKind)
-                    throw new InvalidOperationException($"复制后的物品容器不匹配: list={listTypeValue} slot={slot} kind={core.ItemKind} expected={expectedKind} itemId={core.ItemId}");
-            }
-        }
-
-        private static bool TryResolveA21SlotKind(InventoryListType listType, short slot, out byte kind)
-        {
-            kind = ItemCore.KindUnknown;
-            switch (listType)
-            {
-                case InventoryListType.Main:
-                    if (slot >= 9 && slot <= 64) kind = ItemCore.KindEquipment;
-                    else if (slot >= 65 && slot <= 120) kind = ItemCore.KindConsumable;
-                    else if (slot >= 121 && slot <= 176) kind = ItemCore.KindMaterial;
-                    else if (slot >= 177 && slot <= 232) kind = ItemCore.KindQuest;
-                    else if (slot >= 233 && slot <= 288) kind = ItemCore.KindExpertJobMaterial;
-                    else if (slot >= 289 && slot <= 351) kind = ItemCore.KindAvatarEmblem;
-                    else return false;
-                    return true;
-                case InventoryListType.Avatar:
-                    kind = ItemCore.KindAvatar;
-                    return slot >= 0 && slot <= 209;
-                case InventoryListType.Pet:
-                    if (slot >= 0 && slot <= 139) kind = ItemCore.KindCreature;
-                    else if (slot >= 140 && slot <= 188) kind = ItemCore.KindCreatureEquipment;
-                    else if (slot >= 189 && slot <= 239) kind = ItemCore.KindCreatureConsumable;
-                    else return false;
-                    return true;
-                case InventoryListType.GuildMedal:
-                    if (slot >= 0 && slot <= 48) kind = ItemCore.KindGuildMedal;
-                    else if (slot >= 49 && slot <= 97) kind = ItemCore.KindGuardianGem;
-                    else return false;
-                    return true;
-                case InventoryListType.Equipment:
-                    if (slot >= 0 && slot <= 10) kind = ItemCore.KindAvatar;
-                    else if ((slot >= 11 && slot <= 23) || slot == 29) kind = ItemCore.KindEquipment;
-                    else if (slot == 24) kind = ItemCore.KindCreature;
-                    else if (slot >= 25 && slot <= 27) kind = ItemCore.KindCreatureEquipment;
-                    else return false;
-                    return true;
-                default:
-                    return false;
+                if (!A21InventorySlotPolicy.IsValidSlotForKind(
+                        core.ItemKind,
+                        (InventoryListType)listTypeValue,
+                        slot,
+                        mainExpandStage))
+                    throw new InvalidOperationException($"复制后的物品容器不匹配: list={listTypeValue} slot={slot} kind={core.ItemKind} itemId={core.ItemId}");
             }
         }
 
@@ -225,42 +199,48 @@ ORDER BY list_type,slot_index;";
             int listType,
             short slot,
             int mainExpandStage,
-            int personalCargoCapacity,
-            int exEquipSlotStat)
+            int personalCargoCapacity)
         {
             if (listType == (int)InventoryListType.Main)
             {
-                if (slot >= 3 && slot <= 8)
+                if (slot >= A21InventorySlotPolicy.MainQuickSlotStart
+                    && slot <= A21InventorySlotPolicy.MainQuickSlotEnd)
                     return true;
-                if (slot >= 9 && slot <= GetExpandedCloneMainEnd(64, mainExpandStage))
+                if (A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindEquipment, mainExpandStage, out var equipmentStart, out var equipmentEnd)
+                    && slot >= equipmentStart && slot <= equipmentEnd)
                     return true;
-                if (slot >= 65 && slot <= GetExpandedCloneMainEnd(120, mainExpandStage))
+                if (A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindConsumable, mainExpandStage, out var consumableStart, out var consumableEnd)
+                    && slot >= consumableStart && slot <= consumableEnd)
                     return true;
-                if (slot >= 121 && slot <= GetExpandedCloneMainEnd(176, mainExpandStage))
+                if (A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindMaterial, mainExpandStage, out var materialStart, out var materialEnd)
+                    && slot >= materialStart && slot <= materialEnd)
                     return true;
-                if (slot >= 177 && slot <= GetExpandedCloneMainEnd(232, mainExpandStage))
+                if (A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindQuest, mainExpandStage, out var questStart, out var questEnd)
+                    && slot >= questStart && slot <= questEnd)
                     return true;
-                if (slot >= 233 && slot <= GetExpandedCloneMainEnd(288, mainExpandStage))
+                if (A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindExpertJobMaterial, mainExpandStage, out var expertStart, out var expertEnd)
+                    && slot >= expertStart && slot <= expertEnd)
                     return true;
-                return slot >= 289 && slot <= 351;
+                return slot >= A21InventorySlotPolicy.MainAvatarEmblemSlotStart
+                    && slot <= A21InventorySlotPolicy.MainAvatarEmblemSlotEnd;
             }
 
             if (listType == (int)InventoryListType.Avatar)
-                return slot >= 0 && slot <= 209;
+                return slot >= A21InventorySlotPolicy.AvatarSlotStart
+                    && slot <= A21InventorySlotPolicy.AvatarSlotEnd;
             if (listType == (int)InventoryListType.PersonalCargo)
-                return slot >= 0 && slot < personalCargoCapacity;
+                return slot >= A21InventorySlotPolicy.PersonalCargoSlotStart
+                    && slot < A21InventorySlotPolicy.PersonalCargoSlotStart + personalCargoCapacity;
             if (listType == (int)InventoryListType.Pet)
-                return slot >= 0 && slot <= 239;
+                return slot >= A21InventorySlotPolicy.PetCreatureSlotStart
+                    && slot <= A21InventorySlotPolicy.PetConsumableSlotEnd;
             if (listType == (int)InventoryListType.GuildMedal)
-                return slot >= 0 && slot <= 97;
+                return slot >= A21InventorySlotPolicy.GuildMedalSlotStart
+                    && slot <= A21InventorySlotPolicy.GuardianGemSlotEnd;
             if (listType != (int)InventoryListType.Equipment)
                 return false;
 
-            if (slot >= 0 && slot <= 20)
-                return true;
-            if (slot >= 21 && slot <= 23)
-                return (exEquipSlotStat & (1 << (slot - 21))) != 0;
-            return (slot >= 24 && slot <= 27) || slot == 29;
+            return A21InventorySlotPolicy.TryGetEquipmentBodyKind(slot, out _);
         }
 
         private static bool HasExplicitJobRestriction(string usableJob)

@@ -7,6 +7,7 @@ using DfoGmTool.ServerCore.Game.Characters;
 using DfoGmTool.ServerCore.Game.Currency;
 using DfoGmTool.ServerCore.Game.Dungeon;
 using DfoGmTool.ServerCore.Game.Inventory;
+using DfoGmTool.ServerCore.Game.ItemUpgrade;
 using DfoGmTool.ServerCore.Game.Premium;
 using DfoGmTool.ServerCore.Game.Quests;
 using DfoGmTool.ServerCore.Game.ReviveCoin;
@@ -16,7 +17,7 @@ namespace DfoGmTool.Services
 {
     public sealed partial class GmService
     {
-        private const short NameTagEquippedSlot = 28;
+        private const short NameTagEquippedSlot = (short)EquipmentType.NameTag;
         private const int DefaultNameTagGrantDays = 30;
         private const long SecondsPerDay = 86400L;
 
@@ -39,17 +40,20 @@ namespace DfoGmTool.Services
                 var expirationConfigurable = CanConfigureInventoryExpiration(item.ItemTemplateId, kind, item.ExpireTime);
                 var container = item.ListType switch
                 {
+                    InventoryListType.Main => "角色物品栏",
+                    InventoryListType.Avatar => "装扮背包",
+                    InventoryListType.Equipment => "身上穿戴",
                     InventoryListType.PersonalCargo => "个人仓库",
                     InventoryListType.AccountCargo => "账号金库",
-                    InventoryListType.Pet => "宠物",
-                    InventoryListType.GuildMedal => "勋章/守护珠",
-                    _ => "主背包",
+                    InventoryListType.Pet => "宠物背包",
+                    InventoryListType.GuildMedal => "勋章背包",
+                    _ => "其他容器",
                 };
                 var category = item.ListType switch
                 {
                     InventoryListType.Main => ResolveMainSegment(item.SlotIndex),
-                    InventoryListType.Equipment => "穿戴装备",
-                    InventoryListType.Avatar => "时装",
+                    InventoryListType.Equipment => A21InventorySlotPolicy.GetEquipmentCategory(item.SlotIndex),
+                    InventoryListType.Avatar => "装扮",
                     InventoryListType.Pet => ResolvePetSegment(item.SlotIndex),
                     InventoryListType.GuildMedal => item.SlotIndex <= 48 ? "勋章" : "守护珠",
                     _ => container,
@@ -188,13 +192,13 @@ namespace DfoGmTool.Services
         private static string ResolveMainSegment(int slot)
         {
             if (slot <= 2) return "货币";        // 0金币 1复活币 2技能点
-            if (slot <= 8) return "快捷栏";      // QuickSlot 3-8
-            if (slot <= 64) return "装备";       // 9-64 (含租赁)
-            if (slot <= 120) return "消耗品";    // 65-120
-            if (slot <= 176) return "材料";      // 121-176
-            if (slot <= 232) return "任务品";    // 177-232
-            if (slot <= 288) return "副职业材料"; // 233-288
-            if (slot <= 351) return "徽章";      // 289-351
+            if (slot <= A21InventorySlotPolicy.MainQuickSlotEnd) return "快捷栏";
+            if (slot <= A21InventorySlotPolicy.MainEquipmentSlotEnd) return "装备";
+            if (slot <= A21InventorySlotPolicy.MainConsumableSlotEnd) return "消耗品";
+            if (slot <= A21InventorySlotPolicy.MainMaterialSlotEnd) return "材料";
+            if (slot <= A21InventorySlotPolicy.MainQuestSlotEnd) return "任务品";
+            if (slot <= A21InventorySlotPolicy.MainExpertSlotEnd) return "副职业材料";
+            if (slot <= A21InventorySlotPolicy.MainAvatarEmblemSlotEnd) return "徽章";
             if (slot <= 353) return "保留槽";     // 352-353 不存放普通物品
             if (slot <= 359) return "账号晶块";   // 354-359 账号共享(accounts表列), 在账号面板调整
             if (slot <= 364) return "账号灵魂";   // 360-364 账号共享(accounts表列), 在账号面板调整
@@ -203,9 +207,10 @@ namespace DfoGmTool.Services
 
         private static string ResolvePetSegment(int slot)
         {
-            if (slot <= 139) return "宠物";       // 0-139
-            if (slot <= 188) return "宠物装备";    // 140-188
-            return "宠物用品";                    // 189-237
+            if (slot <= A21InventorySlotPolicy.PetCreatureSlotEnd) return "宠物";
+            if (slot <= A21InventorySlotPolicy.PetEquipmentSlotEnd) return "宠物装备";
+            if (slot <= A21InventorySlotPolicy.PetConsumableSlotEnd) return "宠物消耗品";
+            return "其他宠物槽";
         }
 
         public object GiveItem(
@@ -759,11 +764,12 @@ VALUES (
             var isPetArtifact = ItemMetadataResolver.IsPetArtifactMetadata(metadata);
             var isPetCreature = ItemMetadataResolver.IsPetCreatureMetadata(metadata);
             var isConfigurablePetEquipment = isPetArtifact && metadata.SupportsPetEquipmentQuality;
+            var isTitle = EquipmentTypeInfo.ParseOrUnknown(metadata.EquipmentType) == EquipmentType.TitleName;
             var isConfigurableEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal)
                 && !requiresManualGrantType
                 && !isAvatar
                 && !ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId)
-                && (equipmentCapability.CanUpgrade || equipmentCapability.CanAmplify || equipmentCapability.CanForge);
+                && (isTitle || equipmentCapability.CanUpgrade || equipmentCapability.CanAmplify || equipmentCapability.CanForge);
             var requiresAvatarConfiguration = isAvatar
                 && ((avatarOptionValues?.Count ?? 0) > 1 || avatarDurationValues.Count > 0);
             var requiresConfiguration = !isPetCreature
@@ -772,6 +778,17 @@ VALUES (
                     || requiresAvatarConfiguration
                     || (!isPetArtifact && expiration.CanOverride)
                     || requiresManualGrantType);
+            var qualityOptions = isTitle
+                ? new[]
+                {
+                    new { value = (int)ItemQualityMode.Random, label = "随机属性（中级）" },
+                    new { value = (int)ItemQualityMode.Top, label = "满属性（中级，默认）" },
+                }
+                : new[]
+                {
+                    new { value = (int)ItemQualityMode.Random, label = "随机品级" },
+                    new { value = (int)ItemQualityMode.Top, label = "100% 最上级" },
+                };
             return new
             {
                 success = true,
@@ -792,11 +809,7 @@ VALUES (
                     supportsQuality = isConfigurableEquipment || isConfigurablePetEquipment,
                     maxUpgradeLevel = equipmentCapability.MaxUpgradeLevel,
                     maxForgingLevel = equipmentCapability.MaxForgingLevel,
-                    qualityOptions = new[]
-                    {
-                        new { value = (int)ItemQualityMode.Random, label = "随机品级" },
-                        new { value = (int)ItemQualityMode.Top, label = "100% 最上级" },
-                    },
+                    qualityOptions,
                     amplifyTypes = new[]
                     {
                         new { value = 0, label = "无红字（强化）" },

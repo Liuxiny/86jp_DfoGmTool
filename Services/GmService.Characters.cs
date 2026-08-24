@@ -334,8 +334,9 @@ WHERE character_id = @cid;";
 
         public object MaxPersonalCargo(int characterId)
         {
-            const int PersonalCargoListType = 2;
-            const int MaxPersonalCargoCapacity = 152;
+            const int PersonalCargoListType = (int)InventoryListType.PersonalCargo;
+            const int MaxPersonalCargoCapacity = A21InventorySlotPolicy.PersonalCargoSlotEnd
+                - A21InventorySlotPolicy.PersonalCargoSlotStart + 1;
 
             if (!TryGetAccountId(characterId, out _))
                 return Error("角色不存在: " + characterId);

@@ -10,7 +10,7 @@ namespace DfoGmTool
 {
     public static class Program
     {
-        public const string ToolVersion = "v260823";
+        public const string ToolVersion = "v260824";
 
         public static void Main(string[] args)
         {

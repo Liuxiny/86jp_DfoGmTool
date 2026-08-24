@@ -314,6 +314,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
     internal static class ItemGrantExpirationOverride
     {
         internal const int MaximumDays = 3650;
+        internal const int DefaultExpiredTemplateDays = 30;
 
         internal static bool TryResolve(
             ItemGrantExpirationCapability capability,

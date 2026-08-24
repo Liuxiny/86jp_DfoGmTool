@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS characters (
     name TEXT NOT NULL,
     job INTEGER NOT NULL DEFAULT 0,
     grow_type INTEGER NOT NULL DEFAULT 0,
+    growup_change_count INTEGER NOT NULL DEFAULT 0,
     level INTEGER NOT NULL DEFAULT 1,
     pvp_grade INTEGER NOT NULL DEFAULT 0,
     pvp_rating_grade INTEGER NOT NULL DEFAULT 0,
@@ -409,13 +410,13 @@ CREATE TABLE IF NOT EXISTS character_init_flags (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS character_item_values (
+CREATE TABLE IF NOT EXISTS character_item_states (
     character_id INTEGER NOT NULL,
-    list_kind TEXT NOT NULL,
-    sort_order INTEGER NOT NULL,
+    state_kind TEXT NOT NULL CHECK(state_kind IN ('cooltime', 'effect')),
     item_id INTEGER NOT NULL,
-    value INTEGER NOT NULL,
-    PRIMARY KEY (character_id, list_kind, sort_order),
+    expire_time INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (character_id, state_kind, item_id),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -751,6 +752,31 @@ CREATE TABLE IF NOT EXISTS character_daily_challenge_claims (
     claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (character_id, group_index),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_daily_challenge_entry_claims (
+    character_id INTEGER NOT NULL,
+    group_index INTEGER NOT NULL CHECK (group_index >= 0 AND group_index < 6),
+    entry_index INTEGER NOT NULL CHECK (entry_index >= 0),
+    quest_id INTEGER NOT NULL CHECK (quest_id > 0),
+    claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (character_id, group_index, entry_index),
+    FOREIGN KEY (character_id, group_index, entry_index)
+        REFERENCES character_daily_challenge_entries(character_id, group_index, entry_index)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_daily_challenge_progress_events (
+    character_id INTEGER NOT NULL,
+    source_event_id TEXT NOT NULL,
+    group_index INTEGER NOT NULL,
+    entry_index INTEGER NOT NULL,
+    quest_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (character_id, source_event_id, group_index, entry_index),
+    FOREIGN KEY (character_id, group_index, entry_index)
+        REFERENCES character_daily_challenge_entries(character_id, group_index, entry_index)
+        ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS quest_progress_event_inbox (

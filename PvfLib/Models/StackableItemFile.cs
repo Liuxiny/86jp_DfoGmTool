@@ -193,6 +193,10 @@ namespace GmPvfLib
         public int LotteryUseNeedItemCount { get; set; }
         public int CoolTime { get; set; } = -1;
         public string CooltimeGroup { get; set; }
+        public bool HasCooltimeMaintenance { get; set; }
+        public bool HasEffectMaintenance { get; set; }
+        public int StatChangeDurationMilliseconds { get; set; } = -1;
+        public string StatChangeDurationTarget { get; set; }
 
         #endregion
 
@@ -235,6 +239,7 @@ namespace GmPvfLib
         // [action type] `[xxx]` p1 p2 ...: ActionTypeName="[xxx]", ActionTypeParams=[p1,p2,...]
         public string ActionTypeName { get; set; }
         public List<int> ActionTypeParams { get; set; } = new List<int>();
+        public List<int> RarityPossibleExplain { get; set; } = new List<int>();
         public UpgradeLimitCubeInfo UpgradeLimitCube { get; set; }
         public EquipmentUpgradeTicketInfo EquipmentReinforcementTicket { get; set; }
         public EquipmentUpgradeTicketInfo EquipmentAmplifyReinforcementTicket { get; set; }
@@ -355,6 +360,9 @@ namespace GmPvfLib
                     }
                     case "cool time": stk.CoolTime = ParseInt(data); break;
                     case "cooltime group": stk.CooltimeGroup = data; break;
+                    case "cooltime maintenance": stk.HasCooltimeMaintenance = true; break;
+                    case "effect maintenance": stk.HasEffectMaintenance = true; break;
+                    case "stat change duration": ParseStatChangeDuration(data, stk); break;
 
                     
                     case "icon": stk.Icon = data; break;
@@ -386,6 +394,7 @@ namespace GmPvfLib
                     case "3choro enchant": stk.ThreeChronicleEnchant = ParseThreeChronicleEnchant(root, node, content); break;
                     case "enchant table": stk.EnchantTable = ParseEnchantTableIndexes(node, content); break;
                     case "action type": ParseActionType(node, content, stk); break;
+                    case "rarity possible explain": stk.RarityPossibleExplain = ParseIntList(node, content); break;
                     case "upgrade limit cube info": stk.UpgradeLimitCube = ParseUpgradeLimitCubeInfo(node, content); break;
                     case "equipment reinforcement ticket": stk.EquipmentReinforcementTicket = ParseUpgradeTicket(node, content); break;
                     case "equipment amplify reinforcement ticket": stk.EquipmentAmplifyReinforcementTicket = ParseUpgradeTicket(node, content); break;
@@ -454,6 +463,25 @@ namespace GmPvfLib
             stk.RandomBoxRemovalItems = ParseRandomBoxRemovalItems(randomBox != null ? randomBox.GetChild("sealing removal item") : null, content);
 
             return stk;
+        }
+
+        private static void ParseStatChangeDuration(string data, StackableItemFile stackable)
+        {
+            if (stackable == null || string.IsNullOrWhiteSpace(data))
+                return;
+
+            var parts = data.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+                return;
+
+            int duration;
+            if (!int.TryParse(parts[0], out duration))
+                return;
+
+            stackable.StatChangeDurationMilliseconds = duration;
+            stackable.StatChangeDurationTarget = parts.Length > 1
+                ? StripBacktick(parts[1])
+                : string.Empty;
         }
 
         private static List<StackableStatusIncreaseEntry> ParseStatusIncreases(
@@ -1257,24 +1285,29 @@ namespace GmPvfLib
 
         private static void ParseActionType(ScriptNode node, string content, StackableItemFile stk)
         {
-            if (node == null || node.DataItems == null)
+            if (node == null || node.DataItems == null || stk == null)
                 return;
 
+            var foundName = false;
+            stk.ActionTypeParams.Clear();
             foreach (var item in node.DataItems)
             {
                 var raw = item.GetContent(content);
-                var nameMatch = Regex.Match(raw, "`([^`]*)`");
-                if (!nameMatch.Success)
-                    continue;
-
-                stk.ActionTypeName = nameMatch.Groups[1].Value.Trim();
-                var rest = raw.Substring(nameMatch.Index + nameMatch.Length);
-                foreach (var token in rest.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                if (!foundName)
                 {
-                    if (int.TryParse(token, out var value))
+                    var nameMatch = Regex.Match(raw, "`([^`]*)`");
+                    if (!nameMatch.Success)
+                        continue;
+
+                    stk.ActionTypeName = nameMatch.Groups[1].Value.Trim();
+                    foreach (var value in ParseInts(raw.Substring(nameMatch.Index + nameMatch.Length)))
                         stk.ActionTypeParams.Add(value);
+                    foundName = true;
+                    continue;
                 }
-                break;
+
+                foreach (var value in ParseInts(raw))
+                    stk.ActionTypeParams.Add(value);
             }
         }
 

@@ -3,9 +3,11 @@
 // 分类按容器分组展示
 const CATEGORY_GROUPS = [
   { title: '常用', cats: ['货币', '快捷栏'] },
-  { title: '角色背包', cats: ['装备', '消耗品', '材料', '任务品', '副职业材料', '特殊材料', '其他'] },
-  { title: '穿戴', cats: ['穿戴装备', '时装', '徽章'] },
-  { title: '宠物', cats: ['宠物', '宠物装备', '宠物用品'] },
+  { title: '角色背包', cats: ['装备', '消耗品', '材料', '任务品', '副职业材料', '徽章', '其他'] },
+  { title: '装扮背包', cats: ['装扮'] },
+  { title: '宠物背包', cats: ['宠物', '宠物装备', '宠物消耗品'] },
+  { title: '勋章背包', cats: ['勋章', '守护珠'] },
+  { title: '身上穿戴', cats: ['穿戴装扮', '穿戴装备', '穿戴宠物', '穿戴宠物装备', '穿戴符咒', '穿戴勋章'] },
   { title: '仓库', cats: ['个人仓库', '账号金库', '账号晶块'] },
 ];
 
@@ -47,12 +49,12 @@ const CATEGORY_TEMPLATES = {
 
 function templateFor(category) {
   switch (category) {
-    case '装备': return CATEGORY_TEMPLATES.equip;
-    case '穿戴装备': case '时装': return CATEGORY_TEMPLATES.avatar;
-    case '宠物': return CATEGORY_TEMPLATES.pet;
+    case '装备': case '穿戴装备': case '穿戴符咒': case '穿戴勋章': return CATEGORY_TEMPLATES.equip;
+    case '装扮': case '穿戴装扮': return CATEGORY_TEMPLATES.avatar;
+    case '宠物': case '宠物装备': case '宠物消耗品': case '穿戴宠物': case '穿戴宠物装备': return CATEGORY_TEMPLATES.pet;
     case '货币': return CATEGORY_TEMPLATES.currency;
     case '全部': case '个人仓库': case '账号金库': return CATEGORY_TEMPLATES.mixed;
-    default: return CATEGORY_TEMPLATES.stack; // 消耗品/材料/任务品/副职业/徽章/特殊材料/快捷栏/宠物装备/宠物用品/其他
+    default: return CATEGORY_TEMPLATES.stack; // 消耗品/材料/任务品/副职业/徽章/守护珠/快捷栏/其他
   }
 }
 

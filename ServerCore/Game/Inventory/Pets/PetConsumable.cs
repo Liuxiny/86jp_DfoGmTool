@@ -15,8 +15,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             return source.ListType == InventoryListType.Pet
                 && source.ItemKind == "pet"
                 && GetStackedRecordCount(source) > 0
-                && source.SlotIndex >= PetConsumableSlotStart
-                && source.SlotIndex <= PetConsumableSlotEnd;
+                && A21InventorySlotPolicy.IsPetConsumableSlot(source.SlotIndex);
         }
 
         internal static int GetStackedRecordCount(ItemRecord source)
@@ -26,8 +25,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
 
             if (source.ListType == InventoryListType.Pet
                 && source.ItemKind == "pet"
-                && source.SlotIndex >= PetConsumableSlotStart
-                && source.SlotIndex <= PetConsumableSlotEnd)
+                && A21InventorySlotPolicy.IsPetConsumableSlot(source.SlotIndex))
             {
                 return Math.Max(source.StackCount, Math.Max(source.InstanceValue, source.PetSerialOrHandle));
             }

@@ -20,18 +20,17 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         internal const int RentalBagSlotStart = 9;
         internal const int RentalBagSlotEnd = 64;
 
-        // 宠物栏(list 7)"宠物"本体分页槽段(category 5): slot 0..139 共 140 格(实测计数)。
-        // 其后 宠物装备=140..188(cat6)、宠物耗品=189..237(cat7)。新购宠物从本页首格开始填。
+        // 宠物栏(list 7)三段槽位由 A21 policy 统一维护。
         // Client pet inventory pages share list 7 but use separate slot ranges:
         // category 5 = pets, category 6 = pet equipment, category 7 = pet consumables.
-        internal const int PetInventorySlotStart = 0;
-        internal const int PetInventorySlotEnd = 139;
-        internal const int PetEquipmentSlotStart = 140;
-        internal const int PetEquipmentSlotEnd = 188;
-        internal const int PetConsumableSlotStart = 189;
-        internal const int PetConsumableSlotEnd = 237;
-        internal const int AvatarEmblemSlotStart = 289;
-        internal const int AvatarEmblemSlotEnd = 344;
+        internal const int PetInventorySlotStart = A21InventorySlotPolicy.PetCreatureSlotStart;
+        internal const int PetInventorySlotEnd = A21InventorySlotPolicy.PetCreatureSlotEnd;
+        internal const int PetEquipmentSlotStart = A21InventorySlotPolicy.PetEquipmentSlotStart;
+        internal const int PetEquipmentSlotEnd = A21InventorySlotPolicy.PetEquipmentSlotEnd;
+        internal const int PetConsumableSlotStart = A21InventorySlotPolicy.PetConsumableSlotStart;
+        internal const int PetConsumableSlotEnd = A21InventorySlotPolicy.PetConsumableSlotEnd;
+        internal const int AvatarEmblemSlotStart = A21InventorySlotPolicy.MainAvatarEmblemSlotStart;
+        internal const int AvatarEmblemSlotEnd = A21InventorySlotPolicy.MainAvatarEmblemSlotEnd;
 
         internal bool TryPickupItemCore(
             SqliteConnection connection, SqliteTransaction transaction,
@@ -77,7 +76,30 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 || !CharmInventoryPolicy.CanEnterMain(connection, transaction, characterId, itemTemplateId))
                 return false;
 
-            bool isConsumable = metadata.IsStackable
+            if (!NewInventoryStore.TryResolveKindAndRange(
+                    metadata,
+                    null,
+                    out var resolvedKind,
+                    out var targetList,
+                    out var slotStart,
+                    out var slotEnd,
+                    out _))
+                return false;
+            if (!NewInventoryStore.TryGetCharacterOpenRange(
+                    connection,
+                    transaction,
+                    characterId,
+                    resolvedKind,
+                    out targetList,
+                    out slotStart,
+                    out slotEnd,
+                    out _))
+                return false;
+
+            var isPetConsumable = resolvedKind == ItemCore.KindCreatureConsumable;
+            bool isConsumable = targetList == InventoryListType.Main
+                && !isPetConsumable
+                && metadata.IsStackable
                 && metadata.StackableType != null
                 && metadata.StackableType.IndexOf("[waste]", System.StringComparison.OrdinalIgnoreCase) >= 0;
 
@@ -94,17 +116,17 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                     }
                 }
 
-                var existing = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                var existing = _db.FindItemByTemplateId(connection, transaction, characterId, targetList, itemTemplateId);
                 if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + stackCount <= metadata.StackLimit))
                 {
-                    _db.UpdateStackCount(connection, transaction, existing.ItemUid, existing.StackCount + stackCount);
+                    if (isPetConsumable)
+                        _db.UpdatePetStackCount(connection, transaction, existing.ItemUid, existing.StackCount + stackCount);
+                    else
+                        _db.UpdateStackCount(connection, transaction, existing.ItemUid, existing.StackCount + stackCount);
                     assignedSlot = existing.SlotIndex;
                     return true;
                 }
             }
-
-            int slotStart, slotEnd;
-            metadata.GetSlotRange(out slotStart, out slotEnd);
 
             if (isConsumable)
             {
@@ -120,7 +142,7 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 }
             }
 
-            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, slotStart, slotEnd);
+            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, targetList, slotStart, slotEnd);
             if (targetSlot < 0)
                 return false;
 
@@ -128,10 +150,13 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             var dbStackCount = metadata.IsStackable ? stackCount : qualitySeed;
             var dbInstanceValue = metadata.IsStackable ? stackCount : qualitySeed;
             var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
+            var itemKindText = targetList == InventoryListType.Pet ? "pet" : metadata.ItemKind;
             _db.InsertCharacterItem(
-                connection, transaction, characterId, InventoryListType.Main, (short)targetSlot,
-                itemTemplateId, metadata.ItemKind, dbStackCount, dbInstanceValue,
-                metadata.Durability, sealFlag, 0, 0, metadata.IsStackable ? 0 : -1, 0, "{}");
+                connection, transaction, characterId, targetList, (short)targetSlot,
+                itemTemplateId, itemKindText, dbStackCount, dbInstanceValue,
+                isPetConsumable ? (ushort)0 : metadata.Durability,
+                sealFlag, 0, 0, metadata.IsStackable ? 0 : -1,
+                isPetConsumable ? stackCount : 0, "{}");
             assignedSlot = (short)targetSlot;
             return true;
         }

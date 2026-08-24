@@ -39,7 +39,6 @@ namespace DfoGmTool.Services
             "character_avatar_detail",
             "character_inventory_items",
             "character_name_tag_state",
-            "character_item_values",
             "character_item_locks",
             "character_hotkey_slots",
             "character_active_quests",
@@ -50,6 +49,7 @@ namespace DfoGmTool.Services
             "character_daily_counters",
             "character_daily_challenge_groups",
             "character_daily_challenge_entries",
+            "character_daily_challenge_entry_claims",
             "character_daily_challenge_tail_ids",
             "character_daily_schedule_states",
             "character_buy_restrict_items",
@@ -90,6 +90,16 @@ namespace DfoGmTool.Services
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "account_character_entries",
+                "character_item_values",
+                "character_item_states",
+                "character_daily_challenge_progress_events",
+            };
+
+        private static readonly HashSet<string> AccountBackupIgnoredRuntimeTables =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "character_item_states",
+                "character_daily_challenge_progress_events",
             };
 
         public object ExportAccountBackup(int accountId)
@@ -440,6 +450,9 @@ namespace DfoGmTool.Services
             foreach (var name in names)
             {
                 if (!IsAccountBackupIdentifier(name))
+                    continue;
+                if (AccountBackupIgnoredRuntimeTables.Contains(name)
+                    || name.Equals("character_item_values", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 var columns = LoadAccountBackupColumns(conn, tx, name);

@@ -105,6 +105,8 @@ namespace GmPvfLib
         public int SealDoorAppearRate { get; set; } = -1;
         public int SealDoorMapIndex { get; set; } = -1;
         public int[] SealDoorPos { get; set; }
+        public int SeasonSealDoorMapIndex { get; set; } = -1;
+        public int[] SeasonSealDoorPos { get; set; }
         public int[] QuestConnection { get; set; }          // [flag, questId, value]
         public RidableObjectScript RidableScript { get; set; }
         public List<RidableObjectScript> RidableScripts { get; set; } =
@@ -396,6 +398,7 @@ namespace GmPvfLib
         {
             "size", "greed", "map specification", "start map", "boss map",
             "hit count", "seal door appear rate", "seal door map index", "seal door pos", "quest connection",
+            "season seal door map index", "season seal door pos",
             "randomized object creation", "clear condition",
             "boss map specification", "layered map specification",
             "minimap icon"
@@ -1251,6 +1254,12 @@ namespace GmPvfLib
                         break;
                     case "seal door pos":
                         maze.SealDoorPos = ParseIntArray(data);
+                        break;
+                    case "season seal door map index":
+                        maze.SeasonSealDoorMapIndex = ParseInt(data);
+                        break;
+                    case "season seal door pos":
+                        maze.SeasonSealDoorPos = ParseIntArray(data);
                         break;
                     case "quest connection":
                         maze.QuestConnection = ParseIntArray(data);

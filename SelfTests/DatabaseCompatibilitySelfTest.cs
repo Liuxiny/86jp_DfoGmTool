@@ -29,9 +29,9 @@ namespace DfoGmTool.SelfTests
                 var currentHash = Hash(currentPath);
                 var current = DatabaseCompatibilityGuard.Validate(currentPath);
                 Check(
-                    "真实 A21 schema v5 接受并报告 baseline",
-                    current.SchemaVersion == 5
-                    && current.MetadataSchemaVersion == 5
+                    "真实 A21 schema v8 接受并报告 baseline",
+                    current.SchemaVersion == A12ToA21MigrationService.TargetSchemaVersion
+                    && current.MetadataSchemaVersion == A12ToA21MigrationService.TargetSchemaVersion
                     && current.BaselineId == "86jp-database-v1"
                     && current.StructureCompatible,
                     ref failures);
@@ -167,7 +167,7 @@ VALUES(1,1,0,9,zeroblob(82));");
 INSERT OR REPLACE INTO schema_metadata
     (singleton_id, baseline_id, schema_version, created_at, updated_at)
 VALUES
-    (1, '86jp-database-v1', 5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);";
+    (1, '86jp-database-v1', " + A12ToA21MigrationService.TargetSchemaVersion + @", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);";
                 command.ExecuteNonQuery();
             }
         }

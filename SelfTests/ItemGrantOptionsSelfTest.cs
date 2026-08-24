@@ -31,6 +31,7 @@ namespace DfoGmTool.SelfTests
                 CheckAvatarDurationDeduplication();
                 CheckExpirationRules();
                 CheckCubeRoutes();
+                CheckA21SpecialMaterialRoute();
             }
             finally
             {
@@ -558,6 +559,26 @@ namespace DfoGmTool.SelfTests
                 Check($"cube {pair.Key} recognized", CurrencyService.IsCubeFragment(pair.Key));
                 Check($"cube {pair.Key} account slot", CurrencyService.GetCubeFragmentSlot(pair.Key) == pair.Value);
             }
+        }
+
+        private static void CheckA21SpecialMaterialRoute()
+        {
+            var legacySpecial = new ItemMetadata
+            {
+                ItemKind = "stackable",
+                StackableType = "[material] legacy4",
+            };
+            legacySpecial.GetSlotRange(out var start, out var end);
+            Check("旧 special-material 不再占用 345-359", start == 121 && end == 176);
+            Check("旧 special-material 手动路由被拒绝",
+                !NewInventoryStore.TryResolveKindAndRange(
+                    legacySpecial,
+                    "special-material",
+                    out _,
+                    out _,
+                    out _,
+                    out _,
+                    out _));
         }
 
         private static void Check(string name, bool condition, string error = null)

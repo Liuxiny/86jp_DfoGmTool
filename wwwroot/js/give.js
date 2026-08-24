@@ -438,6 +438,11 @@ function isLimitedTemplate(item) {
 
 function needsGrantConfiguration(item) {
   if (!item) return false;
+  // Titles have one PVF grade (middle) but their stat roll still varies.
+  // Keep them on the configuration path so the grant-options endpoint can
+  // expose Top (full stats) and Random choices.
+  if (item.kind === 'equipment' && String(item.tag || '').toLowerCase() === 'title name')
+    return true;
   if (typeof item.requiresConfiguration === 'boolean') return item.requiresConfiguration;
   return item.kind === 'equipment' || item.requiresManualGrantType || isLimitedTemplate(item);
 }

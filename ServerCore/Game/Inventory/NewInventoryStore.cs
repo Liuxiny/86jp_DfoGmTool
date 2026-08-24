@@ -663,23 +663,39 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
             error = null;
             if (avatar)
                 return true;
+            var expiredTemplate = false;
             if (!ItemGrantExpirationResolver.TryResolve(itemId, metadata, out expireTime, out error))
-                return false;
-            if (options?.ExpirationDays is int days)
             {
-                var capability = new ItemGrantExpirationCapability { IsLimited = expireTime > 0, CanOverride = expireTime > 0, DefaultExpireTime = expireTime };
+                if (!IsExpiredExpirationError(error))
+                    return false;
+                expiredTemplate = true;
+                expireTime = 0;
+            }
+            if (expiredTemplate || options?.ExpirationDays is int)
+            {
+                var capability = new ItemGrantExpirationCapability
+                {
+                    IsLimited = expiredTemplate || expireTime > 0,
+                    CanOverride = expiredTemplate || expireTime > 0,
+                    DefaultExpireTime = expireTime,
+                    IsExpired = expiredTemplate,
+                };
                 if (metadata.IsStackable && StackableExpirationPolicyResolver.TryResolve(metadata.StackableFile, out var policy))
                 {
                     capability.IsLimited = policy.RequiresInstanceExpiration || policy.AbsoluteExpirationUnixTime > 0 || policy.DailyDeleteItem;
                     capability.CanOverride = policy.RequiresInstanceExpiration || policy.AbsoluteExpirationUnixTime > 0;
                 }
+                var days = options?.ExpirationDays ?? ItemGrantExpirationOverride.DefaultExpiredTemplateDays;
                 if (!ItemGrantExpirationOverride.TryResolve(capability, days, DateTimeOffset.Now.ToUnixTimeSeconds(), out expireTime, out error))
                     return false;
             }
             return true;
         }
 
-        private static bool TryResolveKindAndRange(ItemMetadata metadata, string manual, out byte kind, out InventoryListType list, out short start, out short end, out string error)
+        private static bool IsExpiredExpirationError(string value)
+            => !string.IsNullOrWhiteSpace(value) && value.Contains("已过期", StringComparison.Ordinal);
+
+        internal static bool TryResolveKindAndRange(ItemMetadata metadata, string manual, out byte kind, out InventoryListType list, out short start, out short end, out string error)
         {
             kind = ItemCore.KindUnknown;
             list = InventoryListType.Main;
@@ -708,7 +724,6 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
                     case "quest": kind = ItemCore.KindQuest; break;
                     case "expert-material": kind = ItemCore.KindExpertJobMaterial; break;
                     case "avatar-emblem": kind = ItemCore.KindAvatarEmblem; break;
-                    case "special-material": kind = ItemCore.KindSpecialMaterial; break;
                     case "pet-consumable": kind = ItemCore.KindCreatureConsumable; break;
                     default: error = "手动物品类型无效"; return false;
                 }
@@ -751,24 +766,7 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
 
         internal static bool TryGetRange(byte kind, out InventoryListType list, out short start, out short end)
         {
-            list = InventoryListType.Main;
-            start = end = 0;
-            switch (kind)
-            {
-                case ItemCore.KindEquipment: start = 9; end = 64; return true;
-                case ItemCore.KindConsumable: start = 65; end = 120; return true;
-                case ItemCore.KindMaterial: start = 121; end = 176; return true;
-                case ItemCore.KindQuest: start = 177; end = 232; return true;
-                case ItemCore.KindExpertJobMaterial: start = 233; end = 288; return true;
-                case ItemCore.KindAvatarEmblem: start = 289; end = 351; return true;
-                case ItemCore.KindAvatar: list = InventoryListType.Avatar; start = 0; end = 209; return true;
-                case ItemCore.KindCreature: list = InventoryListType.Pet; start = 0; end = 139; return true;
-                case ItemCore.KindCreatureEquipment: list = InventoryListType.Pet; start = 140; end = 188; return true;
-                case ItemCore.KindCreatureConsumable: list = InventoryListType.Pet; start = 189; end = 239; return true;
-                case ItemCore.KindGuildMedal: list = InventoryListType.GuildMedal; start = 0; end = 48; return true;
-                case ItemCore.KindGuardianGem: list = InventoryListType.GuildMedal; start = 49; end = 97; return true;
-                default: return false;
-            }
+            return A21InventorySlotPolicy.TryGetRange(kind, out list, out start, out end);
         }
 
         internal static bool TryGetCharacterOpenRange(
@@ -791,13 +789,17 @@ ON CONFLICT(character_id) DO UPDATE SET item_id=excluded.item_id, expire_time=ex
             if (list != InventoryListType.Main)
                 return true;
 
-            var stage = LoadCharacterListParam(connection, transaction, characterId, InventoryListType.Main, 24);
-            if (stage != 0 && stage != 8 && stage != 16 && stage != 24)
+            var stage = LoadCharacterListParam(
+                connection,
+                transaction,
+                characterId,
+                InventoryListType.Main,
+                A21InventorySlotPolicy.MainExpandStageFull);
+            if (!A21InventorySlotPolicy.TryGetMainRange(kind, stage, out start, out end))
             {
                 error = "角色主背包扩展状态无效: " + stage;
                 return false;
             }
-            end = checked((short)(end - (24 - stage)));
             return true;
         }
 
@@ -865,8 +867,13 @@ WHERE character_id=@cid
             SqliteTransaction transaction,
             int characterId)
         {
-            var capacity = LoadCharacterListParam(connection, transaction, characterId, InventoryListType.PersonalCargo, 8);
-            capacity = capacity <= 0 ? 8 : Math.Min(capacity, 152);
+            var capacity = LoadCharacterListParam(
+                connection,
+                transaction,
+                characterId,
+                InventoryListType.PersonalCargo,
+                A21InventorySlotPolicy.PersonalCargoDefaultCapacity);
+            capacity = A21InventorySlotPolicy.NormalizePersonalCapacity(capacity);
             return checked((short)(capacity - 1));
         }
 
@@ -896,7 +903,9 @@ WHERE character_id=@cid
                     return FailSlotValidation(error ?? "物品不在该角色已开放的主背包区间", out error);
 
                 case InventoryListType.Avatar:
-                    return record.Core.ItemKind == ItemCore.KindAvatar && slot >= 0 && slot <= 209
+                    return record.Core.ItemKind == ItemCore.KindAvatar
+                        && slot >= A21InventorySlotPolicy.AvatarSlotStart
+                        && slot <= A21InventorySlotPolicy.AvatarSlotEnd
                         || FailSlotValidation("时装不在有效时装栏区间", out error);
 
                 case InventoryListType.PersonalCargo:
@@ -904,34 +913,21 @@ WHERE character_id=@cid
                         || FailSlotValidation("物品位于未开放的个人仓库格子", out error);
 
                 case InventoryListType.Pet:
-                    if (record.Core.ItemKind == ItemCore.KindCreature) return slot >= 0 && slot <= 139 || FailSlotValidation("宠物槽位不匹配", out error);
-                    if (record.Core.ItemKind == ItemCore.KindCreatureEquipment) return slot >= 140 && slot <= 188 || FailSlotValidation("宠物装备槽位不匹配", out error);
-                    if (record.Core.ItemKind == ItemCore.KindCreatureConsumable) return slot >= 189 && slot <= 239 || FailSlotValidation("宠物用品槽位不匹配", out error);
+                    if (A21InventorySlotPolicy.TryGetPetKind(slot, out var petKind)
+                        && petKind == record.Core.ItemKind)
+                        return true;
                     return FailSlotValidation("宠物背包物品类型无效", out error);
 
                 case InventoryListType.GuildMedal:
-                    if (record.Core.ItemKind == ItemCore.KindGuildMedal)
-                        return slot >= 0 && slot <= 48 || FailSlotValidation("勋章槽位不匹配", out error);
-                    if (record.Core.ItemKind == ItemCore.KindGuardianGem)
-                        return slot >= 49 && slot <= 97 || FailSlotValidation("守护珠槽位不匹配", out error);
+                    if (A21InventorySlotPolicy.TryGetGuildKind(slot, out var guildKind)
+                        && guildKind == record.Core.ItemKind)
+                        return true;
                     return FailSlotValidation("勋章/守护珠类型无效", out error);
 
                 case InventoryListType.Equipment:
-                    if (slot >= 0 && slot <= 10)
-                        return record.Core.ItemKind == ItemCore.KindAvatar || FailSlotValidation("穿戴时装槽物品类型不匹配", out error);
-                    if (slot >= 11 && slot <= 20 || slot == 29)
-                        return record.Core.ItemKind == ItemCore.KindEquipment || FailSlotValidation("穿戴装备槽物品类型不匹配", out error);
-                    if (slot >= 21 && slot <= 23)
-                    {
-                        var flags = LoadExtraEquipmentSlotStat(connection, transaction, characterId);
-                        return record.Core.ItemKind == ItemCore.KindEquipment
-                            && (flags & (1 << (slot - 21))) != 0
-                            || FailSlotValidation("特殊装备槽尚未开放或物品类型不匹配", out error);
-                    }
-                    if (slot == 24)
-                        return record.Core.ItemKind == ItemCore.KindCreature || FailSlotValidation("穿戴宠物槽物品类型不匹配", out error);
-                    if (slot >= 25 && slot <= 27)
-                        return record.Core.ItemKind == ItemCore.KindCreatureEquipment || FailSlotValidation("穿戴宠物装备槽物品类型不匹配", out error);
+                    if (A21InventorySlotPolicy.TryGetEquipmentBodyKind(slot, out var bodyKind)
+                        && bodyKind == record.Core.ItemKind)
+                        return true;
                     return FailSlotValidation("穿戴槽位无效", out error);
 
                 case InventoryListType.AccountCargo:
@@ -996,7 +992,8 @@ WHERE character_id=@cid AND list_type=@list LIMIT 1;";
             var value = command.ExecuteScalar();
             if (value == null || value == DBNull.Value)
                 return 0;
-            return Math.Max(0, Math.Min(Convert.ToInt32(value, CultureInfo.InvariantCulture), 64));
+            return A21InventorySlotPolicy.NormalizeAccountCapacity(
+                Convert.ToInt32(value, CultureInfo.InvariantCulture));
         }
 
         private SqliteConnection OpenConnection()

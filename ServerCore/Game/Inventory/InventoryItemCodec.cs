@@ -106,10 +106,9 @@ namespace DfoGmTool.ServerCore.Game.Inventory
         {
             var slot = reader.GetInt32(1);
             var isPetConsumable = string.Equals(reader.GetString(3), "pet", StringComparison.Ordinal)
-                && slot >= SqliteInventoryStore.PetConsumableSlotStart
-                && slot <= SqliteInventoryStore.PetConsumableSlotEnd;
-            var serialOrInstanceValue = slot >= SqliteInventoryStore.PetEquipmentSlotStart
-                && slot <= SqliteInventoryStore.PetEquipmentSlotEnd
+                && A21InventorySlotPolicy.IsPetConsumableSlot(slot);
+            var serialOrInstanceValue = slot >= A21InventorySlotPolicy.PetEquipmentSlotStart
+                && slot <= A21InventorySlotPolicy.PetEquipmentSlotEnd
                 ? reader.GetInt32(5)
                 : reader.GetInt32(11);
             var stackCount = isPetConsumable

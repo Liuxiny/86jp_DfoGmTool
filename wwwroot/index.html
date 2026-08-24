@@ -75,11 +75,9 @@
           <span id="runtime-source-state" class="hint" aria-live="polite"></span>
         </div>
 
-        <section id="a12-a21-migration" class="a12-a21-migration" aria-labelledby="a12-a21-migration-title">
-          <div class="runtime-source-title-row">
-            <h2 id="a12-a21-migration-title">S4A12 → S4A21 数据迁移</h2>
-          </div>
-          <p class="migration-warning">此操作会把上方数据库路径中的 S4A12 原文件升级为 S4A21 schema-v5，并替换原文件。请先自行备份数据库、停止游戏服务端并确保没有在线角色；预览零写入，无法安全转换的数据会跳过并写入报告。</p>
+        <details id="a12-a21-migration" class="a12-a21-migration" aria-labelledby="a12-a21-migration-title">
+          <summary class="runtime-source-title-row"><span id="a12-a21-migration-title">S4A12 → S4A21 数据迁移</span></summary>
+          <p class="migration-warning">此操作会把上方数据库路径中的 S4A12 原文件升级为 S4A21 schema-v8，并替换原文件。请先自行备份数据库、停止游戏服务端并确保没有在线角色；预览零写入，无法安全转换的数据会跳过并写入报告。</p>
           <label class="migration-backup-check">
             <input id="a12-a21-user-backed-up" type="checkbox">
             我已自行备份数据库，并确认服务端已停止、没有在线角色
@@ -91,7 +89,7 @@
           </div>
           <div id="a12-a21-migration-preview" class="migration-status hidden" aria-live="polite"></div>
           <div id="a12-a21-migration-report" class="migration-report hidden" aria-live="polite"></div>
-        </section>
+        </details>
       </form>
     </section>
 

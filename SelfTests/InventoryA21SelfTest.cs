@@ -1,10 +1,14 @@
 using DfoGmTool.ServerCore.Game.Inventory;
 using DfoGmTool.ServerCore.Game.Currency;
 using DfoGmTool.ServerCore.Infrastructure;
+using DfoGmTool.ServerCore.GameWorld;
+using DfoGmTool.Services;
+using GmPvfLib;
 using Microsoft.Data.Sqlite;
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace DfoGmTool.SelfTests
 {
@@ -62,6 +66,8 @@ namespace DfoGmTool.SelfTests
                     && gemList == InventoryListType.GuildMedal
                     && gemStart == 49 && gemEnd == 97,
                     ref failures);
+                CheckSlotPolicyMatrix(ref failures);
+                CheckRealPvfGrantRoutes(databasePath, schemaPath, ref failures);
                 Check(
                     "勋章/守护珠 99B 写读",
                     store.TryLoadItem(CharacterId, AccountId, InventoryListType.GuildMedal, 0, out var loadedMedal)
@@ -166,6 +172,259 @@ namespace DfoGmTool.SelfTests
                     ? "InventoryA21SelfTest OK"
                     : $"InventoryA21SelfTest FAIL: {failures}");
             return failures == 0 ? 0 : 1;
+        }
+
+        private static void CheckSlotPolicyMatrix(ref int failures)
+        {
+            var expected = new[]
+            {
+                new { Kind = ItemCore.KindEquipment, List = InventoryListType.Main, Start = 9, End = 64 },
+                new { Kind = ItemCore.KindConsumable, List = InventoryListType.Main, Start = 65, End = 120 },
+                new { Kind = ItemCore.KindMaterial, List = InventoryListType.Main, Start = 121, End = 176 },
+                new { Kind = ItemCore.KindQuest, List = InventoryListType.Main, Start = 177, End = 232 },
+                new { Kind = ItemCore.KindExpertJobMaterial, List = InventoryListType.Main, Start = 233, End = 288 },
+                new { Kind = ItemCore.KindAvatarEmblem, List = InventoryListType.Main, Start = 289, End = 351 },
+                new { Kind = ItemCore.KindAvatar, List = InventoryListType.Avatar, Start = 0, End = 209 },
+                new { Kind = ItemCore.KindCreature, List = InventoryListType.Pet, Start = 0, End = 139 },
+                new { Kind = ItemCore.KindCreatureEquipment, List = InventoryListType.Pet, Start = 140, End = 188 },
+                new { Kind = ItemCore.KindCreatureConsumable, List = InventoryListType.Pet, Start = 189, End = 239 },
+                new { Kind = ItemCore.KindGuildMedal, List = InventoryListType.GuildMedal, Start = 0, End = 48 },
+                new { Kind = ItemCore.KindGuardianGem, List = InventoryListType.GuildMedal, Start = 49, End = 97 },
+            };
+            Check(
+                "A21 policy kind/list/range matrix",
+                expected.All(value => A21InventorySlotPolicy.TryGetRange(
+                    value.Kind,
+                    out var list,
+                    out var start,
+                    out var end)
+                    && list == value.List
+                    && start == value.Start
+                    && end == value.End),
+                ref failures);
+            Check(
+                "主背包扩展仍保留 0/8/16/24 语义",
+                A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindEquipment, 0, out _, out var noneEnd)
+                && noneEnd == 40
+                && A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindEquipment, 8, out _, out var stage1End)
+                && stage1End == 48
+                && A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindEquipment, 16, out _, out var stage2End)
+                && stage2End == 56
+                && A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindEquipment, 24, out _, out var fullEnd)
+                && fullEnd == 64,
+                ref failures);
+            Check(
+                "徽章不随主背包扩展收缩",
+                A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindAvatarEmblem, 0, out _, out var emblemEnd)
+                && emblemEnd == 351,
+                ref failures);
+            Check(
+                "Avatar/list1 末格 209 有效且跨界无效",
+                A21InventorySlotPolicy.IsValidSlotForKind(ItemCore.KindAvatar, InventoryListType.Avatar, 209, 24)
+                && !A21InventorySlotPolicy.IsValidSlotForKind(ItemCore.KindAvatar, InventoryListType.Avatar, 210, 24),
+                ref failures);
+            Check(
+                "宠物消耗品末格 239 有效且 240 越界",
+                A21InventorySlotPolicy.IsValidSlotForKind(ItemCore.KindCreatureConsumable, InventoryListType.Pet, 239, 24)
+                && !A21InventorySlotPolicy.IsValidSlotForKind(ItemCore.KindCreatureConsumable, InventoryListType.Pet, 240, 24),
+                ref failures);
+            Check(
+                "徽章末格 351 有效且主背包跨段无效",
+                A21InventorySlotPolicy.IsValidSlotForKind(ItemCore.KindAvatarEmblem, InventoryListType.Main, 351, 0)
+                && !A21InventorySlotPolicy.IsValidSlotForKind(ItemCore.KindEquipment, InventoryListType.Pet, 239, 24),
+                ref failures);
+            Check(
+                "穿戴 29 是名称装饰状态而非 ItemCore",
+                !A21InventorySlotPolicy.TryGetEquipmentBodyKind(29, out _)
+                && A21InventorySlotPolicy.GetEquipmentCategory(29) == "名称装饰状态",
+                ref failures);
+        }
+
+        private static void CheckRealPvfGrantRoutes(string databasePath, string schemaPath, ref int failures)
+        {
+            var pvf = ResolveLatestServerPvf();
+            Check("当前 A21 PVF 可用于槽位路由回归", pvf != null, ref failures);
+            if (pvf == null)
+                return;
+
+            PvfArchiveAccessor.Configure(pvf);
+            ItemMetadataResolver.ResetForPvfChange();
+            var index = new PvfIndexService(pvf);
+            index.WarmInBackground();
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!index.IsReady && string.IsNullOrWhiteSpace(index.BuildError) && DateTime.UtcNow < deadline)
+                Thread.Sleep(50);
+
+            var petEntry = index.AllItems.FirstOrDefault(item => item.Segment == "宠物消耗品");
+            var normalEntry = index.AllItems.FirstOrDefault(item => item.Segment == "消耗品");
+            Check("当前 PVF 搜索段识别宠物消耗品", petEntry != null, ref failures);
+            Check("当前 PVF 仍有普通消耗品段", normalEntry != null, ref failures);
+            if (petEntry == null || normalEntry == null)
+                return;
+
+            var petMetadata = ItemMetadataResolver.Resolve(petEntry.Id);
+            Check(
+                "真实 PVF [creature]/[feed] metadata 分类为宠物消耗品",
+                ItemMetadataResolver.IsPetConsumableItem(petMetadata)
+                && NewInventoryStore.TryResolveKindAndRange(
+                    petMetadata,
+                    null,
+                    out var petKind,
+                    out var petList,
+                    out var petStart,
+                    out var petEnd,
+                    out _)
+                && petKind == ItemCore.KindCreatureConsumable
+                && petList == InventoryListType.Pet
+                && petStart == 189
+                && petEnd == 239,
+                ref failures);
+
+            var petGrant = new NewInventoryStore(databasePath, schemaPath)
+                .TryGrant(CharacterId, AccountId, 0, petEntry.Id, 1, null);
+            Check(
+                "真实 PVF 宠物消耗品直发落 list7/189-239",
+                petGrant.Success
+                && petGrant.ListType == InventoryListType.Pet
+                && petGrant.AssignedSlot >= 189
+                && petGrant.AssignedSlot <= 239,
+                ref failures);
+            if (petGrant.Success)
+            {
+                var petStore = new NewInventoryStore(databasePath, schemaPath);
+                Check(
+                    "宠物消耗品 ItemCore kind=7",
+                    petStore.TryLoadItem(CharacterId, AccountId, InventoryListType.Pet, petGrant.AssignedSlot, out var petRecord)
+                    && petRecord.Core.ItemKind == ItemCore.KindCreatureConsumable
+                    && petRecord.Core.Count > 0,
+                    ref failures);
+            }
+
+            var normalMetadata = ItemMetadataResolver.Resolve(normalEntry.Id);
+            var normalGrant = new NewInventoryStore(databasePath, schemaPath)
+                .TryGrant(CharacterId, AccountId, 0, normalEntry.Id, 1, null);
+            Check(
+                "普通消耗品仍直发主背包消耗品段",
+                !ItemMetadataResolver.IsPetConsumableItem(normalMetadata)
+                && normalGrant.Success
+                && normalGrant.ListType == InventoryListType.Main
+                && normalGrant.AssignedSlot >= 65
+                && normalGrant.AssignedSlot <= 120,
+                ref failures);
+
+            EnsureLegacyPickupTable(databasePath);
+            var assets = new SqliteAssetService(databasePath, schemaPath);
+            using (var scope = assets.OpenScope(CharacterId, AccountId))
+            {
+                var pickupOk = assets.TryAddItem(scope, petEntry.Id, 1, out var pickupSlot);
+                scope.Commit();
+                var pickupRoute = LoadLegacyPickupRoute(databasePath, petEntry.Id);
+                Check(
+                    "真实 PVF 拾取宠物消耗品写入 list7/189-239 且 item_kind=pet",
+                    pickupOk
+                    && pickupSlot >= 189
+                    && pickupSlot <= 239
+                    && pickupRoute.ListType == InventoryListType.Pet
+                    && pickupRoute.Slot >= 189
+                    && pickupRoute.Slot <= 239
+                    && pickupRoute.ItemKind == "pet",
+                    ref failures);
+            }
+            using (var scope = assets.OpenScope(CharacterId, AccountId))
+            {
+                var grant = assets.TryGrantCharacterItem(scope, petEntry.Id, 1);
+                scope.Commit();
+                var grantRoute = LoadLegacyPickupRoute(databasePath, petEntry.Id);
+                Check(
+                    "旧角色发放入口同样写入 list7/189-239 且 item_kind=pet",
+                    grant.Success
+                    && grant.ListType == InventoryListType.Pet
+                    && grant.AssignedSlot >= 189
+                    && grant.AssignedSlot <= 239
+                    && grantRoute.ListType == InventoryListType.Pet
+                    && grantRoute.Slot >= 189
+                    && grantRoute.Slot <= 239
+                    && grantRoute.ItemKind == "pet",
+                    ref failures);
+            }
+        }
+
+        private static (InventoryListType ListType, int Slot, string ItemKind) LoadLegacyPickupRoute(
+            string path,
+            int itemTemplateId)
+        {
+            using var connection = Open(path);
+            using var command = connection.CreateCommand();
+            command.CommandText = @"SELECT list_type, slot_index, item_kind
+FROM character_items
+WHERE character_id=@cid AND item_template_id=@item
+ORDER BY item_uid DESC LIMIT 1;";
+            command.Parameters.AddWithValue("@cid", CharacterId);
+            command.Parameters.AddWithValue("@item", itemTemplateId);
+            using var reader = command.ExecuteReader();
+            return reader.Read()
+                ? ((InventoryListType)reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2))
+                : ((InventoryListType)255, -1, null);
+        }
+
+        private static void EnsureLegacyPickupTable(string path)
+        {
+            using var connection = Open(path);
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+CREATE TABLE IF NOT EXISTS character_items (
+    item_uid INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_scope TEXT NOT NULL DEFAULT 'character',
+    owner_id INTEGER NOT NULL DEFAULT 0,
+    character_id INTEGER NOT NULL,
+    list_type INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    item_template_id INTEGER NOT NULL,
+    item_kind TEXT NOT NULL,
+    stack_count INTEGER NOT NULL DEFAULT 0,
+    instance_value INTEGER NOT NULL DEFAULT 0,
+    durability INTEGER NOT NULL DEFAULT 0,
+    seal_flag INTEGER NOT NULL DEFAULT 0,
+    option_value INTEGER NOT NULL DEFAULT 0,
+    expire_time INTEGER NOT NULL DEFAULT 0,
+    marker_16 INTEGER NOT NULL DEFAULT 0,
+    pet_serial_or_handle INTEGER NOT NULL DEFAULT 0,
+    equipment_lock_id INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS item_audit_log (
+    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_scope TEXT NOT NULL DEFAULT 'character',
+    owner_id INTEGER NOT NULL DEFAULT 0,
+    character_id INTEGER NOT NULL DEFAULT 0,
+    action_name TEXT NOT NULL,
+    list_type INTEGER,
+    slot_index INTEGER,
+    item_uid INTEGER,
+    item_template_id INTEGER NOT NULL DEFAULT 0,
+    delta_stack_count INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);";
+            command.ExecuteNonQuery();
+        }
+
+        private static string ResolveLatestServerPvf()
+        {
+            var roots = new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory };
+            foreach (var root in roots)
+            {
+                var current = new DirectoryInfo(root);
+                for (var depth = 0; current != null && depth < 8; depth++, current = current.Parent)
+                {
+                    var codes = Path.Combine(current.FullName, "Codes");
+                    var exact = Path.Combine(codes, "ServerS4A21_git", "Server", "DfoServer", "Data", "Pvf", "Script.pvf");
+                    if (File.Exists(exact))
+                        return exact;
+                }
+            }
+            return null;
         }
 
         private static void SeedOwnerRows(string path)

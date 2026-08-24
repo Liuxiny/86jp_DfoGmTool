@@ -349,6 +349,7 @@ namespace DfoGmTool.Services
 
             var defaultExpireTime = record.ExpireTime;
             string resolveError = null;
+            var expiredFixedExpiration = false;
             if (defaultExpireTime <= 0
                 && ItemGrantExpirationResolver.TryResolve(record.ItemTemplateId, metadata, out var resolvedExpireTime, out resolveError))
             {
@@ -356,15 +357,25 @@ namespace DfoGmTool.Services
             }
             else if (defaultExpireTime <= 0 && resolveError != null)
             {
-                error = resolveError;
-                return false;
+                if (!IsExpiredGrantExpirationError(resolveError))
+                {
+                    error = resolveError;
+                    return false;
+                }
+
+                // A fixed PVF deadline is allowed to be rewritten by the GM.
+                // Keep the capability alive even though the original timestamp
+                // is already in the past; the requested duration below writes a
+                // fresh future epoch instead of reusing the expired value.
+                expiredFixedExpiration = true;
             }
 
             var capability = new ItemGrantExpirationCapability
             {
-                IsLimited = defaultExpireTime > 0,
-                CanOverride = defaultExpireTime > 0,
+                IsLimited = defaultExpireTime > 0 || expiredFixedExpiration,
+                CanOverride = defaultExpireTime > 0 || expiredFixedExpiration,
                 DefaultExpireTime = defaultExpireTime,
+                IsExpired = expiredFixedExpiration,
             };
             if (metadata?.IsStackable == true
                 && StackableExpirationPolicyResolver.TryResolve(metadata.StackableFile, out var policy))

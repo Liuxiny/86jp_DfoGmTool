@@ -31,12 +31,14 @@ namespace DfoGmTool.Services
             new CharacterCloneOption("questItems", "任务品背包", true),
             new CharacterCloneOption("expertMaterials", "副职业材料背包", true),
             new CharacterCloneOption("emblems", "徽章背包", true),
+            new CharacterCloneOption("guildMedals", "勋章背包", true),
+            new CharacterCloneOption("guardianGems", "守护珠背包", true),
             new CharacterCloneOption("personalCargo", "个人仓库", true),
             new CharacterCloneOption("equipped", "身上装备/称号/穿戴记录", true),
             new CharacterCloneOption("avatars", "装扮栏", true),
             new CharacterCloneOption("pets", "宠物", true),
             new CharacterCloneOption("petEquipment", "宠物装备", true),
-            new CharacterCloneOption("petConsumables", "宠物用品", true),
+            new CharacterCloneOption("petConsumables", "宠物消耗品", true),
             new CharacterCloneOption("locks", "锁定/排序状态", true),
             new CharacterCloneOption("misc", "其他角色状态表", true),
             new CharacterCloneOption("audit", "物品审计日志", false),
@@ -50,12 +52,12 @@ namespace DfoGmTool.Services
                 ["quests"] = new[] { "character_active_quests", "character_quest_notify_selections", "character_quest_completions" },
                 ["titlebook"] = new[] { "character_achievements", "character_titlebook_items" },
                 ["dungeon"] = new[] { "character_dungeon_permissions", "character_dimensions", "character_dimension_flags", "character_growth_weapon_stages", "character_pvp_missions", "character_tower_of_despair_progress" },
-                ["daily"] = new[] { "character_daily_reset", "character_daily_counters", "character_daily_challenge_groups", "character_daily_challenge_entries", "character_daily_challenge_claims", "character_daily_challenge_tail_ids", "character_daily_schedule_states", "character_buy_restrict_items", "character_crystal_contract", "character_usable_count_limits" },
+                ["daily"] = new[] { "character_daily_reset", "character_daily_counters", "character_daily_challenge_groups", "character_daily_challenge_entries", "character_daily_challenge_claims", "character_daily_challenge_entry_claims", "character_daily_challenge_tail_ids", "character_daily_schedule_states", "character_buy_restrict_items", "character_crystal_contract", "character_usable_count_limits" },
                 ["wallet"] = new[] { "character_gold_limits" },
                 ["equipped"] = new[] { "character_rental_items", "character_knight_shield_deck", "character_name_tag_state" },
                 ["pets"] = new[] { "character_creatures" },
                 ["locks"] = new[] { "character_item_locks" },
-                ["misc"] = new[] { "character_item_values", "character_collectbox_slots", "character_mercenary_support", "character_expert_job", "character_expert_job_recipes" },
+                ["misc"] = new[] { "character_collectbox_slots", "character_mercenary_support", "character_expert_job", "character_expert_job_recipes" },
                 ["audit"] = new[] { "inventory_audit_log" },
             };
 
@@ -281,8 +283,10 @@ SELECT last_insert_rowid();";
                 foreach (var table in groupTables)
                     tables.Add(table);
             }
-            foreach (var table in DiscoverDynamicCharacterCloneTables(conn, tx))
-                tables.Add(table);
+            // Only explicitly registered character tables are clone assets.
+            // Future character-owned tables may be runtime ledgers or have
+            // incompatible ownership semantics; silently leave them alone.
+            tables.RemoveWhere(table => !TableExists(conn, tx, table));
             tables.Remove("characters");
             tables.Remove("character_inventory_items");
             tables.Remove("account_inventory_items");
@@ -318,6 +322,8 @@ SELECT last_insert_rowid();";
                         value = 0;
                     else if (column.Equals("slot_index", StringComparison.OrdinalIgnoreCase))
                         value = targetSlotIndex;
+                    else if (column.Equals("growup_change_count", StringComparison.OrdinalIgnoreCase))
+                        value = 0;
                     else if (column.Equals("created_at", StringComparison.OrdinalIgnoreCase) || column.Equals("updated_at", StringComparison.OrdinalIgnoreCase))
                         value = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
                     cmd.Parameters.AddWithValue("@p" + i.ToString(CultureInfo.InvariantCulture), value ?? DBNull.Value);
@@ -595,6 +601,8 @@ VALUES(@newUid,@cid,@cid,0,0,0,zeroblob(30),0,0,0);";
                 listTypes.Add(2);
             if (selected.Overlaps(new[] { "pets", "petEquipment", "petConsumables", "equipped" }))
                 listTypes.Add(7);
+            if (selected.Contains("guildMedals") || selected.Contains("guardianGems"))
+                listTypes.Add((int)InventoryListType.GuildMedal);
 
             if (listTypes.Count == 0)
                 return;
@@ -616,35 +624,63 @@ VALUES(@newUid,@cid,@cid,0,0,0,zeroblob(30),0,0,0);";
             HashSet<string> selected)
         {
             var ranges = new List<ItemCloneRange>();
-            var mainExpandStage = LoadCloneContainerListParam(connection, transaction, characterId, 0, 24);
-            if (mainExpandStage != 0 && mainExpandStage != 8 && mainExpandStage != 16 && mainExpandStage != 24)
+            var mainExpandStage = LoadCloneContainerListParam(
+                connection,
+                transaction,
+                characterId,
+                (int)InventoryListType.Main,
+                A21InventorySlotPolicy.MainExpandStageFull);
+            if (!A21InventorySlotPolicy.TryNormalizeMainExpandStage(mainExpandStage, out mainExpandStage))
                 throw new InvalidOperationException($"源角色主背包扩展状态无效: {mainExpandStage}");
-            var personalCargoCapacity = LoadCloneContainerListParam(connection, transaction, characterId, 2, 8);
-            personalCargoCapacity = personalCargoCapacity <= 0 ? 8 : Math.Min(personalCargoCapacity, 152);
-            var exEquipSlotStat = LoadCloneExtraEquipmentSlotStat(connection, transaction, characterId);
-
+            var personalCargoCapacity = A21InventorySlotPolicy.NormalizePersonalCapacity(
+                LoadCloneContainerListParam(
+                    connection,
+                    transaction,
+                    characterId,
+                    (int)InventoryListType.PersonalCargo,
+                    A21InventorySlotPolicy.PersonalCargoDefaultCapacity));
             if (selected.Contains("wallet")) ranges.Add(new ItemCloneRange(0, 0, 2));
-            if (selected.Contains("quickSlots")) ranges.Add(new ItemCloneRange(0, 3, 8));
-            if (selected.Contains("mainEquipment")) ranges.Add(new ItemCloneRange(0, 9, GetExpandedCloneMainEnd(64, mainExpandStage)));
-            if (selected.Contains("consumables")) ranges.Add(new ItemCloneRange(0, 65, GetExpandedCloneMainEnd(120, mainExpandStage)));
-            if (selected.Contains("materials")) ranges.Add(new ItemCloneRange(0, 121, GetExpandedCloneMainEnd(176, mainExpandStage)));
-            if (selected.Contains("questItems")) ranges.Add(new ItemCloneRange(0, 177, GetExpandedCloneMainEnd(232, mainExpandStage)));
-            if (selected.Contains("expertMaterials")) ranges.Add(new ItemCloneRange(0, 233, GetExpandedCloneMainEnd(288, mainExpandStage)));
-            if (selected.Contains("emblems")) ranges.Add(new ItemCloneRange(0, 289, 351));
-            if (selected.Contains("personalCargo")) ranges.Add(new ItemCloneRange(2, 0, personalCargoCapacity - 1));
-            if (selected.Contains("avatars")) ranges.Add(new ItemCloneRange(1, 0, 209));
+            if (selected.Contains("quickSlots")
+                && A21InventorySlotPolicy.TryGetRange(ItemCore.KindUnknown, out _, out var quickStart, out var quickEnd))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Main, quickStart, quickEnd));
+            if (selected.Contains("mainEquipment")
+                && A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindEquipment, mainExpandStage, out var equipmentStart, out var equipmentEnd))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Main, equipmentStart, equipmentEnd));
+            if (selected.Contains("consumables")
+                && A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindConsumable, mainExpandStage, out var consumableStart, out var consumableEnd))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Main, consumableStart, consumableEnd));
+            if (selected.Contains("materials")
+                && A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindMaterial, mainExpandStage, out var materialStart, out var materialEnd))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Main, materialStart, materialEnd));
+            if (selected.Contains("questItems")
+                && A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindQuest, mainExpandStage, out var questStart, out var questEnd))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Main, questStart, questEnd));
+            if (selected.Contains("expertMaterials")
+                && A21InventorySlotPolicy.TryGetMainRange(ItemCore.KindExpertJobMaterial, mainExpandStage, out var expertStart, out var expertEnd))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Main, expertStart, expertEnd));
+            if (selected.Contains("emblems")
+                && A21InventorySlotPolicy.TryGetRange(ItemCore.KindAvatarEmblem, out _, out var emblemStart, out var emblemEnd))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Main, emblemStart, emblemEnd));
+            if (selected.Contains("guildMedals"))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.GuildMedal, A21InventorySlotPolicy.GuildMedalSlotStart, A21InventorySlotPolicy.GuildMedalSlotEnd));
+            if (selected.Contains("guardianGems"))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.GuildMedal, A21InventorySlotPolicy.GuardianGemSlotStart, A21InventorySlotPolicy.GuardianGemSlotEnd));
+            if (selected.Contains("personalCargo"))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.PersonalCargo, A21InventorySlotPolicy.PersonalCargoSlotStart, personalCargoCapacity - 1));
+            if (selected.Contains("avatars"))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Avatar, A21InventorySlotPolicy.AvatarSlotStart, A21InventorySlotPolicy.AvatarSlotEnd));
             if (selected.Contains("equipped"))
             {
-                ranges.Add(new ItemCloneRange(3, 0, 20));
-                for (var slot = 21; slot <= 23; slot++)
-                    if ((exEquipSlotStat & (1 << (slot - 21))) != 0)
-                        ranges.Add(new ItemCloneRange(3, slot, slot));
-                ranges.Add(new ItemCloneRange(3, 24, 27));
-                ranges.Add(new ItemCloneRange(3, 29, 29));
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Equipment, 0, 24));
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Equipment, 25, 28));
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Equipment, 30, 31));
             }
-            if (selected.Contains("pets")) ranges.Add(new ItemCloneRange(7, 0, 139));
-            if (selected.Contains("petEquipment")) ranges.Add(new ItemCloneRange(7, 140, 188));
-            if (selected.Contains("petConsumables")) ranges.Add(new ItemCloneRange(7, 189, 239));
+            if (selected.Contains("pets"))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Pet, A21InventorySlotPolicy.PetCreatureSlotStart, A21InventorySlotPolicy.PetCreatureSlotEnd));
+            if (selected.Contains("petEquipment"))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Pet, A21InventorySlotPolicy.PetEquipmentSlotStart, A21InventorySlotPolicy.PetEquipmentSlotEnd));
+            if (selected.Contains("petConsumables"))
+                ranges.Add(new ItemCloneRange((int)InventoryListType.Pet, A21InventorySlotPolicy.PetConsumableSlotStart, A21InventorySlotPolicy.PetConsumableSlotEnd));
             return ranges;
         }
 
@@ -668,26 +704,6 @@ WHERE character_id=@cid AND list_type=@listType;";
             return value == null || value == DBNull.Value
                 ? defaultValue
                 : Convert.ToInt32(value, CultureInfo.InvariantCulture);
-        }
-
-        private static int LoadCloneExtraEquipmentSlotStat(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId)
-        {
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = "SELECT ex_equip_slot_stat FROM characters WHERE character_id=@cid;";
-            command.Parameters.AddWithValue("@cid", characterId);
-            var value = command.ExecuteScalar();
-            return value == null || value == DBNull.Value
-                ? 0
-                : Convert.ToInt32(value, CultureInfo.InvariantCulture);
-        }
-
-        private static int GetExpandedCloneMainEnd(int fullEnd, int mainExpandStage)
-        {
-            return fullEnd - (24 - mainExpandStage);
         }
 
         private static string BuildCharacterTableWhere(List<string> columns, string tableName)

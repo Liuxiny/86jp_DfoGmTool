@@ -60,31 +60,60 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             {
                 var equipmentType = (EquipmentType ?? string.Empty).Replace("`", string.Empty).Trim();
                 if (equipmentType.StartsWith("[flag]", StringComparison.OrdinalIgnoreCase))
-                { slotStart = 0; slotEnd = 48; return; }
-                slotStart = 9; slotEnd = 64; return;
+                {
+                    slotStart = A21InventorySlotPolicy.GuildMedalSlotStart;
+                    slotEnd = A21InventorySlotPolicy.GuildMedalSlotEnd;
+                    return;
+                }
+                slotStart = A21InventorySlotPolicy.MainEquipmentSlotStart;
+                slotEnd = A21InventorySlotPolicy.MainEquipmentSlotEnd;
+                return;
             }
             if (StackableType == null)
             {
-                slotStart = 65; slotEnd = 120; return;
+                slotStart = A21InventorySlotPolicy.MainConsumableSlotStart;
+                slotEnd = A21InventorySlotPolicy.MainConsumableSlotEnd;
+                return;
             }
             var st = StackableType.Replace("`", "").Trim().ToLowerInvariant();
+            if (st.StartsWith("[creature]") || st.StartsWith("[feed]"))
+            {
+                slotStart = A21InventorySlotPolicy.PetConsumableSlotStart;
+                slotEnd = A21InventorySlotPolicy.PetConsumableSlotEnd;
+                return;
+            }
             if (st.StartsWith("[flag gem]", StringComparison.OrdinalIgnoreCase))
-            { slotStart = 49; slotEnd = 97; return; }
+            {
+                slotStart = A21InventorySlotPolicy.GuardianGemSlotStart;
+                slotEnd = A21InventorySlotPolicy.GuardianGemSlotEnd;
+                return;
+            }
             if (st.StartsWith("[material]"))
             {
-                if (st.EndsWith("4"))
-                { slotStart = 345; slotEnd = 359; }
-                else
-                { slotStart = 121; slotEnd = 176; }
+                slotStart = A21InventorySlotPolicy.MainMaterialSlotStart;
+                slotEnd = A21InventorySlotPolicy.MainMaterialSlotEnd;
                 return;
             }
             if (st.StartsWith("[quest]"))
-            { slotStart = 177; slotEnd = 232; return; }
+            {
+                slotStart = A21InventorySlotPolicy.MainQuestSlotStart;
+                slotEnd = A21InventorySlotPolicy.MainQuestSlotEnd;
+                return;
+            }
             if (st.StartsWith("[material expert job]"))
-            { slotStart = 233; slotEnd = 288; return; }
+            {
+                slotStart = A21InventorySlotPolicy.MainExpertSlotStart;
+                slotEnd = A21InventorySlotPolicy.MainExpertSlotEnd;
+                return;
+            }
             if (st.StartsWith("[avatar emblem]"))
-            { slotStart = 289; slotEnd = 344; return; }
-            slotStart = 65; slotEnd = 120;
+            {
+                slotStart = A21InventorySlotPolicy.MainAvatarEmblemSlotStart;
+                slotEnd = A21InventorySlotPolicy.MainAvatarEmblemSlotEnd;
+                return;
+            }
+            slotStart = A21InventorySlotPolicy.MainConsumableSlotStart;
+            slotEnd = A21InventorySlotPolicy.MainConsumableSlotEnd;
         }
     }
 
@@ -170,7 +199,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
                 
                 var baseSellPrice = equipment.Value >= 0 ? equipment.Value : buyGold;
                 var sellGold = Math.Max(1, baseSellPrice * SellRates.Value.Equipment / 1000);
-                // 只有武器和防具有耐久度，其他装备类型（首饰/魔法石/称号/装扮/宠物等）无耐久。
+                // 武器、防具和 A21 符咒使用 PVF durability 作为 ItemCore 能量；
+                // 其他装备类型（首饰/魔法石/称号/装扮/宠物等）无耐久。
                 var eqType = NormalizeEquipmentType(equipment.EquipmentType);
                 var hasDurability = equipment.Durability > 0 && HasDurabilityByType(eqType);
                 var durability = hasDurability ? equipment.Durability : 0;
@@ -701,6 +731,8 @@ namespace DfoGmTool.ServerCore.Game.Inventory
             if (normalizedType == "[coat]" || normalizedType == "[pants]"
                 || normalizedType == "[shoulder]" || normalizedType == "[shoes]"
                 || normalizedType == "[waist]")
+                return true;
+            if (normalizedType == "[charm]")
                 return true;
             return false;
         }

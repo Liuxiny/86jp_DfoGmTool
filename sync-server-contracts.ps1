@@ -10,9 +10,11 @@ if (-not [IO.Path]::IsPathRooted($ServerRoot)) {
 $ServerRoot = [IO.Path]::GetFullPath($ServerRoot)
 $serverSchema = Join-Path $ServerRoot 'Server\DfoServer\Sqlite\item_schema.sql'
 $serverMigrations = Join-Path $ServerRoot 'Server\DfoServer\Sqlite\SqliteMigrations.cs'
+$serverEquipmentType = Join-Path $ServerRoot 'Server\DfoServer\Game\ItemUpgrade\EquipmentType.cs'
 $serverPvfLib = Join-Path $ServerRoot 'Tool\PvfLib'
 $serverQuestRoot = Join-Path $ServerRoot 'Server\DfoServer\Game\Quests'
 $targetSchema = Join-Path $PSScriptRoot 'ServerCore\Sqlite\item_schema.sql'
+$targetEquipmentType = Join-Path $PSScriptRoot 'ServerCore\Game\ItemUpgrade\EquipmentType.cs'
 $targetPvfLib = Join-Path $PSScriptRoot 'PvfLib'
 $targetQuestRoot = Join-Path $PSScriptRoot 'ServerCore\Game\Quests'
 
@@ -22,17 +24,26 @@ $questContractFiles = @(
   'QuestSlotLayout.cs'
 )
 
-foreach ($required in @($serverSchema, $serverMigrations, $serverPvfLib, $targetPvfLib, $serverQuestRoot, $targetQuestRoot)) {
+foreach ($required in @($serverSchema, $serverMigrations, $serverEquipmentType, $serverPvfLib, $targetPvfLib, $serverQuestRoot, $targetQuestRoot)) {
   if (-not (Test-Path -LiteralPath $required)) {
     throw "Required contract source is missing: $required"
   }
 }
 
+$utf8NoBom = [Text.UTF8Encoding]::new($false)
+$equipmentTypeContent = [IO.File]::ReadAllText($serverEquipmentType, [Text.Encoding]::UTF8)
+$equipmentTypeContent = $equipmentTypeContent.Replace(
+  'namespace DfoServer.Game.ItemUpgrade',
+  'namespace DfoGmTool.ServerCore.Game.ItemUpgrade')
+[IO.File]::WriteAllText(
+  $targetEquipmentType,
+  ($equipmentTypeContent -replace "`r`n", "`n"),
+  $utf8NoBom)
+
 [IO.File]::WriteAllBytes(
   $targetSchema,
   [IO.File]::ReadAllBytes($serverSchema))
 
-$utf8NoBom = [Text.UTF8Encoding]::new($false)
 $questHashes = [ordered]@{}
 foreach ($relative in $questContractFiles) {
   $source = Join-Path $serverQuestRoot $relative
@@ -44,6 +55,32 @@ foreach ($relative in $questContractFiles) {
   $content = $content.Replace(
     'namespace DfoServer.Game.Quests',
     'namespace DfoGmTool.ServerCore.Game.Quests')
+  if ($relative -eq 'QuestRepository.cs') {
+    $content = $content.Replace([string][char]13, '')
+    $nl = "`n"
+    $content = $content.Replace(
+      "    public sealed class QuestRepository$nl    {$nl",
+      "    public sealed class QuestRepository$nl    {$nl        public const int MinimumQuestId = 1;$nl        public const int MaximumQuestId = 29999;$nl        public const int MinimumCompletionValue = 1;$nl        public const int MaximumCompletionValue = byte.MaxValue;$nl$nl")
+    $content = [regex]::Replace(
+      $content,
+      '(?s)(public static QuestActivationId InsertActiveQuest\(.*?activationId = default\)\s*\{\n)',
+      '$1' + "            EnsureQuestId(questId);$nl")
+    $content = [regex]::Replace(
+      $content,
+      '(?s)(public static void MarkQuestCleared\(.*?\)\s*\{\n)',
+      '$1' + "            EnsureQuestId(questId);$nl")
+    $content = [regex]::Replace(
+      $content,
+      '(            if \(flagValue == 0\)\s*flagValue = 1;)',
+      '$1' + "$nl            if (flagValue < MinimumCompletionValue || flagValue > MaximumCompletionValue)$nl                throw new ArgumentOutOfRangeException(nameof(flagValue), ""completion_value must be between 1 and 255."");")
+    $content = $content.Replace(
+      "        public static void DeleteClearedFlag(",
+      "        private static void EnsureQuestId(int questId)$nl        {$nl            if (questId < MinimumQuestId || questId > MaximumQuestId)$nl                throw new ArgumentOutOfRangeException(nameof(questId), ""quest_id must be between 1 and 29999."");$nl        }$nl$nl        public static void DeleteClearedFlag(")
+    $ensureCount = ([regex]::Matches($content, 'EnsureQuestId')).Count
+    if ($ensureCount -ne 3 -or $content -notmatch 'MaximumCompletionValue' -or $content -notmatch 'flagValue < MinimumCompletionValue') {
+      throw 'QuestRepository compatibility patch failed.'
+    }
+  }
   [IO.File]::WriteAllText(
     $destination,
     ($content -replace "`r`n", "`n"),
@@ -109,7 +146,13 @@ $manifest = [ordered]@{
   baselineId = $baselineId
   schemaVersion = $schemaVersion
   schemaSha256 = (Get-FileHash $targetSchema -Algorithm SHA256).Hash.ToLowerInvariant()
-  compatibilityPatches = @()
+  equipmentTypeSourceFile = [ordered]@{
+    path = 'ServerCore/Game/ItemUpgrade/EquipmentType.cs'
+    sha256 = (Get-FileHash $targetEquipmentType -Algorithm SHA256).Hash.ToLowerInvariant()
+  }
+  compatibilityPatches = @(
+    'ServerCore/Game/Quests/QuestRepository.cs: retain GM quest_id 1..29999 and completion_value 1..255 guards'
+  )
   questContractSourceFiles = $questHashes
   pvfSourceFiles = $pvfHashes
 }
